@@ -84,7 +84,8 @@ export SUSSURRO_MODELS_ASR_LANGUAGE=it
 ### Hotkey Settings
 ```yaml
 hotkey:
-  trigger: "ctrl+shift+space" # The key combination to hold for recording
+  trigger: "ctrl+shift+space"         # Hold-to-talk (press and hold)
+  toggle_trigger: "ctrl+shift+enter"  # Toggle mode (press once to start/stop)
 ```
 
 The trigger string is `+`-separated: modifiers first, then the key. Modifier aliases:
@@ -99,6 +100,7 @@ The trigger string is `+`-separated: modifiers first, then the key. Modifier ali
 **Examples:**
 ```yaml
 trigger: "ctrl+shift+space"   # default Linux
+toggle_trigger: "ctrl+shift+enter"
 trigger: "cmd+shift+space"    # default macOS
 trigger: "alt+shift+f2"       # any platform
 trigger: "super+space"        # Linux (Super/Windows key)

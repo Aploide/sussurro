@@ -174,6 +174,16 @@ func run() {
 				func() { log.Info("Listening..."); pipe.StartRecording() },
 				func() { log.Info("Transcribing..."); pipe.StopRecording() },
 			)
+			if cfg.Hotkey.ToggleTrigger != "" && cfg.Hotkey.ToggleTrigger != cfg.Hotkey.Trigger {
+				uiMgr.InstallToggleHotkey(cfg.Hotkey.ToggleTrigger, func() {
+					if stopped := pipe.StopRecording(); stopped {
+						log.Info("Transcribing...")
+						return
+					}
+					log.Info("Listening...")
+					pipe.StartRecording()
+				})
+			}
 		}
 
 		log.Info("Sussurro UI running")
@@ -218,6 +228,30 @@ func run() {
 		); err != nil {
 			log.Error("Failed to register hotkey", "error", err)
 			os.Exit(1)
+		}
+
+		if cfg.Hotkey.ToggleTrigger != "" && cfg.Hotkey.ToggleTrigger != cfg.Hotkey.Trigger {
+			hkToggleHandler, err := hotkey.NewHandler(cfg.Hotkey.ToggleTrigger, log)
+			if err != nil {
+				log.Error("Failed to initialize toggle hotkey handler", "error", err)
+				os.Exit(1)
+			}
+			defer hkToggleHandler.Unregister()
+
+			if err := hkToggleHandler.Register(
+				func() {
+					if stopped := pipe.StopRecording(); stopped {
+						log.Info("Transcribing...")
+						return
+					}
+					log.Info("Listening...")
+					pipe.StartRecording()
+				},
+				nil,
+			); err != nil {
+				log.Error("Failed to register toggle hotkey", "error", err)
+				os.Exit(1)
+			}
 		}
 	}
 

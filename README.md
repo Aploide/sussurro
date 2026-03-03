@@ -120,7 +120,7 @@ xattr -d com.apple.quarantine sussurro   # remove quarantine
 
 The overlay capsule, settings window, system tray, and right-click context menu all work on macOS.
 
-**Usage:** Hold `Cmd+Shift+Space` (or any configured hotkey) to talk, release to transcribe. Cleaned text is injected into the active application.
+**Usage:** Hold `Cmd+Shift+Space` (or any configured hold-to-talk hotkey) to talk and release to transcribe, or press the toggle hotkey (default `Ctrl+Shift+Enter`) once to start and once again to stop. Cleaned text is injected into the active application.
 
 > **macOS Accessibility permission:** On first run, macOS will prompt you to grant Accessibility access so Sussurro can register a global hotkey (CGEventTap). Grant it in System Settings → Privacy & Security → Accessibility.
 
@@ -173,9 +173,9 @@ The "Start at Login" toggle in Settings is present in the UI but is not yet impl
 
 | Platform | Hotkey | Access Settings |
 |----------|--------|----------------|
-| Linux X11 | Hold `Ctrl+Shift+Space` | System tray or right-click capsule |
+| Linux X11 | Hold `Ctrl+Shift+Space` or toggle with `Ctrl+Shift+Enter` | System tray or right-click capsule |
 | Linux Wayland | Toggle (press twice) | System tray or right-click capsule |
-| macOS | Hold `Cmd+Shift+Space` | System tray or right-click capsule |
+| macOS | Hold `Cmd+Shift+Space` or toggle with `Ctrl+Shift+Enter` | System tray or right-click capsule |
 
 ## Switching Whisper Models
 

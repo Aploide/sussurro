@@ -159,6 +159,7 @@ main() {
     printf "\n${BOLD}Usage${RESET}\n"
     printf "  Run Sussurro:        ${CYAN}sussurro${RESET}\n"
     printf "  Hold to dictate:     ${CYAN}Ctrl+Shift+Space${RESET}\n"
+    printf "  Toggle dictation:    ${CYAN}Ctrl+Shift+Enter${RESET}\n"
     printf "  First run will guide you through model download automatically.\n\n"
 
     if [[ "$platform" == linux-* ]]; then

@@ -13,9 +13,11 @@ import (
 // activeHK tracks the currently registered hotkey so it can be unregistered
 // when the user changes the trigger in the settings window.
 var (
-	activeHK     *xhotkey.Hotkey
-	activeHKStop chan struct{}
-	activeHKMu   sync.Mutex
+	activeHK      *xhotkey.Hotkey
+	activeHKStop  chan struct{}
+	activeTapHK   *xhotkey.Hotkey
+	activeTapStop chan struct{}
+	activeHKMu    sync.Mutex
 )
 
 // installOverlayHotkey registers the global hotkey on macOS.
@@ -57,6 +59,38 @@ func installOverlayHotkey(overlay Overlay, trigger string, onDown, onUp func()) 
 	}()
 }
 
+func installOverlayToggleHotkey(_ Overlay, trigger string, onTap func()) {
+	mods, key, err := ihk.ParseTrigger(trigger)
+	if err != nil {
+		return
+	}
+
+	stop := make(chan struct{})
+
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+
+		hk := xhotkey.New(mods, key)
+		if err := hk.Register(); err != nil {
+			return
+		}
+
+		activeHKMu.Lock()
+		activeTapHK = hk
+		activeTapStop = stop
+		activeHKMu.Unlock()
+
+		for {
+			select {
+			case <-stop:
+				return
+			case <-hk.Keydown():
+				onTap()
+			}
+		}
+	}()
+}
+
 // reinstallOverlayHotkey unregisters the current hotkey and registers a new
 // one with the given trigger, reusing the same onDown/onUp callbacks.
 func reinstallOverlayHotkey(_ Overlay, trigger string, onDown, onUp func()) {
@@ -74,7 +108,6 @@ func reinstallOverlayHotkey(_ Overlay, trigger string, onDown, onUp func()) {
 	if oldStop != nil {
 		close(oldStop)
 	}
-
 	mods, key, err := ihk.ParseTrigger(trigger)
 	if err != nil {
 		return

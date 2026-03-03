@@ -23,6 +23,7 @@ type Manager struct {
 	// Stored hotkey callbacks so the hotkey can be re-registered at runtime.
 	hotkeyOnDown func()
 	hotkeyOnUp   func()
+	hotkeyOnTap  func()
 }
 
 // NewManager constructs the Manager.  Call Run() to start the event loop.
@@ -117,6 +118,13 @@ func (m *Manager) InstallHotkey(trigger string, onDown, onUp func()) {
 	m.hotkeyOnDown = onDown
 	m.hotkeyOnUp = onUp
 	installOverlayHotkey(m.overlay, trigger, onDown, onUp)
+}
+
+// InstallToggleHotkey registers a second hotkey that toggles recording on each
+// key press (press once to start, press again to stop/transcribe).
+func (m *Manager) InstallToggleHotkey(trigger string, onTap func()) {
+	m.hotkeyOnTap = onTap
+	installOverlayToggleHotkey(m.overlay, trigger, onTap)
 }
 
 // reinstallHotkey unregisters the current hotkey and registers a new one with

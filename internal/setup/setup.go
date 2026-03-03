@@ -93,6 +93,7 @@ models:
 
 hotkey:
   trigger: "ctrl+shift+space"
+  toggle_trigger: "ctrl+shift+enter"
 
 injection:
   method: "keyboard"

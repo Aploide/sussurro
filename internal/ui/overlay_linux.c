@@ -27,9 +27,13 @@ struct OverlayData {
     /* X11 hotkey */
     HotkeyDownCB down_cb;
     HotkeyUpCB   up_cb;
+    HotkeyToggleCB toggle_cb;
     int          hk_keycode;
     unsigned int hk_mods;
     gboolean     hk_pressed;
+    int          hk_toggle_keycode;
+    unsigned int hk_toggle_mods;
+    gboolean     hk_toggle_pressed;
 };
 
 /* ------------------------------------------------------------------ */
@@ -227,12 +231,24 @@ static GdkFilterReturn x11_event_filter(GdkXEvent *xevent, GdkEvent *event, gpoi
             }
             return GDK_FILTER_REMOVE;
         }
+        if ((int)xe->xkey.keycode == od->hk_toggle_keycode &&
+            (xe->xkey.state & od->hk_toggle_mods) == od->hk_toggle_mods) {
+            if (!od->hk_toggle_pressed) {
+                od->hk_toggle_pressed = TRUE;
+                if (od->toggle_cb) od->toggle_cb();
+            }
+            return GDK_FILTER_REMOVE;
+        }
     } else if (xe->type == KeyRelease) {
         if ((int)xe->xkey.keycode == od->hk_keycode) {
             if (od->hk_pressed) {
                 od->hk_pressed = FALSE;
                 if (od->up_cb) od->up_cb();
             }
+            return GDK_FILTER_REMOVE;
+        }
+        if ((int)xe->xkey.keycode == od->hk_toggle_keycode) {
+            od->hk_toggle_pressed = FALSE;
             return GDK_FILTER_REMOVE;
         }
     }
@@ -415,6 +431,42 @@ void overlay_install_hotkey(GtkWidget *win, const char *trigger,
     }
 
     /* Install GDK event filter on root window */
+    GdkWindow *root_gdk = gdk_x11_window_foreign_new_for_display(display, xroot);
+    if (root_gdk) {
+        gdk_window_add_filter(root_gdk, x11_event_filter, od);
+        g_object_unref(root_gdk);
+    }
+#endif
+}
+
+void overlay_install_toggle_hotkey(GtkWidget *win, const char *trigger,
+                                   HotkeyToggleCB toggle_cb)
+{
+    OverlayData *od = (OverlayData *)g_object_get_data(G_OBJECT(win), "overlay-data");
+    if (!od) return;
+
+    od->toggle_cb = toggle_cb;
+
+#ifndef WAYLAND_ONLY
+    GdkDisplay *display = gdk_display_get_default();
+    if (!GDK_IS_X11_DISPLAY(display)) return;
+
+    Display *xdpy  = gdk_x11_display_get_xdisplay(display);
+    Window   xroot = DefaultRootWindow(xdpy);
+
+    unsigned int mods    = parse_x11_mods(trigger);
+    KeySym       keysym  = parse_x11_keysym(trigger);
+    int          keycode = XKeysymToKeycode(xdpy, keysym);
+
+    od->hk_toggle_keycode = keycode;
+    od->hk_toggle_mods    = mods;
+
+    unsigned int lock_combos[] = {0, LockMask, Mod2Mask, LockMask | Mod2Mask};
+    for (int i = 0; i < 4; i++) {
+        XGrabKey(xdpy, keycode, mods | lock_combos[i],
+                 xroot, True, GrabModeAsync, GrabModeAsync);
+    }
+
     GdkWindow *root_gdk = gdk_x11_window_foreign_new_for_display(display, xroot);
     if (root_gdk) {
         gdk_window_add_filter(root_gdk, x11_event_filter, od);

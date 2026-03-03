@@ -50,6 +50,7 @@
 /* ---- Callback types ---- */
 typedef void (*HotkeyDownCB)(void);
 typedef void (*HotkeyUpCB)(void);
+typedef void (*HotkeyToggleCB)(void);
 typedef void (*MenuOpenSettingsCB)(void);
 typedef void (*MenuQuitCB)(void);
 
@@ -75,6 +76,8 @@ GtkWidget *overlay_create(void);
 /* Install X11 global hotkey bound to the overlay (no-op on Wayland) */
 void overlay_install_hotkey(GtkWidget *win, const char *trigger,
                             HotkeyDownCB down_cb, HotkeyUpCB up_cb);
+void overlay_install_toggle_hotkey(GtkWidget *win, const char *trigger,
+                                   HotkeyToggleCB toggle_cb);
 
 /* Thread-safe async state/RMS updates via gdk_threads_add_idle */
 void overlay_set_state_async(GtkWidget *win, int state);

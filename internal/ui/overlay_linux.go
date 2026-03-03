@@ -11,12 +11,14 @@ package ui
 // Forward-declare the Go-exported trampolines so C can call them.
 extern void goHotkeyDown(void);
 extern void goHotkeyUp(void);
+extern void goHotkeyToggle(void);
 extern void goOpenSettings(void);
 extern void goQuit(void);
 
 // Static helpers return function pointers for the trampolines.
 static HotkeyDownCB      hotkeyDownCB(void)      { return (HotkeyDownCB)goHotkeyDown;           }
 static HotkeyUpCB        hotkeyUpCB(void)        { return (HotkeyUpCB)goHotkeyUp;               }
+static HotkeyToggleCB    hotkeyToggleCB(void)    { return (HotkeyToggleCB)goHotkeyToggle;       }
 static MenuOpenSettingsCB menuOpenSettingsCB(void) { return (MenuOpenSettingsCB)goOpenSettings;   }
 static MenuQuitCB         menuQuitCB(void)         { return (MenuQuitCB)goQuit;                   }
 */
@@ -35,6 +37,7 @@ type linuxOverlay struct {
 var (
 	globalDownCB         func()
 	globalUpCB           func()
+	globalToggleCB       func()
 	globalOpenSettingsCB func()
 	globalQuitCB         func()
 )
@@ -50,6 +53,13 @@ func goHotkeyDown() {
 func goHotkeyUp() {
 	if globalUpCB != nil {
 		globalUpCB()
+	}
+}
+
+//export goHotkeyToggle
+func goHotkeyToggle() {
+	if globalToggleCB != nil {
+		globalToggleCB()
 	}
 }
 
@@ -94,6 +104,17 @@ func (o *linuxOverlay) installHotkey(trigger string, onDown, onUp func()) {
 		ctrig,
 		C.hotkeyDownCB(),
 		C.hotkeyUpCB(),
+	)
+}
+
+func (o *linuxOverlay) installToggleHotkey(trigger string, onTap func()) {
+	globalToggleCB = onTap
+	ctrig := C.CString(trigger)
+	defer C.free(unsafe.Pointer(ctrig))
+	C.overlay_install_toggle_hotkey(
+		(*C.GtkWidget)(o.win),
+		ctrig,
+		C.hotkeyToggleCB(),
 	)
 }
 

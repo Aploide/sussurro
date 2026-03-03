@@ -13,6 +13,12 @@ func installOverlayHotkey(overlay Overlay, trigger string, onDown, onUp func()) 
 	}
 }
 
+func installOverlayToggleHotkey(overlay Overlay, trigger string, onTap func()) {
+	if lo, ok := overlay.(*linuxOverlay); ok {
+		lo.installToggleHotkey(trigger, onTap)
+	}
+}
+
 // reinstallOverlayHotkey re-registers the X11 hotkey with a new trigger.
 // On Wayland the hotkey is handled by the external trigger server (socket),
 // so this is intentionally a no-op in that environment.

@@ -51,7 +51,8 @@ type LLMConfig struct {
 }
 
 type HotkeyConfig struct {
-	Trigger string `mapstructure:"trigger"`
+	Trigger       string `mapstructure:"trigger"`
+	ToggleTrigger string `mapstructure:"toggle_trigger"`
 }
 
 type InjectionConfig struct {
@@ -167,6 +168,7 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	viper.SetDefault("models.asr.language", "en")
+	viper.SetDefault("hotkey.toggle_trigger", "ctrl+shift+enter")
 
 	viper.SetEnvPrefix("SUSSURRO")
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
