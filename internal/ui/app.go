@@ -31,6 +31,9 @@ type Manager struct {
 
 	// Called when the user toggles lowercase output in Settings.
 	onLowercaseOutput func(bool)
+
+	// Called when the user toggles LLM cleanup bypass in Settings.
+	onSkipLLMCleanup func(bool)
 }
 
 // NewManager constructs the Manager.  Call Run() to start the event loop.
@@ -156,6 +159,19 @@ func (m *Manager) SetLowercaseOutputCallback(fn func(bool)) {
 func (m *Manager) applyLowercaseOutput(v bool) {
 	if m.onLowercaseOutput != nil {
 		m.onLowercaseOutput(v)
+	}
+}
+
+// SetSkipLLMCleanupCallback stores a function that is called whenever the user
+// toggles the raw output setting in the Settings window.
+func (m *Manager) SetSkipLLMCleanupCallback(fn func(bool)) {
+	m.onSkipLLMCleanup = fn
+}
+
+// applySkipLLMCleanup forwards the new value to the registered callback (if any).
+func (m *Manager) applySkipLLMCleanup(v bool) {
+	if m.onSkipLLMCleanup != nil {
+		m.onSkipLLMCleanup(v)
 	}
 }
 

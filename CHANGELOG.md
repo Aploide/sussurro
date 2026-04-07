@@ -2,6 +2,11 @@
 
 All notable changes to Sussurro will be documented in this file.
 
+## [2.2] - 2026-04-07
+
+### Added
+- **Raw output toggle** (`internal/config`, `internal/pipeline`, `internal/ui`): a new `app.skip_llm_cleanup` config field (default `false`) bypasses the LLM pass completely and uses raw Whisper output as-is. The toggle is exposed in **Settings → Output** as **Raw output** and takes effect immediately without restart.
+
 ## [2.1] - 2026-03-11
 
 ### Added

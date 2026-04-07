@@ -3,6 +3,7 @@ app:
   debug: false
   log_level: "info" # debug, info, warn, error
   lowercase_output: false
+  skip_llm_cleanup: false
 
 audio:
   sample_rate: 16000

@@ -61,9 +61,10 @@ type Pipeline struct {
 	isRecording     bool
 	isTranscribing  bool // true while processSegment is running; blocks new recordings
 	lowercaseOutput bool
+	skipLLMCleanup  bool
 	audioBuffer     []float32
 	audioBufferCap  int        // pre-computed capacity to avoid repeated slice growth
-	mu              sync.Mutex // Protects isRecording, isTranscribing, lowercaseOutput, and audioBuffer
+	mu              sync.Mutex // Protects isRecording, isTranscribing, lowercaseOutput, skipLLMCleanup, and audioBuffer
 	maxDuration     string
 }
 
@@ -101,6 +102,14 @@ func NewPipeline(
 func (p *Pipeline) SetLowercaseOutput(v bool) {
 	p.mu.Lock()
 	p.lowercaseOutput = v
+	p.mu.Unlock()
+}
+
+// SetSkipLLMCleanup controls whether the LLM cleanup step is bypassed entirely.
+// Safe to call from any goroutine.
+func (p *Pipeline) SetSkipLLMCleanup(v bool) {
+	p.mu.Lock()
+	p.skipLLMCleanup = v
 	p.mu.Unlock()
 }
 
@@ -330,13 +339,22 @@ func (p *Pipeline) processSegment(samples []float32) {
 		// Proceed without context
 	}
 
-	// 3. LLM: Cleanup and Contextualize
-	// TODO: Pass context info to LLM if supported
-	cleanedText, err := p.llmEngine.CleanupText(text)
-	if err != nil {
-		p.log.Error("LLM cleanup failed", "error", err)
-		// Fallback to raw text
-		cleanedText = text
+	p.mu.Lock()
+	skipLLMCleanup := p.skipLLMCleanup
+	p.mu.Unlock()
+
+	cleanedText := text
+	if !skipLLMCleanup {
+		// 3. LLM: Cleanup and Contextualize
+		// TODO: Pass context info to LLM if supported
+		cleanedText, err = p.llmEngine.CleanupText(text)
+		if err != nil {
+			p.log.Error("LLM cleanup failed", "error", err)
+			// Fallback to raw text
+			cleanedText = text
+		}
+	} else {
+		p.log.Debug("Skipping LLM cleanup (raw output enabled)")
 	}
 
 	p.mu.Lock()

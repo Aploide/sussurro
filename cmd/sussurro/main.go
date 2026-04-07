@@ -130,6 +130,7 @@ func run() {
 	pipe := pipeline.NewPipeline(audioEngine, asrEngine, llmEngine, ctxProvider, injector, log, cfg.Audio.SampleRate, cfg.Audio.MaxDuration)
 
 	pipe.SetLowercaseOutput(cfg.App.LowercaseOutput)
+	pipe.SetSkipLLMCleanup(cfg.App.SkipLLMCleanup)
 
 	pipe.SetOnCompletion(func() {
 		log.Debug("Pipeline processing completed")
@@ -151,6 +152,7 @@ func run() {
 
 		pipe.SetUINotifier(uiMgr)
 		uiMgr.SetLowercaseOutputCallback(func(v bool) { pipe.SetLowercaseOutput(v) })
+		uiMgr.SetSkipLLMCleanupCallback(func(v bool) { pipe.SetSkipLLMCleanup(v) })
 
 		// buildHotkeyCallbacks returns the right onDown/onUp pair for the given mode.
 		buildHotkeyCallbacks := func(mode string) (onDown func(), onUp func()) {

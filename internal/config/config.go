@@ -22,6 +22,7 @@ type AppConfig struct {
 	Debug           bool   `mapstructure:"debug"`
 	LogLevel        string `mapstructure:"log_level"`
 	LowercaseOutput bool   `mapstructure:"lowercase_output"`
+	SkipLLMCleanup  bool   `mapstructure:"skip_llm_cleanup"`
 }
 
 type AudioConfig struct {
@@ -242,6 +243,66 @@ func SaveLowercaseOutput(cfg *Config, enabled bool) error {
 	return fmt.Errorf("log_level key not found in config file; cannot insert lowercase_output")
 }
 
+// SaveSkipLLMCleanup rewrites only the app.skip_llm_cleanup field in the YAML config file.
+// If the key does not exist (old config), it inserts it after lowercase_output:
+// (or after log_level: if lowercase_output: is also missing).
+func SaveSkipLLMCleanup(cfg *Config, enabled bool) error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("cannot find home directory: %w", err)
+	}
+	configFile := filepath.Join(homeDir, ".sussurro", "config.yaml")
+
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		return fmt.Errorf("cannot read config file: %w", err)
+	}
+
+	val := "false"
+	if enabled {
+		val = "true"
+	}
+
+	lines := strings.Split(string(data), "\n")
+
+	// First pass: replace existing skip_llm_cleanup: key.
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "skip_llm_cleanup:") {
+			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+			lines[i] = indent + "skip_llm_cleanup: " + val
+			return os.WriteFile(configFile, []byte(strings.Join(lines, "\n")), 0644)
+		}
+	}
+
+	// Key missing: insert after lowercase_output: if present.
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "lowercase_output:") {
+			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+			newLine := indent + "skip_llm_cleanup: " + val
+			newLines := make([]string, 0, len(lines)+1)
+			newLines = append(newLines, lines[:i+1]...)
+			newLines = append(newLines, newLine)
+			newLines = append(newLines, lines[i+1:]...)
+			return os.WriteFile(configFile, []byte(strings.Join(newLines, "\n")), 0644)
+		}
+	}
+
+	// Backward-compat fallback: insert after log_level:.
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "log_level:") {
+			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+			newLine := indent + "skip_llm_cleanup: " + val
+			newLines := make([]string, 0, len(lines)+1)
+			newLines = append(newLines, lines[:i+1]...)
+			newLines = append(newLines, newLine)
+			newLines = append(newLines, lines[i+1:]...)
+			return os.WriteFile(configFile, []byte(strings.Join(newLines, "\n")), 0644)
+		}
+	}
+
+	return fmt.Errorf("log_level key not found in config file; cannot insert skip_llm_cleanup")
+}
+
 func LoadConfig(path string) (*Config, error) {
 	if path != "" {
 		// If a specific file path is provided, use it directly
@@ -258,6 +319,7 @@ func LoadConfig(path string) (*Config, error) {
 	viper.SetDefault("models.asr.language", "en")
 	viper.SetDefault("hotkey.mode", "push-to-talk")
 	viper.SetDefault("app.lowercase_output", false)
+	viper.SetDefault("app.skip_llm_cleanup", false)
 
 	viper.SetEnvPrefix("SUSSURRO")
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
