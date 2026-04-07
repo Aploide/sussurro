@@ -34,6 +34,7 @@ type initialData struct {
 	IsWayland       bool        `json:"isWayland"`
 	Language        string      `json:"language"`
 	LowercaseOutput bool        `json:"lowercaseOutput"`
+	SkipLLMCleanup  bool        `json:"skipLLMCleanup"`
 }
 
 // bindBridge attaches all Go↔JS bridge functions to the webview.
@@ -113,6 +114,21 @@ func bindBridge(sw *settingsWindow) {
 		}
 		mgr.cfg.App.LowercaseOutput = enabled
 		mgr.applyLowercaseOutput(enabled)
+		return "ok"
+	})
+
+	sw.w.Bind("saveSkipLLMCleanup", func(enabled bool) (result string) {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("panic in saveSkipLLMCleanup", "error", r)
+				result = fmt.Sprintf("error: panic: %v", r)
+			}
+		}()
+		if err := config.SaveSkipLLMCleanup(mgr.cfg, enabled); err != nil {
+			return fmt.Sprintf("error: %v", err)
+		}
+		mgr.cfg.App.SkipLLMCleanup = enabled
+		mgr.applySkipLLMCleanup(enabled)
 		return "ok"
 	})
 
@@ -255,6 +271,7 @@ func buildInitialData(mgr *Manager) initialData {
 		IsWayland:       isWayland,
 		Language:        mgr.cfg.Models.ASR.Language,
 		LowercaseOutput: mgr.cfg.App.LowercaseOutput,
+		SkipLLMCleanup:  mgr.cfg.App.SkipLLMCleanup,
 	}
 }
 

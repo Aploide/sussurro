@@ -37,6 +37,7 @@ function render(data) {
 
   // Lowercase output
   renderLowercaseOutput(data.lowercaseOutput);
+  renderSkipLLMCleanup(data.skipLLMCleanup);
 }
 
 // ---- Model list ----
@@ -186,6 +187,16 @@ function renderLowercaseOutput(enabled) {
   toggle.checked = !!enabled;
   toggle.onchange = async () => {
     await window.saveLowercaseOutput(toggle.checked);
+  };
+}
+
+// ---- Raw output (skip LLM cleanup) ----
+function renderSkipLLMCleanup(enabled) {
+  const toggle = document.getElementById('raw-output-toggle');
+  if (!toggle) return;
+  toggle.checked = !!enabled;
+  toggle.onchange = async () => {
+    await window.saveSkipLLMCleanup(toggle.checked);
   };
 }
 

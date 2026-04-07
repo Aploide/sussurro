@@ -40,6 +40,7 @@ find "$WHISPER_DIR" -type f \( -name "*.c" -o -name "*.cpp" -o -name "*.h" -o -n
     -e 's/quantize_q/wsp_quantize_q/g' \
     -e 's/quantize_tq/wsp_quantize_tq/g' \
     -e 's/quantize_mxfp/wsp_quantize_mxfp/g' \
+    -e 's/quantize_nvfp4/wsp_quantize_nvfp4/g' \
     -e 's/iq2xs_/wsp_iq2xs_/g' \
     -e 's/iq3xs_/wsp_iq3xs_/g'
 
@@ -71,6 +72,26 @@ fi
 # 6. Fix Mach-O section name length error in ggml-metal/CMakeLists.txt
 if [ -f "$WHISPER_DIR/ggml/src/ggml-metal/CMakeLists.txt" ]; then
     $SED_INPLACE 's/__wsp_ggml_metallib/__wsp_ggml_mtl/g' "$WHISPER_DIR/ggml/src/ggml-metal/CMakeLists.txt"
+fi
+
+# 7. Ensure Go bindings can locate headers and static libs without external env vars
+BINDINGS_GO="$WHISPER_DIR/bindings/go/whisper.go"
+if [ -f "$BINDINGS_GO" ]; then
+    if ! grep -q '#cgo CFLAGS: -I${SRCDIR}/../../include -I${SRCDIR}/../../ggml/include' "$BINDINGS_GO"; then
+        tmp_file="$(mktemp)"
+        awk '
+            {
+                if (!inserted && $0 == "#cgo LDFLAGS: -lwhisper -lggml -lggml-base -lggml-cpu -lm -lstdc++") {
+                    print "#cgo CFLAGS: -I${SRCDIR}/../../include -I${SRCDIR}/../../ggml/include"
+                    print "#cgo LDFLAGS: -L${SRCDIR}/../../build/src -L${SRCDIR}/../../build/ggml/src -L${SRCDIR}/../../build/ggml/src/ggml-cpu -L${SRCDIR}/../../build/ggml/src/ggml-blas"
+                    print "#cgo darwin LDFLAGS: -L${SRCDIR}/../../build/ggml/src/ggml-metal"
+                    inserted = 1
+                }
+                print
+            }
+        ' "$BINDINGS_GO" > "$tmp_file"
+        mv "$tmp_file" "$BINDINGS_GO"
+    fi
 fi
 
 echo "Patch applied successfully."
