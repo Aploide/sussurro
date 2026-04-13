@@ -5,6 +5,7 @@
 [![Go 1.24+](https://img.shields.io/badge/Go-1.24+-black?style=flat&logo=go&logoColor=white)](https://golang.org)
 [![Linux](https://img.shields.io/badge/Linux-black?style=flat&logo=linux&logoColor=white)](https://github.com/cesp99/sussurro)
 [![macOS](https://img.shields.io/badge/macOS-black?style=flat&logo=apple&logoColor=white)](https://github.com/cesp99/sussurro)
+[![DeepWiki](https://img.shields.io/badge/DeepWiki-black?style=flat&logo=readthedocs&logoColor=white)](https://deepwiki.com/cesp99/sussurro)
 
 Sussurro is a fully local, open-source voice-to-text system with a built-in native overlay UI. It transforms speech into clean, formatted, context-aware text and injects it into any application — entirely on your machine, using **Whisper.cpp** for ASR and a fine-tuned **Qwen 3** LLM for cleanup.
 
