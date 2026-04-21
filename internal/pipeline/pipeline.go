@@ -42,7 +42,7 @@ type StateNotifier interface {
 // Pipeline orchestrates the flow of data from audio capture to text output
 type Pipeline struct {
 	audioEngine *audio.CaptureEngine
-	asrEngine   *asr.Engine
+	asrEngine   asr.Engine
 	llmEngine   *llm.Engine
 	ctxProvider ctxProvider.Provider
 	injector    *injection.Injector
@@ -71,7 +71,7 @@ type Pipeline struct {
 // NewPipeline creates a new processing pipeline
 func NewPipeline(
 	audioEngine *audio.CaptureEngine,
-	asrEngine *asr.Engine,
+	asrEngine asr.Engine,
 	llmEngine *llm.Engine,
 	ctxProvider ctxProvider.Provider,
 	injector *injection.Injector,

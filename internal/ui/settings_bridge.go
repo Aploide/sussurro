@@ -21,7 +21,7 @@ type modelInfo struct {
 	Size        string `json:"size"`
 	Installed   bool   `json:"installed"`
 	Active      bool   `json:"active"`
-	Type        string `json:"type"` // "whisper" or "llm"
+	Type        string `json:"type"` // "asr" or "llm"
 }
 
 // initialData is returned by getInitialData().
@@ -139,14 +139,26 @@ func bindBridge(sw *settingsWindow) {
 					slog.Error("panic in downloadModel goroutine", "error", r)
 				}
 			}()
-			url, dest, name := resolveModelDownload(modelID)
-			if url == "" {
-				return
-			}
 			setup.SetProgressCallback(func(_ string, pct float64, _, _ int64) {
 				sw.pushDownloadProgress(modelID, pct)
 			})
 			defer setup.SetProgressCallback(nil)
+			if modelID == "parakeet-v3" {
+				if err := setup.DownloadParakeetV3Bundle(sussurroModelsDir()); err != nil {
+					sw.w.Dispatch(func() {
+						sw.w.Eval(fmt.Sprintf("onDownloadError('%s', '%v')", modelID, err))
+					})
+					return
+				}
+				sw.w.Dispatch(func() {
+					sw.w.Eval(fmt.Sprintf("onDownloadComplete('%s')", modelID))
+				})
+				return
+			}
+			url, dest, name := resolveModelDownload(modelID)
+			if url == "" {
+				return
+			}
 			if err := setup.DownloadModel(url, dest, name); err != nil {
 				sw.w.Dispatch(func() {
 					sw.w.Eval(fmt.Sprintf("onDownloadError('%s', '%v')", modelID, err))
@@ -175,8 +187,16 @@ func bindBridge(sw *settingsWindow) {
 		switch modelID {
 		case "whisper-small":
 			mgr.cfg.Models.ASR.Path = modelsDir + "/ggml-small.bin"
+			mgr.cfg.Models.ASR.Type = "whisper"
+			mgr.cfg.Models.ASR.Engine = "native"
 		case "whisper-large-v3-turbo":
 			mgr.cfg.Models.ASR.Path = modelsDir + "/ggml-large-v3-turbo.bin"
+			mgr.cfg.Models.ASR.Type = "whisper"
+			mgr.cfg.Models.ASR.Engine = "native"
+		case "parakeet-v3":
+			mgr.cfg.Models.ASR.Path = modelsDir + "/encoder-model.int8.onnx"
+			mgr.cfg.Models.ASR.Type = "parakeet-v3"
+			mgr.cfg.Models.ASR.Engine = "onnx"
 		}
 		// Config written — the UI shows a restart banner instead of forcing a
 		// process restart, so in-flight audio/pipeline goroutines are not disrupted.
@@ -214,6 +234,7 @@ func buildInitialData(mgr *Manager) initialData {
 
 	whisperSmallPath := modelsDir + "/ggml-small.bin"
 	whisperLargePath := modelsDir + "/ggml-large-v3-turbo.bin"
+	parakeetV3Path := modelsDir + "/encoder-model.int8.onnx"
 	llmPath := modelsDir + "/qwen3-sussurro-q4_k_m.gguf"
 
 	currentASR := mgr.cfg.Models.ASR.Path
@@ -227,7 +248,7 @@ func buildInitialData(mgr *Manager) initialData {
 			Size:        "~488 MB",
 			Installed:   fileExists(whisperSmallPath),
 			Active:      currentASR == whisperSmallPath,
-			Type:        "whisper",
+			Type:        "asr",
 		},
 		{
 			ID:          "whisper-large-v3-turbo",
@@ -236,7 +257,16 @@ func buildInitialData(mgr *Manager) initialData {
 			Size:        "~1.62 GB",
 			Installed:   fileExists(whisperLargePath),
 			Active:      currentASR == whisperLargePath,
-			Type:        "whisper",
+			Type:        "asr",
+		},
+		{
+			ID:          "parakeet-v3",
+			Name:        "Parakeet V3 (ONNX)",
+			Description: "Multilingual ASR via ONNX engine",
+			Size:        "~639 MB",
+			Installed:   parakeetInstalled(modelsDir),
+			Active:      currentASR == parakeetV3Path,
+			Type:        "asr",
 		},
 		{
 			ID:          "qwen3-sussurro",
@@ -276,8 +306,8 @@ func buildInitialData(mgr *Manager) initialData {
 }
 
 func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
+	st, err := os.Stat(path)
+	return err == nil && st.Size() > 0
 }
 
 // resolveModelDownload maps a model ID to its download URL and local path.
@@ -297,6 +327,24 @@ func resolveModelDownload(modelID string) (url, dest, name string) {
 		return "https://huggingface.co/cesp99/qwen3-sussurro/resolve/main/qwen3-sussurro-q4_k_m.gguf",
 			modelsDir + "/qwen3-sussurro-q4_k_m.gguf",
 			"Qwen 3 Sussurro"
+	case "parakeet-v3":
+		return "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/encoder-model.int8.onnx",
+			modelsDir + "/encoder-model.int8.onnx",
+			"Parakeet V3 ONNX"
 	}
 	return "", "", ""
+}
+
+func parakeetInstalled(modelsDir string) bool {
+	required := []string{
+		modelsDir + "/encoder-model.int8.onnx",
+		modelsDir + "/decoder_joint-model.int8.onnx",
+		modelsDir + "/vocab.txt",
+	}
+	for _, f := range required {
+		if !fileExists(f) {
+			return false
+		}
+	}
+	return true
 }

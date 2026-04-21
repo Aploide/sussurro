@@ -16,6 +16,7 @@ models:
   asr:
     path: "models/ggml-base.bin"
     type: "whisper"
+    engine: "native"
     threads: 4
     language: "en"
   llm:

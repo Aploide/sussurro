@@ -45,6 +45,7 @@ models:
   asr:
     path: "/home/you/.sussurro/models/ggml-small.bin"
     type: "whisper"
+    engine: "native" # native (whisper.cpp) or onnx (for Parakeet V3 ONNX)
     threads: 4
     language: "en"   # BCP-47 code passed to Whisper; "auto" for auto-detection
   llm:
@@ -70,6 +71,28 @@ sussurro --whisper   # or: sussurro --wsp
 | Whisper Large v3 Turbo | `ggml-large-v3-turbo.bin` | 1.62 GB | Slower, higher accuracy |
 
 The `--whisper` / `--wsp` flag opens an interactive menu, downloads the chosen model if needed, and updates `~/.sussurro/config.yaml` automatically.
+
+#### Parakeet V3 ONNX model
+
+Sussurro also supports selecting **Parakeet V3 (ONNX)** from Settings. This writes:
+
+```yaml
+models:
+  asr:
+    type: "parakeet-v3"
+    engine: "onnx"
+    path: "~/.sussurro/models/encoder-model.int8.onnx"
+```
+
+Parakeet ONNX uses ONNX Runtime via `onnxruntime_go`. If the shared library is
+not in a standard system location, set:
+
+```bash
+export SUSSURRO_ONNXRUNTIME_LIB=/absolute/path/to/libonnxruntime.so
+```
+
+On Linux amd64 and macOS arm64, first-run setup can install ONNX Runtime
+automatically when Parakeet is selected.
 
 #### Transcription language
 

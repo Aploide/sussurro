@@ -105,7 +105,7 @@ func run() {
 	defer audioEngine.Close()
 
 	// Initialize ASR Engine
-	asrEngine, err := asr.NewEngine(cfg.Models.ASR.Path, cfg.Models.ASR.Threads, cfg.Models.ASR.Language, cfg.App.Debug)
+	asrEngine, err := asr.NewEngine(cfg.Models.ASR.Path, cfg.Models.ASR.Type, cfg.Models.ASR.Threads, cfg.Models.ASR.Language, cfg.App.Debug)
 	if err != nil {
 		log.Error("Failed to initialize ASR engine", "error", err)
 		os.Exit(1)

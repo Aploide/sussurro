@@ -65,7 +65,7 @@ func main() {
 	}
 
 	// Initialize ASR engine
-	asrEngine, err := asr.NewEngine(cfg.Models.ASR.Path, cfg.Models.ASR.Threads, lang, *debug)
+	asrEngine, err := asr.NewEngine(cfg.Models.ASR.Path, cfg.Models.ASR.Type, cfg.Models.ASR.Threads, lang, *debug)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to initialize ASR engine: %v\n", err)
 		os.Exit(1)

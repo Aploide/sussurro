@@ -11,16 +11,16 @@ import (
 	"github.com/ggerganov/whisper.cpp/bindings/go/pkg/whisper"
 )
 
-// Engine handles the Whisper model and transcription
-type Engine struct {
+// WhisperEngine handles the Whisper model and transcription.
+type WhisperEngine struct {
 	model   whisper.Model
 	context whisper.Context
 	mutex   sync.Mutex
 	debug   bool
 }
 
-// NewEngine initializes the Whisper model from a file path
-func NewEngine(modelPath string, threads int, language string, debug bool) (*Engine, error) {
+// NewWhisperEngine initializes the Whisper model from a file path.
+func NewWhisperEngine(modelPath string, threads int, language string, debug bool) (*WhisperEngine, error) {
 	if _, err := os.Stat(modelPath); os.IsNotExist(err) {
 		return nil, fmt.Errorf("model file not found at %s: %w", modelPath, err)
 	}
@@ -47,7 +47,7 @@ func NewEngine(modelPath string, threads int, language string, debug bool) (*Eng
 		}
 	}
 
-	return &Engine{
+	return &WhisperEngine{
 		model:   model,
 		context: ctx,
 		debug:   debug,
@@ -55,7 +55,7 @@ func NewEngine(modelPath string, threads int, language string, debug bool) (*Eng
 }
 
 // Transcribe processes the audio samples and returns the text
-func (e *Engine) Transcribe(samples []float32) (string, error) {
+func (e *WhisperEngine) Transcribe(samples []float32) (string, error) {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
@@ -92,9 +92,13 @@ func (e *Engine) Transcribe(samples []float32) (string, error) {
 // Close releases resources
 // Note: context.Close() is not available in the bindings, we rely on GC or explicit C-level cleanup if exposed.
 // However, Model has Close().
-func (e *Engine) Close() {
+func (e *WhisperEngine) Close() {
 	// e.context.Close() // Not available in current bindings
 	if e.model != nil {
 		e.model.Close()
 	}
+}
+
+func (e *WhisperEngine) EngineName() string {
+	return "whisper"
 }

@@ -37,7 +37,8 @@ type settingsWindow struct {
 func newSettingsWindow(mgr *Manager) *settingsWindow {
 	w := webview.New(false)
 	w.SetTitle("Sussurro Settings")
-	w.SetSize(580, 720, webview.HintNone)
+	w.SetSize(580, 900, webview.HintNone)
+	w.SetSize(580, 780, webview.HintMin)
 
 	sw := &settingsWindow{w: w, mgr: mgr}
 

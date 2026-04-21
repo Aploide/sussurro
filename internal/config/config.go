@@ -41,6 +41,7 @@ type ModelsConfig struct {
 type ASRConfig struct {
 	Path     string `mapstructure:"path"`
 	Type     string `mapstructure:"type"`
+	Engine   string `mapstructure:"engine"`
 	Threads  int    `mapstructure:"threads"`
 	Language string `mapstructure:"language"`
 }
@@ -317,6 +318,8 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	viper.SetDefault("models.asr.language", "en")
+	viper.SetDefault("models.asr.type", "whisper")
+	viper.SetDefault("models.asr.engine", "native")
 	viper.SetDefault("hotkey.mode", "push-to-talk")
 	viper.SetDefault("app.lowercase_output", false)
 	viper.SetDefault("app.skip_llm_cleanup", false)

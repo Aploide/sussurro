@@ -28,7 +28,7 @@ Works on Linux and macOS. The script detects your platform, downloads the right 
 - **Smart Cleanup**: Removes filler words, handles self-corrections, prevents hallucinations
 - **Local Processing**: No data leaves your machine
 - **System-Wide**: Works in any application where you can type
-- **Flexible ASR**: Whisper Small (fast) or Large v3 Turbo (accurate), switchable from the UI
+- **Flexible ASR**: Whisper Small, Whisper Large v3 Turbo, or Parakeet V3 ONNX (experimental) from Settings
 - **Live Hotkey Config**: Change the global hotkey from Settings — takes effect instantly, no restart
 - **Hotkey Mode**: Switch between *Push to Talk* (hold to record, release to transcribe) and *Toggle* (press once to start, press again to transcribe) directly from Settings *(X11 & macOS only)*
 - **Transcription Language**: Choose the language Whisper listens for (or use Auto Detect) directly from Settings

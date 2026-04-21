@@ -24,16 +24,16 @@ function render(data) {
   document.getElementById('version-label').textContent  = `v${data.version}`;
 
   // Models
-  const whisperItems = data.models.filter(m => m.type === 'whisper');
-  const llmItems     = data.models.filter(m => m.type === 'llm');
-  renderModelList('whisper-list', whisperItems, 'whisper');
+  const asrItems = data.models.filter(m => m.type === 'asr');
+  const llmItems = data.models.filter(m => m.type === 'llm');
+  renderModelList('asr-list', asrItems, 'asr');
   renderModelList('llm-list',     llmItems,     'llm');
 
   // Hotkey
   renderHotkey(data.hotkey, data.hotkeyMode, data.isWayland);
 
   // Language
-  renderLanguage(data.language);
+  renderLanguage(data.language, data.models);
 
   // Lowercase output
   renderLowercaseOutput(data.lowercaseOutput);
@@ -159,9 +159,10 @@ const WHISPER_LANGUAGES = [
   { code: 'it',   name: 'Italian' },
 ];
 
-function renderLanguage(currentLang) {
+function renderLanguage(currentLang, models) {
   const select = document.getElementById('language-select');
   if (!select) return;
+  const desc = select.closest('.setting-row')?.querySelector('.toggle-desc');
 
   select.innerHTML = '';
   const active = currentLang || 'en';
@@ -173,6 +174,19 @@ function renderLanguage(currentLang) {
     if (code === active) opt.selected = true;
     select.appendChild(opt);
   });
+
+  const activeASR = (models || []).find(m => m.type === 'asr' && m.active);
+  const languageLocked = activeASR && activeASR.id === 'parakeet-v3';
+  select.disabled = !!languageLocked;
+  if (desc) {
+    desc.textContent = languageLocked
+      ? 'Parakeet V3 ONNX currently uses its default model language configuration'
+      : 'Language ASR listens for';
+  }
+
+  if (languageLocked) {
+    return;
+  }
 
   select.onchange = async () => {
     const res = await window.saveLanguage(select.value);

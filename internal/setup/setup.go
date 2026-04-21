@@ -6,7 +6,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 )
@@ -34,8 +36,27 @@ func DownloadModel(url, destPath, name string) error {
 	return downloadFile(url, destPath, name)
 }
 
+// DownloadParakeetV3Bundle downloads all files required to run Parakeet V3 ONNX.
+func DownloadParakeetV3Bundle(modelsDir string) error {
+	items := []struct {
+		url  string
+		file string
+		name string
+	}{
+		{url: urlParakeetEncoder, file: fileASRParakeetV3, name: "Parakeet V3 Encoder"},
+		{url: urlParakeetDecoder, file: fileParakeetDecoder, name: "Parakeet V3 Decoder"},
+		{url: urlParakeetVocab, file: fileParakeetVocab, name: "Parakeet V3 Vocabulary"},
+	}
+	for _, item := range items {
+		if err := downloadFile(item.url, filepath.Join(modelsDir, item.file), item.name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // SetActiveModel updates config.yaml to use the given model ID as the active
-// ASR model.  modelID is one of: "whisper-small", "whisper-large-v3-turbo".
+// ASR model.
 func SetActiveModel(modelID string) error {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -49,20 +70,34 @@ func SetActiveModel(modelID string) error {
 		return err
 	}
 
-	var newPath string
+	var newPath, newType, newEngine string
 	switch modelID {
 	case "whisper-small":
 		newPath = filepath.Join(modelsDir, fileASRSmall)
+		newType = "whisper"
+		newEngine = "native"
 	case "whisper-large-v3-turbo":
 		newPath = filepath.Join(modelsDir, fileASRLarge)
+		newType = "whisper"
+		newEngine = "native"
+	case "parakeet-v3":
+		newPath = filepath.Join(modelsDir, fileASRParakeetV3)
+		newType = "parakeet-v3"
+		newEngine = "onnx"
 	default:
 		return fmt.Errorf("unknown model ID: %s", modelID)
 	}
 
-	// Replace either known ASR path with the new one
+	// Replace known ASR paths with the selected one.
 	updated := string(configBytes)
 	updated = strings.ReplaceAll(updated, filepath.Join(modelsDir, fileASRSmall), newPath)
 	updated = strings.ReplaceAll(updated, filepath.Join(modelsDir, fileASRLarge), newPath)
+	updated = strings.ReplaceAll(updated, filepath.Join(modelsDir, fileASRParakeetV3), newPath)
+	updated = strings.ReplaceAll(updated, filepath.Join(modelsDir, "parakeet-tdt-0.6b-v3.onnx"), newPath) // legacy
+	updated = strings.ReplaceAll(updated, `type: "whisper"`, fmt.Sprintf(`type: "%s"`, newType))
+	updated = strings.ReplaceAll(updated, `type: "parakeet-v3"`, fmt.Sprintf(`type: "%s"`, newType))
+	updated = strings.ReplaceAll(updated, `engine: "native"`, fmt.Sprintf(`engine: "%s"`, newEngine))
+	updated = strings.ReplaceAll(updated, `engine: "onnx"`, fmt.Sprintf(`engine: "%s"`, newEngine))
 
 	return os.WriteFile(configFile, []byte(updated), 0644)
 }
@@ -84,6 +119,7 @@ models:
   asr:
     path: "{{ASR_PATH}}"
     type: "whisper"
+    engine: "native"
     threads: 4
   llm:
     path: "{{LLM_PATH}}"
@@ -108,9 +144,22 @@ injection:
 	sizeASRLarge = "1.62 GB"
 	fileASRLarge = "ggml-large-v3-turbo.bin"
 
+	// Parakeet V3 ONNX bundle
+	urlParakeetEncoder  = "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/encoder-model.int8.onnx"
+	urlParakeetDecoder  = "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/decoder_joint-model.int8.onnx"
+	urlParakeetVocab    = "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/vocab.txt"
+	sizeASRParakeetV3   = "639 MB"
+	fileASRParakeetV3   = "encoder-model.int8.onnx"
+	fileParakeetDecoder = "decoder_joint-model.int8.onnx"
+	fileParakeetVocab   = "vocab.txt"
+
 	// Qwen 3 Sussurro GGUF
 	urlLLM  = "https://huggingface.co/cesp99/qwen3-sussurro/resolve/main/qwen3-sussurro-q4_k_m.gguf"
 	sizeLLM = "1.28 GB"
+
+	onnxRuntimeVersion      = "1.24.1"
+	urlONNXRuntimeLinuxX64  = "https://github.com/microsoft/onnxruntime/releases/download/v1.24.1/onnxruntime-linux-x64-1.24.1.tgz"
+	urlONNXRuntimeDarwinARM = "https://github.com/microsoft/onnxruntime/releases/download/v1.24.1/onnxruntime-osx-arm64-1.24.1.tgz"
 )
 
 // EnsureSetup checks for the necessary configuration and models,
@@ -157,9 +206,25 @@ func EnsureSetup() error {
 
 	// Determine which ASR model is currently configured
 	asrPath := filepath.Join(modelsDir, fileASRSmall) // default
+	currentASRIsParakeet := false
 	if configBytes, err := os.ReadFile(configFile); err == nil {
-		if strings.Contains(string(configBytes), fileASRLarge) {
+		cfgStr := string(configBytes)
+		legacyParakeetPath := filepath.Join(modelsDir, "parakeet-tdt-0.6b-v3.onnx")
+		if strings.Contains(cfgStr, legacyParakeetPath) {
+			cfgStr = strings.ReplaceAll(cfgStr, legacyParakeetPath, filepath.Join(modelsDir, fileASRParakeetV3))
+			_ = os.WriteFile(configFile, []byte(cfgStr), 0644)
+		}
+		oldParakeetEncoderPath := filepath.Join(modelsDir, "encoder-model.onnx")
+		if strings.Contains(cfgStr, oldParakeetEncoderPath) {
+			cfgStr = strings.ReplaceAll(cfgStr, oldParakeetEncoderPath, filepath.Join(modelsDir, fileASRParakeetV3))
+			_ = os.WriteFile(configFile, []byte(cfgStr), 0644)
+		}
+		if strings.Contains(cfgStr, fileASRLarge) {
 			asrPath = filepath.Join(modelsDir, fileASRLarge)
+		}
+		if strings.Contains(cfgStr, `type: "parakeet-v3"`) || strings.Contains(cfgStr, fileASRParakeetV3) || strings.Contains(cfgStr, "parakeet-tdt-0.6b-v3.onnx") {
+			asrPath = filepath.Join(modelsDir, fileASRParakeetV3)
+			currentASRIsParakeet = true
 		}
 	}
 	llmPath := filepath.Join(modelsDir, "qwen3-sussurro-q4_k_m.gguf")
@@ -221,12 +286,35 @@ func EnsureSetup() error {
 	// 4. Check for models and prompt to download
 	missingASR := false
 	missingLLM := false
+	missingONNXRuntime := false
 
-	if _, err := os.Stat(asrPath); os.IsNotExist(err) {
+	if currentASRIsParakeet {
+		if _, err := os.Stat(filepath.Join(modelsDir, fileASRParakeetV3)); os.IsNotExist(err) {
+			missingASR = true
+		}
+		if _, err := os.Stat(filepath.Join(modelsDir, fileParakeetDecoder)); os.IsNotExist(err) {
+			missingASR = true
+		}
+		if _, err := os.Stat(filepath.Join(modelsDir, fileParakeetVocab)); os.IsNotExist(err) {
+			missingASR = true
+		}
+		if !onnxRuntimeInstalled(homeDir) {
+			missingONNXRuntime = true
+		}
+	} else if _, err := os.Stat(asrPath); os.IsNotExist(err) {
 		missingASR = true
 	}
 	if _, err := os.Stat(llmPath); os.IsNotExist(err) {
 		missingLLM = true
+	}
+
+	// Ensure ONNX Runtime is available whenever Parakeet is selected,
+	// even if all model files are already present.
+	if currentASRIsParakeet && missingONNXRuntime {
+		if err := installONNXRuntime(homeDir); err != nil {
+			return fmt.Errorf("failed to install ONNX Runtime: %w", err)
+		}
+		missingONNXRuntime = false
 	}
 
 	if missingASR || missingLLM {
@@ -236,7 +324,7 @@ func EnsureSetup() error {
 		chosenASRName := "Whisper Small"
 		chosenASRSize := sizeASRSmall
 
-		if missingASR {
+		if missingASR && !currentASRIsParakeet {
 			fmt.Println("\nWhich Whisper model would you like to use?")
 			fmt.Printf("  [1] Whisper Small         (%s) - faster, lower memory usage\n", sizeASRSmall)
 			fmt.Printf("  [2] Whisper Large v3 Turbo (%s) - slower, higher accuracy\n", sizeASRLarge)
@@ -266,10 +354,18 @@ func EnsureSetup() error {
 
 		fmt.Println("\nMissing model files:")
 		if missingASR {
+			if currentASRIsParakeet {
+				chosenASRName = "Parakeet V3 (ONNX)"
+				chosenASRPath = filepath.Join(modelsDir, fileASRParakeetV3)
+				chosenASRSize = sizeASRParakeetV3
+			}
 			fmt.Printf(" - %s (ASR): %s (%s)\n", chosenASRName, chosenASRPath, chosenASRSize)
 		}
 		if missingLLM {
 			fmt.Printf(" - LLM Model (Qwen 3 Sussurro): %s (%s)\n", llmPath, sizeLLM)
+		}
+		if missingONNXRuntime {
+			fmt.Printf(" - ONNX Runtime shared library: %s\n", onnxRuntimeLibraryPath(homeDir))
 		}
 
 		totalSize := ""
@@ -292,8 +388,14 @@ func EnsureSetup() error {
 
 		if response == "" || response == "y" || response == "yes" {
 			if missingASR {
-				if err := downloadFile(chosenASRURL, chosenASRPath, chosenASRName); err != nil {
-					return fmt.Errorf("failed to download ASR model: %w", err)
+				if currentASRIsParakeet {
+					if err := DownloadParakeetV3Bundle(modelsDir); err != nil {
+						return fmt.Errorf("failed to download Parakeet V3 model bundle: %w", err)
+					}
+				} else {
+					if err := downloadFile(chosenASRURL, chosenASRPath, chosenASRName); err != nil {
+						return fmt.Errorf("failed to download ASR model: %w", err)
+					}
 				}
 			}
 			if missingLLM {
@@ -413,12 +515,17 @@ func SwitchWhisperModel() error {
 func downloadFile(url, filepath, name string) error {
 	fmt.Printf("Downloading %s...\n", name)
 
-	// Create the file
-	out, err := os.Create(filepath)
+	// Download into a temp file first, then atomically move into place.
+	// This avoids leaving zero-byte / partial files when a download fails.
+	tmpPath := filepath + ".part"
+	out, err := os.Create(tmpPath)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer func() {
+		out.Close()
+		_ = os.Remove(tmpPath)
+	}()
 
 	// Get the data
 	resp, err := http.Get(url)
@@ -441,7 +548,108 @@ func downloadFile(url, filepath, name string) error {
 
 	_, err = io.Copy(out, reader)
 	fmt.Println() // Newline after progress
-	return err
+	if err != nil {
+		return err
+	}
+	if err := out.Sync(); err != nil {
+		return err
+	}
+	if err := out.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, filepath)
+}
+
+func onnxRuntimeLibraryPath(homeDir string) string {
+	if runtime.GOOS == "darwin" {
+		return filepath.Join(homeDir, ".sussurro", "onnxruntime", "libonnxruntime.dylib")
+	}
+	return filepath.Join(homeDir, ".sussurro", "onnxruntime", "libonnxruntime.so."+onnxRuntimeVersion)
+}
+
+func onnxRuntimeInstalled(homeDir string) bool {
+	_, err := os.Stat(onnxRuntimeLibraryPath(homeDir))
+	return err == nil
+}
+
+func installONNXRuntime(homeDir string) error {
+	fmt.Println("Installing ONNX Runtime...")
+	targetLib := onnxRuntimeLibraryPath(homeDir)
+	targetDir := filepath.Dir(targetLib)
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		return err
+	}
+
+	var archiveURL string
+	var archiveRoot string
+	switch runtime.GOOS {
+	case "linux":
+		if runtime.GOARCH != "amd64" {
+			return fmt.Errorf("automatic ONNX Runtime install is supported only on linux/amd64 and darwin/arm64; set SUSSURRO_ONNXRUNTIME_LIB manually")
+		}
+		archiveURL = urlONNXRuntimeLinuxX64
+		archiveRoot = "onnxruntime-linux-x64-" + onnxRuntimeVersion
+	case "darwin":
+		if runtime.GOARCH != "arm64" {
+			return fmt.Errorf("automatic ONNX Runtime install is supported only on linux/amd64 and darwin/arm64; set SUSSURRO_ONNXRUNTIME_LIB manually")
+		}
+		archiveURL = urlONNXRuntimeDarwinARM
+		archiveRoot = "onnxruntime-osx-arm64-" + onnxRuntimeVersion
+	default:
+		return fmt.Errorf("automatic ONNX Runtime install is not supported on %s; set SUSSURRO_ONNXRUNTIME_LIB manually", runtime.GOOS)
+	}
+
+	tmpDir, err := os.MkdirTemp("", "sussurro-onnxruntime-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	archivePath := filepath.Join(tmpDir, "onnxruntime.tgz")
+	if err := downloadFile(archiveURL, archivePath, "ONNX Runtime"); err != nil {
+		return err
+	}
+
+	cmd := exec.Command("tar", "-xzf", archivePath, "-C", tmpDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to extract ONNX Runtime archive: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+
+	var srcLib string
+	if runtime.GOOS == "darwin" {
+		srcLib = filepath.Join(tmpDir, archiveRoot, "lib", "libonnxruntime.dylib")
+	} else {
+		srcLib = filepath.Join(tmpDir, archiveRoot, "lib", "libonnxruntime.so."+onnxRuntimeVersion)
+	}
+	if _, err := os.Stat(srcLib); err != nil {
+		return fmt.Errorf("could not find extracted ONNX Runtime library at %s", srcLib)
+	}
+
+	in, err := os.Open(srcLib)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.Create(targetLib)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	if err := out.Close(); err != nil {
+		return err
+	}
+
+	if runtime.GOOS == "linux" {
+		_ = os.Remove(filepath.Join(targetDir, "libonnxruntime.so"))
+		_ = os.Symlink(filepath.Base(targetLib), filepath.Join(targetDir, "libonnxruntime.so"))
+	}
+
+	fmt.Printf("ONNX Runtime installed at %s\n", targetLib)
+	return nil
 }
 
 func (pr *progressReader) invokeCallback() {

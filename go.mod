@@ -8,11 +8,12 @@ require (
 	github.com/gen2brain/malgo v0.11.24
 	github.com/getlantern/systray v1.2.2
 	github.com/ggerganov/whisper.cpp/bindings/go v0.0.0-20260209103306-764482c3175d
-	github.com/godbus/dbus/v5 v5.2.2
 	github.com/micmonay/keybd_event v1.1.2
 	github.com/spf13/viper v1.21.0
 	github.com/webview/webview_go v0.0.0-20240831120633-6173450d4dd6
+	github.com/yalue/onnxruntime_go v1.27.0
 	golang.design/x/hotkey v0.4.1
+	gonum.org/v1/gonum v0.17.0
 )
 
 require (
