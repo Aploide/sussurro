@@ -1,6 +1,6 @@
 # Sussurro
 
-[![Version 2.2](https://img.shields.io/badge/Version-2.2-black?style=flat)](https://github.com/cesp99/sussurro/releases)
+[![Version 2.3](https://img.shields.io/badge/Version-2.3-black?style=flat)](https://github.com/cesp99/sussurro/releases)
 [![GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-black?style=flat)](LICENSE)
 [![Go 1.24+](https://img.shields.io/badge/Go-1.24+-black?style=flat&logo=go&logoColor=white)](https://golang.org)
 [![Linux](https://img.shields.io/badge/Linux-black?style=flat&logo=linux&logoColor=white)](https://github.com/cesp99/sussurro)
@@ -15,17 +15,23 @@ Sussurro is a fully local, open-source voice-to-text system with a built-in nati
 curl -fsSL https://raw.githubusercontent.com/cesp99/sussurro/master/scripts/install.sh | bash
 ```
 
-Works on Linux and macOS. The script detects your platform, downloads the right binary, and places it in `/usr/local/bin` (or `~/.local/bin`). On first run Sussurro will guide you through downloading the AI models.
+Works on Linux and macOS. The installer:
+
+- **macOS** — drops `Sussurro.app` into `/Applications` (or `~/Applications` if you don't have admin rights) so it shows up in Launchpad and Spotlight, and symlinks `sussurro` onto your `PATH` for CLI use.
+- **Linux** — installs the `sussurro` binary to `/usr/local/bin`, registers a `.desktop` entry, and installs hicolor icons so it appears in your application menu.
+- **Both** — downloads the AI models (~1.77 GB or ~2.90 GB, your choice) so the first launch from Launchpad / the app menu works without a terminal.
+
+You can launch Sussurro from your normal app launcher *or* from a terminal — both work.
 
 > **Wayland users:** after install, bind the hotkey in your desktop environment — see [Wayland Setup](docs/wayland.md).
-> **macOS users:** grant Accessibility access when prompted (System Settings → Privacy & Security → Accessibility).
+> **macOS users:** grant Microphone and Accessibility access when prompted (System Settings → Privacy & Security).
 
 ---
 
 ## Features
 
 - **Built-in Native Overlay**: A minimal, aesthetically clean floating capsule shows recording/transcribing state — always on top, no taskbar entry *(Linux & macOS)*
-- **Settings UI**: Dark-themed settings window accessible via system tray or right-click on the overlay *(Linux & macOS)*
+- **Settings UI**: Dark-themed settings window — right-click the overlay capsule to open it or quit *(Linux & macOS)*
 - **Smart Cleanup**: Removes filler words, handles self-corrections, prevents hallucinations
 - **Local Processing**: No data leaves your machine
 - **System-Wide**: Works in any application where you can type
@@ -41,9 +47,9 @@ Works on Linux and macOS. The script detects your platform, downloads the right 
 
 | Platform | Default hotkey | Default mode | Access Settings |
 |----------|---------------|-------------|----------------|
-| Linux X11 | `Ctrl+Shift+Space` | Push to Talk | System tray or right-click capsule |
-| Linux Wayland | configured in DE | n/a (external shortcut) | System tray or right-click capsule |
-| macOS | `Cmd+Shift+Space` | Push to Talk | System tray or right-click capsule |
+| Linux X11 | `Ctrl+Shift+Space` | Push to Talk | Right-click the overlay capsule |
+| Linux Wayland | configured in DE | n/a (external shortcut) | Right-click the overlay capsule |
+| macOS | `Cmd+Shift+Space` | Push to Talk | Right-click the overlay capsule |
 
 The hotkey mode can be changed at any time from **Settings → Global Hotkey → Mode**.
 
@@ -66,10 +72,14 @@ The hotkey mode can be changed at any time from **Settings → Global Hotkey →
 ```bash
 git clone https://github.com/cesp99/sussurro.git
 cd sussurro
-make build        # → bin/sussurro  (overlay + settings + tray)
+make build        # → bin/sussurro  (overlay + settings)
+make app          # → bin/Sussurro.app  (macOS application bundle)
+make package      # → release/sussurro-<os>-<arch>.tar.gz  (release tarball)
 ```
 
-Requires GTK3, WebKit2GTK, and AppIndicator dev headers on Linux. See [Compilation](docs/compilation.md) for full instructions and per-distro dependency lists.
+`make app` is macOS-only and produces a double-clickable `Sussurro.app`. On Linux, use `make package` to produce a tarball with the `.desktop` entry and hicolor icon set bundled.
+
+Requires GTK3 and WebKit2GTK dev headers on Linux. See [Compilation](docs/compilation.md) for full instructions and per-distro dependency lists.
 
 ---
 
@@ -83,12 +93,7 @@ When Sussurro runs (Linux or macOS), a sleek pill-shaped capsule appears at the 
 | **Recording** | 7 waveform bars animated by your voice |
 | **Transcribing** | "transcribing" text with a shimmer effect |
 
-**Accessing Settings:**
-
-| Method | How |
-|--------|-----|
-| System tray | Click the Sussurro icon → **Open Settings** |
-| Right-click overlay | Right-click the capsule → **Open Settings** |
+**Accessing Settings:** right-click the capsule → **Open Settings**. The same context menu also has a **Quit** entry.
 
 The settings window lets you switch Whisper models, download models with a live progress bar, select the transcription language, change the global hotkey, and choose the hotkey mode. All changes take effect immediately — no restart required.
 
@@ -100,7 +105,7 @@ The settings window lets you switch Whisper models, download models with a live 
 ./sussurro --no-ui
 ```
 
-Terminal output only — no overlay, no tray. Useful for scripting or low-resource environments.
+Terminal output only — no overlay, no settings window. Useful for scripting or low-resource environments.
 
 ---
 

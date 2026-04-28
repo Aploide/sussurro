@@ -40,8 +40,10 @@ RELEASE_DIR="release/${RELEASE_NAME}"
 
 echo "Packaging sussurro-transcribe v${VERSION} for ${PLATFORM}-${ARCH}..."
 
-# Clean and create release directory
-rm -rf release
+# Clean only this transcribe artefact set so we can be invoked alongside
+# scripts/package-release.sh in the same job (CI does this) without losing
+# the main app's tarball.
+rm -rf "${RELEASE_DIR}" "release/${RELEASE_NAME}.tar.gz" "release/${RELEASE_NAME}.tar.gz.sha256"
 mkdir -p "${RELEASE_DIR}"
 
 # Check if binary exists

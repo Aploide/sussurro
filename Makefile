@@ -39,8 +39,6 @@ endif
 
 # ---- UI / overlay dependencies (Linux only) ----
 HAS_LAYER_SHELL    := $(shell pkg-config --exists gtk-layer-shell          2>/dev/null && echo yes || echo no)
-HAS_AYATANA        := $(shell pkg-config --exists ayatana-appindicator3-0.1 2>/dev/null && echo yes || echo no)
-HAS_APPINDICATOR   := $(shell pkg-config --exists appindicator3-0.1         2>/dev/null && echo yes || echo no)
 
 LAYER_CFLAGS  := $(shell pkg-config --cflags gtk+-3.0 2>/dev/null)
 LAYER_LDFLAGS := $(shell pkg-config --libs   gtk+-3.0 2>/dev/null)
@@ -72,16 +70,6 @@ COMPAT_PC_DIR :=
 PKG_CONFIG_PATH_UI := $(PKG_CONFIG_PATH)
 endif
 
-# Build tags: use legacy_appindicator when ayatana is not available but appindicator3 is
-UI_TAGS :=
-ifeq ($(UNAME_S),Linux)
-ifeq ($(HAS_AYATANA),no)
-ifeq ($(HAS_APPINDICATOR),yes)
-UI_TAGS := -tags legacy_appindicator
-endif
-endif
-endif
-
 # Base CGO link flags (whisper + llama)
 BASE_LDFLAGS := -L$(WHISPER_DIR)/build/src -L$(WHISPER_DIR)/build/ggml/src \
 	-L$(WHISPER_DIR)/build/ggml/src/ggml-cpu $(GGML_METAL_PATH) \
@@ -91,7 +79,10 @@ BASE_LDFLAGS := -L$(WHISPER_DIR)/build/src -L$(WHISPER_DIR)/build/ggml/src \
 export C_INCLUDE_PATH
 export LIBRARY_PATH
 
-.PHONY: all build compat-pc run clean deps
+VERSION := $(shell grep 'Version = ' internal/version/version.go 2>/dev/null \
+	| sed 's/.*"\(.*\)"/\1/' | tr -d '[:space:]')
+
+.PHONY: all build compat-pc run clean deps app icons package
 
 all: build build-transcribe
 
@@ -140,13 +131,10 @@ ifeq ($(UNAME_S),Darwin)
 	go build -o $(BUILD_DIR)/$(APP_NAME) ./$(CMD_DIR)
 else
 	@echo "  Layer shell  : $(HAS_LAYER_SHELL)"
-	@echo "  Ayatana tray : $(HAS_AYATANA)"
-	@echo "  AppIndicator : $(HAS_APPINDICATOR)"
-	@echo "  Build tags   : $(UI_TAGS)"
 	PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_UI)" \
 	CGO_CFLAGS="$(LAYER_CFLAGS) $(WV_CFLAGS)" \
 	CGO_LDFLAGS="$(BASE_LDFLAGS) $(LAYER_LDFLAGS) $(WV_LDFLAGS)" \
-	go build $(UI_TAGS) -o $(BUILD_DIR)/$(APP_NAME) ./$(CMD_DIR)
+	go build -o $(BUILD_DIR)/$(APP_NAME) ./$(CMD_DIR)
 endif
 
 # Build sussurro-transcribe CLI (no UI dependencies)
@@ -165,8 +153,43 @@ run: build
 	@echo "Running $(APP_NAME)..."
 	@./$(BUILD_DIR)/$(APP_NAME)
 
+# Generate platform icons (Sussurro.icns + hicolor PNG set) from
+# internal/ui/assets/Logo.jpeg. Output lands in release/icons/.
+icons:
+	@chmod +x scripts/generate-icons.sh
+	@./scripts/generate-icons.sh
+
+# Build a Sussurro.app bundle in $(BUILD_DIR)/Sussurro.app on macOS.
+# On Linux this target is a no-op (use `make package` for the
+# .desktop entry + icon set instead).
+app: build icons
+ifeq ($(UNAME_S),Darwin)
+	@echo "Bundling Sussurro.app (v$(VERSION))..."
+	@rm -rf $(BUILD_DIR)/Sussurro.app
+	@mkdir -p $(BUILD_DIR)/Sussurro.app/Contents/MacOS
+	@mkdir -p $(BUILD_DIR)/Sussurro.app/Contents/Resources
+	@cp $(BUILD_DIR)/$(APP_NAME) $(BUILD_DIR)/Sussurro.app/Contents/MacOS/$(APP_NAME)
+	@chmod +x $(BUILD_DIR)/Sussurro.app/Contents/MacOS/$(APP_NAME)
+	@cp release/icons/Sussurro.icns $(BUILD_DIR)/Sussurro.app/Contents/Resources/Sussurro.icns
+	@sed "s/__VERSION__/$(VERSION)/g" release-templates/Info.plist \
+		> $(BUILD_DIR)/Sussurro.app/Contents/Info.plist
+	@printf "APPL????" > $(BUILD_DIR)/Sussurro.app/Contents/PkgInfo
+	@touch $(BUILD_DIR)/Sussurro.app
+	@echo "  ✓ $(BUILD_DIR)/Sussurro.app"
+else
+	@echo "make app: Sussurro.app is macOS-only. Use 'make package' on Linux."
+endif
+
+# Produce a release tarball (sussurro-<os>-<arch>.tar.gz) in release/.
+# On macOS the tarball includes Sussurro.app; on Linux it includes the
+# .desktop entry and hicolor icon set.
+package: build
+	@chmod +x scripts/package-release.sh
+	@./scripts/package-release.sh
+
 clean:
 	@echo "Cleaning..."
 	@rm -rf $(BUILD_DIR)
 	@rm -rf third_party
 	@rm -rf .build-compat
+	@rm -rf release/icons release/sussurro-*

@@ -2,6 +2,25 @@
 
 All notable changes to Sussurro will be documented in this file.
 
+## [2.3] - 2026-04-27
+
+### Added
+- **Native application install**: `scripts/install.sh` now installs Sussurro as a real OS-level application instead of a bare CLI binary. On macOS it drops `Sussurro.app` into `/Applications` (or `~/Applications` as a fallback) and symlinks `sussurro` onto `PATH`; on Linux it installs the binary plus a `.desktop` entry and the hicolor icon set so Sussurro appears in the application menu. The installer also pre-downloads the AI models so first launch from Launchpad / the app menu works without a terminal.
+- **`make app` target** (`Makefile`): builds `bin/Sussurro.app` on macOS (Info.plist with `LSUIElement=true`, `Sussurro.icns` icon, microphone + accessibility usage strings, version pulled from `internal/version/version.go`).
+- **`make package` target** (`Makefile`): wraps `scripts/package-release.sh`, which now produces a release tarball that contains `Sussurro.app` on macOS and a `desktop/sussurro.desktop` + `desktop/icons-hicolor/` tree on Linux.
+- **`make icons` target / `scripts/generate-icons.sh`**: derives `Sussurro.icns` and the full hicolor PNG set (16/24/32/48/64/128/256/512) from `internal/ui/assets/Logo.jpeg`. Uses `sips` on macOS, falls back to ImageMagick on Linux.
+- **`release-templates/Info.plist`** and **`release-templates/sussurro.desktop`**: source-controlled templates used by the packaging scripts; `__VERSION__` in the plist is substituted from `internal/version/version.go` at package time.
+- **`.github/workflows/release.yml`**: version-bump-driven release workflow. A push to the default branch that modifies `internal/version/version.go` triggers a matrix build on `macos-15` (arm64), `macos-15-intel` (amd64), `ubuntu-22.04` (linux/amd64), and `ubuntu-22.04-arm` (linux/arm64); each runner builds and packages both `sussurro` and `sussurro-transcribe`; a final job creates the `V<version>` tag from the workflow's commit SHA and uploads the tarballs (+ `.sha256`) to a GitHub Release whose body is auto-extracted from this CHANGELOG. The workflow short-circuits if a Release for the current version already exists (no-op touch of `version.go` is harmless). A `workflow_dispatch` entry point with a `force` toggle is also exposed so a release can be re-triggered manually after a flaky build.
+
+### Changed
+- **`setup.EnsureSetup()`** (`internal/setup/setup.go`): all three interactive `os.Stdin` prompts (old-model upgrade, Whisper variant choice, model download confirmation) now skip safely when stdin is not a TTY, preventing the app from hanging when launched from Finder / Launchpad / a `.desktop` entry. The download prompt returns an explicit "models missing, re-run installer" error in that case so the GUI launch surfaces a clean error instead of stalling.
+- **`scripts/package-transcribe.sh`**: now only deletes its own release directory and tarball, instead of `rm -rf release`. This lets it run in the same job after `scripts/package-release.sh` (used by the new release workflow) without nuking the main app's tarball.
+
+### Removed
+- **System tray icon**: Sussurro no longer ships a tray icon. The `getlantern/systray` and `godbus/dbus` dependencies are gone from `go.mod`/`go.sum`; `internal/ui/tray.go`, `internal/ui/assets/tray.png`, and `internal/ui/assets/tray_rec.png` are deleted; `internal/ui/app.go` no longer calls `runTray()` or `updateTrayIcon()`. **Right-click the overlay capsule** to open Settings or quit — the same context menu as before, just now the only entry point. The Linux build no longer needs any AppIndicator (Ayatana or legacy) headers, which removes the previous Arch / Ubuntu SONAME mismatch entirely: a single `sussurro-linux-<arch>.tar.gz` works on every supported distro.
+- **`docs/architecture.md`**: dropped the "System Tray" subsection; the new section is "Overlay Context Menu".
+- **`Makefile`**: removed `HAS_AYATANA` / `HAS_APPINDICATOR` pkg-config probes and the `legacy_appindicator` build tag plumbing — neither is needed without the tray.
+
 ## [2.2] - 2026-04-07
 
 ### Added

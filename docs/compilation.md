@@ -39,13 +39,13 @@ sudo dnf install gcc gcc-c++ cmake git golang
 
 ## Build
 
-Requires GTK3, WebKit2GTK, and AppIndicator development headers.
+Requires GTK3 and WebKit2GTK development headers.
 
 ### Step 1: Install build dependencies
 
 #### Arch Linux / Manjaro
 ```bash
-sudo pacman -S gtk3 webkit2gtk-4.1 libappindicator-gtk3 base-devel cmake git go
+sudo pacman -S gtk3 webkit2gtk-4.1 base-devel cmake git go
 
 # Optional: adds wlr-layer-shell overlay on Wayland
 sudo pacman -S gtk-layer-shell
@@ -53,7 +53,7 @@ sudo pacman -S gtk-layer-shell
 
 #### Ubuntu / Debian (22.04+)
 ```bash
-sudo apt install libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+sudo apt install libgtk-3-dev libwebkit2gtk-4.1-dev \
                  build-essential cmake git golang-go
 
 # Optional: Wayland layer-shell overlay
@@ -62,7 +62,7 @@ sudo apt install libgtk-layer-shell-dev
 
 #### Fedora (38+)
 ```bash
-sudo dnf install gtk3-devel webkit2gtk4.1-devel libappindicator-gtk3-devel \
+sudo dnf install gtk3-devel webkit2gtk4.1-devel \
                  gcc gcc-c++ cmake git golang
 ```
 
@@ -75,12 +75,12 @@ make build   # produces bin/sussurro
 
 ### Step 3: Run
 
-> **Note:** Always run Sussurro from a terminal. Launching via a desktop icon or application menu is not yet supported — the overlay and tray will not work correctly outside a terminal session.
-
 ```bash
-./bin/sussurro          # UI mode (overlay + tray + settings)
+./bin/sussurro          # UI mode (overlay + settings)
 ./bin/sussurro --no-ui  # headless CLI mode
 ```
+
+You can also launch the binary from the OS-level launcher built by `make app` (macOS → `Sussurro.app`) or `make package` (Linux → `.desktop` entry), without a terminal.
 
 ---
 
@@ -93,17 +93,6 @@ The build target handles several platform quirks automatically — you do not ne
 `webview_go` (the settings window library) hardcodes `pkg-config: webkit2gtk-4.0` in its CGO directives. Arch Linux ships `webkit2gtk-4.1` only.
 
 `make build` auto-creates `.build-compat/pkgconfig/webkit2gtk-4.0.pc` — a shim `.pc` file that redirects pkg-config queries for `webkit2gtk-4.0` to the installed `webkit2gtk-4.1`. It then sets `PKG_CONFIG_PATH` to include this directory for the duration of the build. No manual steps needed.
-
-### AppIndicator variant detection
-
-The system tray library (`getlantern/systray`) supports two AppIndicator backends:
-
-| Build tag | Library used | Package |
-|-----------|-------------|---------|
-| *(default)* | `ayatana-appindicator3-0.1` | Ubuntu/Fedora/openSUSE |
-| `legacy_appindicator` | `appindicator3-0.1` | Arch Linux / Manjaro |
-
-`make build` probes `pkg-config` for both libraries and automatically adds `-tags legacy_appindicator` when only the Arch variant is available.
 
 ### Layer-shell detection
 
@@ -132,7 +121,7 @@ You only need to run `make deps` once (or after updating the submodules).
 
 On first run Sussurro creates `~/.sussurro/config.yaml` and prompts you to download the required AI models into `~/.sussurro/models/`.
 
-The overlay capsule, settings window, system tray, and right-click context menu work on both **Linux** and **macOS** builds.
+The overlay capsule, settings window, and right-click context menu work on both **Linux** and **macOS** builds.
 
 You can also place model files manually and update the paths in `~/.sussurro/config.yaml`.
 
@@ -142,11 +131,14 @@ You can also place model files manually and update the paths in `~/.sussurro/con
 
 | Target | Description |
 |--------|-------------|
-| `make deps` | Build whisper.cpp and llama.cpp |
-| `make build` | Build binary with overlay + settings + tray |
+| `make deps` | Build whisper.cpp and llama.cpp into `third_party/` |
+| `make build` | Build `bin/sussurro` (overlay + settings) |
 | `make build-transcribe` | Build `bin/sussurro-transcribe` (no UI dependencies) |
+| `make app` | macOS-only: build `bin/Sussurro.app` (overlay + settings, with Info.plist + icon) |
+| `make icons` | Regenerate `release/icons/Sussurro.icns` and the hicolor PNG set from `internal/ui/assets/Logo.jpeg` |
+| `make package` | Produce `release/sussurro-<os>-<arch>.tar.gz` (with `Sussurro.app` on macOS, `.desktop` + icons on Linux) |
 | `make run` | Build and run |
-| `make clean` | Remove `bin/` |
+| `make clean` | Remove `bin/`, `third_party/`, and `release/` build artefacts |
 
 ---
 
@@ -154,9 +146,6 @@ You can also place model files manually and update the paths in `~/.sussurro/con
 
 ### `pkg-config: webkit2gtk-4.0 not found`
 You are on Arch and the compat shim wasn't created. Run `make build` (not `go build` directly) — it creates the shim automatically via the `compat-pc` target.
-
-### `appindicator3-0.1 not found`
-The wrong AppIndicator library is linked. Use `make build` which auto-detects the correct library.
 
 ### `gtk-layer-shell: not found` (warning, not error)
 The overlay will use a regular floating window. Install `gtk-layer-shell` (Arch: `sudo pacman -S gtk-layer-shell`, Ubuntu: `sudo apt install libgtk-layer-shell-dev`) and rebuild for true Wayland overlay.

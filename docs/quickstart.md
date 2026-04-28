@@ -13,30 +13,30 @@ echo $XDG_SESSION_TYPE   # prints "wayland" or "x11"
 ### Wayland users
 ```bash
 # Arch/Manjaro
-sudo pacman -S gtk3 webkit2gtk-4.1 libappindicator-gtk3 wl-clipboard gtk-layer-shell
+sudo pacman -S gtk3 webkit2gtk-4.1 wl-clipboard gtk-layer-shell
 
 # Ubuntu/Debian (22.04+)
-sudo apt install libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+sudo apt install libgtk-3-dev libwebkit2gtk-4.1-dev \
                  wl-clipboard libgtk-layer-shell-dev
 
 # Fedora
-sudo dnf install gtk3 webkit2gtk4.1 libappindicator-gtk3 wl-clipboard
+sudo dnf install gtk3 webkit2gtk4.1 wl-clipboard
 ```
 
 ### X11 users
 ```bash
 # Arch/Manjaro
-sudo pacman -S gtk3 webkit2gtk-4.1 libappindicator-gtk3
+sudo pacman -S gtk3 webkit2gtk-4.1
 
 # Ubuntu/Debian
-sudo apt install libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev
+sudo apt install libgtk-3-dev libwebkit2gtk-4.1-dev
 
 # Fedora
-sudo dnf install gtk3 webkit2gtk4.1 libappindicator-gtk3
+sudo dnf install gtk3 webkit2gtk4.1
 ```
 
 ### macOS
-No extra dependencies required. The overlay capsule, settings window, system tray, and right-click context menu all work natively.
+No extra dependencies required. The overlay capsule, settings window, and right-click context menu all work natively.
 
 > **Accessibility permission:** On first run macOS will ask you to grant Accessibility access (System Settings → Privacy & Security → Accessibility). This is required for the global hotkey (CGEventTap).
 
@@ -54,8 +54,6 @@ xattr -d com.apple.quarantine sussurro 2>/dev/null || true
 ```
 
 ## Step 4: Run for the First Time
-
-> **Important:** At this stage Sussurro must be launched from a terminal. Double-clicking the binary or using a `.desktop` shortcut is not yet supported — the overlay and tray icon will not appear correctly outside a terminal session.
 
 ```bash
 ./sussurro
@@ -97,9 +95,7 @@ See [wayland.md](wayland.md) for config file snippets.
 
 ## Step 7: Explore Settings
 
-Open the Settings window:
-- **System tray:** click the Sussurro pill icon → **Open Settings**
-- **Right-click the capsule** → **Open Settings**
+Open the Settings window: **right-click the overlay capsule** → **Open Settings**.
 
 From Settings you can:
 - Switch or download Whisper models with a live progress bar
@@ -114,7 +110,7 @@ Check that GTK3 is installed (`pkg-config --exists gtk+-3.0 && echo ok`).
 On Wayland without `gtk-layer-shell`, the overlay appears as a floating window — check your compositor's window rules if it hides under other windows.
 
 ### Settings window doesn't open
-Right-click the capsule at the bottom of your screen and choose **Open Settings**. If the tray icon is missing (some DEs need `snixembed` or a compatible bar), the right-click menu is the fallback.
+Right-click the capsule at the bottom of your screen and choose **Open Settings** — that's the only way to reach Settings or quit the app.
 
 ### "clipboard failed" error
 Wayland: install `wl-clipboard` (see Step 2).
@@ -144,4 +140,4 @@ echo toggle | nc -U /run/user/$(id -u)/sussurro.sock
 **Linux Wayland:**
 1. Launch from a terminal, then press hotkey once to start recording → speak → press again to stop → text appears
 
-To stop manually: right-click the capsule → **Quit**, or click Quit in the tray menu.
+To stop manually: right-click the capsule → **Quit**.

@@ -2,8 +2,22 @@
 # Package Sussurro for release.
 # All three arguments are optional — they are auto-detected when omitted.
 # Usage: ./scripts/package-release.sh [version] [platform] [arch]
-# Example (explicit): ./scripts/package-release.sh 1.7 linux amd64
+# Example (explicit): ./scripts/package-release.sh 2.3 linux amd64
 # Example (auto):     ./scripts/package-release.sh
+#
+# Output (release/<release-name>/):
+#   macOS:
+#     sussurro                – CLI binary (also placed inside the .app)
+#     Sussurro.app/           – proper application bundle
+#     config.example.yaml
+#     INSTALL.txt
+#   Linux:
+#     sussurro                – CLI binary
+#     trigger.sh              – Wayland helper
+#     desktop/sussurro.desktop
+#     desktop/icons/hicolor/<size>/apps/sussurro.png  – hicolor icon set
+#     config.example.yaml
+#     INSTALL.txt
 
 set -e
 
@@ -40,8 +54,8 @@ RELEASE_DIR="release/${RELEASE_NAME}"
 
 echo "Packaging Sussurro v${VERSION} for ${PLATFORM}-${ARCH}..."
 
-# Clean and create release directory
-rm -rf release
+# Clean and create release directory (preserve any sussurro-transcribe artefacts)
+rm -rf "${RELEASE_DIR}" "release/${RELEASE_NAME}.tar.gz" "release/${RELEASE_NAME}.tar.gz.sha256"
 mkdir -p "${RELEASE_DIR}"
 
 # Check if binary exists
@@ -50,21 +64,74 @@ if [ ! -f "bin/sussurro" ]; then
     exit 1
 fi
 
-# ── Files ──────────────────────────────────────────────────────────────────────
+# ── Generate icons (idempotent) ────────────────────────────────────────────────
+
+# scripts/generate-icons.sh writes to release/icons/.  We always regenerate so
+# release artefacts stay in sync with the latest internal/ui/assets/Logo.jpeg.
+echo "Generating icon set..."
+./scripts/generate-icons.sh
+
+# ── Common files ───────────────────────────────────────────────────────────────
 
 echo "Copying binary..."
 cp bin/sussurro "${RELEASE_DIR}/sussurro"
 chmod +x "${RELEASE_DIR}/sussurro"
 
-# trigger.sh is a Wayland/X11 helper — only relevant on Linux
+echo "Copying example config..."
+cp configs/default.yaml "${RELEASE_DIR}/config.example.yaml"
+
+# ── macOS: build Sussurro.app bundle ───────────────────────────────────────────
+
+if [[ "${PLATFORM}" == "macos" ]]; then
+    APP_BUNDLE="${RELEASE_DIR}/Sussurro.app"
+    echo "Building Sussurro.app bundle..."
+    mkdir -p "${APP_BUNDLE}/Contents/MacOS"
+    mkdir -p "${APP_BUNDLE}/Contents/Resources"
+
+    # Binary inside the bundle
+    cp bin/sussurro "${APP_BUNDLE}/Contents/MacOS/sussurro"
+    chmod +x "${APP_BUNDLE}/Contents/MacOS/sussurro"
+
+    # Icon
+    if [ -f "release/icons/Sussurro.icns" ]; then
+        cp "release/icons/Sussurro.icns" "${APP_BUNDLE}/Contents/Resources/Sussurro.icns"
+    else
+        echo "  Warning: release/icons/Sussurro.icns missing — bundle will have no icon."
+    fi
+
+    # Info.plist (substitute version placeholder)
+    sed "s/__VERSION__/${VERSION}/g" release-templates/Info.plist \
+        > "${APP_BUNDLE}/Contents/Info.plist"
+
+    # PkgInfo (legacy but expected by some macOS APIs)
+    printf "APPL????" > "${APP_BUNDLE}/Contents/PkgInfo"
+
+    # Touch the bundle so Finder picks up the icon refresh
+    touch "${APP_BUNDLE}"
+
+    echo "  ✓ ${APP_BUNDLE}"
+fi
+
+# ── Linux: desktop entry + hicolor icons + trigger.sh ──────────────────────────
+
 if [[ "${PLATFORM}" == "linux" ]]; then
     echo "Copying trigger.sh..."
     cp scripts/trigger.sh "${RELEASE_DIR}/trigger.sh"
     chmod +x "${RELEASE_DIR}/trigger.sh"
-fi
 
-echo "Copying example config..."
-cp configs/default.yaml "${RELEASE_DIR}/config.example.yaml"
+    DESKTOP_DIR="${RELEASE_DIR}/desktop"
+    mkdir -p "${DESKTOP_DIR}"
+
+    echo "Copying .desktop entry..."
+    cp release-templates/sussurro.desktop "${DESKTOP_DIR}/sussurro.desktop"
+
+    if [ -d "release/icons/hicolor" ]; then
+        echo "Copying hicolor icon set..."
+        cp -R release/icons/hicolor "${DESKTOP_DIR}/icons-hicolor"
+    else
+        echo "  Warning: release/icons/hicolor missing — install will fall back to no icon."
+    fi
+fi
 
 # ── INSTALL.txt ────────────────────────────────────────────────────────────────
 
@@ -72,38 +139,55 @@ cp configs/default.yaml "${RELEASE_DIR}/config.example.yaml"
     echo "Sussurro v${VERSION} Installation"
     echo "================================"
     echo ""
-    echo "Quick Start:"
     if [[ "${PLATFORM}" == "macos" ]]; then
-        echo "1. Make the binary executable:  chmod +x sussurro"
-        echo "2. Remove macOS quarantine:     xattr -d com.apple.quarantine sussurro"
-        echo "3. Run:                         ./sussurro"
+        echo "Recommended:"
+        echo "  Drag Sussurro.app into /Applications, then launch it from"
+        echo "  Launchpad or Spotlight. The first launch will guide you"
+        echo "  through downloading the AI models."
+        echo ""
+        echo "  If macOS blocks the app on first launch, run:"
+        echo "    xattr -dr com.apple.quarantine /Applications/Sussurro.app"
+        echo ""
+        echo "CLI users (optional):"
+        echo "  The same binary lives at:"
+        echo "    Sussurro.app/Contents/MacOS/sussurro"
+        echo "  Symlink it onto your PATH if you want the 'sussurro' command,"
+        echo "  e.g.:"
+        echo "    ln -s /Applications/Sussurro.app/Contents/MacOS/sussurro \\"
+        echo "        /usr/local/bin/sussurro"
+        echo ""
+        echo "  Or use the standalone 'sussurro' binary in this archive."
     else
-        echo "1. Make the binary executable:  chmod +x sussurro trigger.sh"
-        echo "2. Run:                         ./sussurro"
-    fi
-    echo "   Follow the prompts to download AI models."
-    echo ""
-    if [[ "${PLATFORM}" == "linux" ]]; then
+        echo "Quick start:"
+        echo "  1. chmod +x sussurro trigger.sh"
+        echo "  2. Install the binary: sudo cp sussurro /usr/local/bin/"
+        echo "  3. Install the .desktop entry & icons:"
+        echo "       sudo cp desktop/sussurro.desktop /usr/share/applications/"
+        echo "       sudo cp -R desktop/icons-hicolor/* /usr/share/icons/hicolor/"
+        echo "       sudo update-desktop-database"
+        echo "       sudo gtk-update-icon-cache /usr/share/icons/hicolor"
+        echo "  4. Launch Sussurro from your application menu."
+        echo ""
+        echo "Or use the official installer:"
+        echo "  curl -fsSL https://raw.githubusercontent.com/cesp99/sussurro/master/scripts/install.sh | bash"
+        echo ""
         echo "For Wayland Users:"
         echo "-----------------"
         echo "If you're on Wayland (check with: echo \$XDG_SESSION_TYPE):"
         echo ""
-        echo "1. Make sure you have wl-clipboard installed:"
+        echo "1. Install wl-clipboard:"
         echo "   Arch:   sudo pacman -S wl-clipboard"
         echo "   Ubuntu: sudo apt install wl-clipboard"
         echo ""
-        echo "2. Set up a keyboard shortcut in your desktop environment:"
-        echo "   - Open keyboard settings"
-        echo "   - Add custom shortcut: Ctrl+Shift+Space"
-        echo "   - Command: /full/path/to/trigger.sh"
-        echo "   - See full guide: https://github.com/cesp99/sussurro/blob/master/docs/wayland.md"
+        echo "2. Bind a keyboard shortcut to /full/path/to/trigger.sh"
+        echo "   See: https://github.com/cesp99/sussurro/blob/master/docs/wayland.md"
         echo ""
         echo "For X11 Users:"
         echo "-------------"
-        echo "Just run ./sussurro — hotkeys work automatically!"
+        echo "Just run sussurro — hotkeys work automatically!"
         echo "Hold Ctrl+Shift+Space to talk, release to transcribe."
-        echo ""
     fi
+    echo ""
     echo "Documentation:"
     echo "-------------"
     echo "Full docs:       https://github.com/cesp99/sussurro"

@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleDisplayName</key>
+    <string>Sussurro</string>
+    <key>CFBundleExecutable</key>
+    <string>sussurro</string>
+    <key>CFBundleIconFile</key>
+    <string>Sussurro</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.cesp99.sussurro</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>Sussurro</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>__VERSION__</string>
+    <key>CFBundleVersion</key>
+    <string>__VERSION__</string>
+    <key>CFBundleSupportedPlatforms</key>
+    <array>
+        <string>MacOSX</string>
+    </array>
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
+    <key>NSHumanReadableCopyright</key>
+    <string>Sussurro is free software released under GPL-3.0.</string>
+
+    <!-- Tray-only menu-bar utility: no Dock icon, doesn't activate on launch.
+         The overlay capsule and the tray icon are this app's whole UI. -->
+    <key>LSUIElement</key>
+    <true/>
+
+    <key>NSHighResolutionCapable</key>
+    <true/>
+
+    <!-- Required usage strings for system permissions Sussurro depends on.
+         Without these, macOS silently blocks the prompt and the feature fails. -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Sussurro records your voice locally and transcribes it on this device. No audio is sent off your machine.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Sussurro uses Accessibility events to type the transcribed text into the focused application.</string>
+</dict>
+</plist>

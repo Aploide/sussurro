@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Sussurro
+GenericName=Voice to Text
+Comment=Local, private speech-to-text with smart cleanup
+Exec=sussurro
+Icon=sussurro
+Terminal=false
+Categories=Utility;AudioVideo;Accessibility;
+Keywords=voice;dictation;transcription;whisper;speech;
+StartupNotify=false
+StartupWMClass=sussurro

@@ -11,6 +11,18 @@ import (
 	"sync"
 )
 
+// stdinIsInteractive reports whether os.Stdin is a terminal.
+// When Sussurro is launched from Finder/Launchpad (or any GUI app launcher),
+// stdin is not a TTY and any blocking ReadString call would hang the app
+// forever — so we must avoid prompting in that case.
+func stdinIsInteractive() bool {
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return (fi.Mode() & os.ModeCharDevice) != 0
+}
+
 // ProgressCallback is called periodically during model downloads.
 // pct is 0–100; downloaded and total are byte counts.
 type ProgressCallback func(name string, pct float64, downloaded, total int64)
@@ -185,6 +197,11 @@ func EnsureSetup() error {
 				fmt.Printf("New model size: %s\n", sizeLLM)
 				fmt.Print("\nWould you like to remove the old model and download the new one? (Y/n): ")
 
+				if !stdinIsInteractive() {
+					fmt.Println("\n  (no terminal — leaving the old model in place; run `sussurro` from a terminal to update)")
+					break
+				}
+
 				reader := bufio.NewReader(os.Stdin)
 				response, _ := reader.ReadString('\n')
 				response = strings.TrimSpace(strings.ToLower(response))
@@ -236,7 +253,7 @@ func EnsureSetup() error {
 		chosenASRName := "Whisper Small"
 		chosenASRSize := sizeASRSmall
 
-		if missingASR {
+		if missingASR && stdinIsInteractive() {
 			fmt.Println("\nWhich Whisper model would you like to use?")
 			fmt.Printf("  [1] Whisper Small         (%s) - faster, lower memory usage\n", sizeASRSmall)
 			fmt.Printf("  [2] Whisper Large v3 Turbo (%s) - slower, higher accuracy\n", sizeASRLarge)
@@ -283,6 +300,17 @@ func EnsureSetup() error {
 			totalSize = fmt.Sprintf(" (Total: %s)", chosenASRSize)
 		} else {
 			totalSize = fmt.Sprintf(" (Total: %s)", sizeLLM)
+		}
+
+		// Without an interactive terminal we cannot block on a 1.7GB+ download
+		// (and the user has no way to see / cancel it). Bail out cleanly so the
+		// caller surfaces a proper error message — the install script is the
+		// supported way to fetch models for GUI-launched installs.
+		if !stdinIsInteractive() {
+			fmt.Println("\nModels are missing and no terminal is attached.")
+			fmt.Println("Re-run the installer to download them, or launch `sussurro` from a terminal:")
+			fmt.Println("  curl -fsSL https://raw.githubusercontent.com/cesp99/sussurro/master/scripts/install.sh | bash")
+			return fmt.Errorf("required AI models are missing in %s", modelsDir)
 		}
 
 		fmt.Printf("\nWould you like to download them now?%s (Y/n): ", totalSize)

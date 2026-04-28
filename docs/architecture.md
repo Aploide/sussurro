@@ -2,7 +2,7 @@
 
 Sussurro is designed as a modular pipeline that processes audio input into refined text output. This document details the internal components and data flow.
 
-The overlay UI, settings window, system tray, and global hotkey all work on **Linux and macOS**. The headless `--no-ui` mode is available on both platforms. The pipeline and AI engines are fully cross-platform.
+The overlay UI, settings window, and global hotkey all work on **Linux and macOS**. The headless `--no-ui` mode is available on both platforms. The pipeline and AI engines are fully cross-platform.
 
 ## High-Level Pipeline
 
@@ -99,10 +99,9 @@ The UI layer runs alongside the pipeline and provides visual feedback without bl
 - **Model switch UX**: selecting a different Whisper model writes the new path to `~/.sussurro/config.yaml` and updates `mgr.cfg` in memory (so the active badge reflects the new selection immediately). A persistent blue banner prompts the user to restart to load the new model; the running pipeline is not interrupted.
 - On macOS, `NSWindowDelegate` intercepts the close button to hide (not destroy) the window, preserving the WebKit backing store across open/close cycles.
 
-### System Tray (`internal/ui/app.go`)
-- Powered by **`github.com/getlantern/systray`**.
-- Arch Linux uses the `legacy_appindicator` build tag (`appindicator3-0.1`); Ubuntu/Fedora use the default Ayatana backend. macOS uses the native `NSStatusItem`.
-- Menu: **Open Settings** / **Quit**.
+### Overlay Context Menu (`internal/ui/app.go`)
+- The overlay capsule has a right-click context menu — the only runtime UI affordance for opening Settings or quitting the app since Sussurro no longer ships a system tray icon.
+- Items: **Open Settings** / **Quit**.
 
 ### Process Exit
 - **Linux** (`quit_linux.go`): calls `os.Exit(0)` — safe because there are no Metal/CoreGraphics global destructors.

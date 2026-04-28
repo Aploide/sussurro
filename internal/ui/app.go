@@ -55,19 +55,17 @@ func (m *Manager) Run() {
 	// 2. Create the webview settings window (hidden).
 	m.settings = newSettingsWindow(m)
 
-	// 3. Right-click context menu on the overlay (fallback when tray isn't visible).
+	// 3. Right-click context menu on the overlay — the only way to open
+	//    Settings or Quit at runtime, since we no longer ship a tray icon.
 	installOverlayContextMenu(m.overlay,
 		func() { m.settings.Show() },
 		func() { m.Quit() },
 	)
 
-	// 4. System tray (runs its own goroutine internally on Linux via DBus).
-	go m.runTray()
-
-	// 5. Goroutine that forwards state/RMS from pipeline to the overlay.
+	// 4. Goroutine that forwards state/RMS from pipeline to the overlay.
 	go m.processUpdates()
 
-	// 6. Block in the webview / GTK / NSApp main loop.
+	// 5. Block in the webview / GTK / NSApp main loop.
 	m.settings.Run()
 }
 
@@ -111,7 +109,6 @@ func (m *Manager) processUpdates() {
 		select {
 		case state := <-m.stateChangeCh:
 			m.overlay.SetState(state)
-			m.updateTrayIcon(state)
 
 		case rms := <-m.rmsCh:
 			m.overlay.PushRMS(rms)

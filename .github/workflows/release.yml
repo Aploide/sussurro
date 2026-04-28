@@ -1,0 +1,272 @@
+name: Release
+
+# Triggered automatically when `internal/version/version.go` changes on the
+# default branch (i.e. you bumped the version). The workflow reads the new
+# version, skips the run if a Release for that version already exists, and
+# otherwise builds Sussurro + sussurro-transcribe on macOS arm64, macOS
+# amd64, Linux amd64 (X11/Wayland), and Linux arm64 (X11/Wayland) and
+# uploads all eight tarballs (+ checksums) to a GitHub Release tagged
+# `V<version>` from the workflow's commit SHA.
+#
+# A `workflow_dispatch` entry point is also exposed so the same release can
+# be re-triggered manually (handy when a build flaked and you don't want to
+# bump the version again).
+
+on:
+  push:
+    branches:
+      - master
+      - main
+    paths:
+      - 'internal/version/version.go'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: >
+          If 'true', release even when a Release for the version in
+          internal/version/version.go already exists (overwriting its assets).
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
+permissions:
+  contents: write
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Resolve the version string from internal/version/version.go and decide
+  #    whether the run should proceed (skip the no-op case where version.go
+  #    was touched without an actual bump, i.e. a Release already exists).
+  # ---------------------------------------------------------------------------
+  resolve:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.set.outputs.version }}
+      tag: ${{ steps.set.outputs.tag }}
+      skip: ${{ steps.set.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version + check for existing Release
+        id: set
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE: ${{ github.event.inputs.force || 'false' }}
+        run: |
+          set -euo pipefail
+
+          # Source of truth: internal/version/version.go.
+          VERSION=$(grep 'Version = ' internal/version/version.go \
+                    | sed 's/.*"\(.*\)"/\1/' | tr -d '[:space:]')
+
+          if [ -z "$VERSION" ]; then
+            echo "::error::Could not parse version from internal/version/version.go"
+            exit 1
+          fi
+
+          TAG="V${VERSION}"
+          echo "Resolved: VERSION=${VERSION}  TAG=${TAG}"
+
+          # If a Release already exists for this tag, skip — unless we were
+          # explicitly told to force re-release via workflow_dispatch.
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            if [ "$FORCE" = "true" ]; then
+              echo "::warning::Release ${TAG} already exists. Force-rerelease requested — proceeding."
+              SKIP="false"
+            else
+              echo "::notice::Release ${TAG} already exists. Skipping. (Bump internal/version/version.go to release a new version, or re-run via workflow_dispatch with force=true.)"
+              SKIP="true"
+            fi
+          else
+            SKIP="false"
+          fi
+
+          {
+            echo "version=${VERSION}"
+            echo "tag=${TAG}"
+            echo "skip=${SKIP}"
+          } >> "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------------------
+  # 2. Build matrix — one job per platform/arch.
+  #
+  #    Each runner natively builds the CGo deps (whisper.cpp + go-llama.cpp)
+  #    and the Go binaries, then packages both Sussurro and
+  #    sussurro-transcribe with platform-appropriate extras (Sussurro.app on
+  #    macOS, .desktop entry + hicolor icon set on Linux).
+  # ---------------------------------------------------------------------------
+  build:
+    name: Build ${{ matrix.platform }}-${{ matrix.arch }}
+    needs: resolve
+    if: needs.resolve.outputs.skip != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS arm64 (Apple Silicon)
+          - os: macos-15
+            platform: macos
+            arch: arm64
+          # macOS amd64 (Intel) — `macos-15-intel` is the current Intel runner;
+          # `macos-13` was retired in 2025.
+          - os: macos-15-intel
+            platform: macos
+            arch: amd64
+          # Linux amd64 — works for both X11 and Wayland sessions at runtime.
+          # Same binary works on Ubuntu / Debian / Fedora / openSUSE / Arch
+          # since we no longer link against AppIndicator (the tray was removed).
+          - os: ubuntu-22.04
+            platform: linux
+            arch: amd64
+          # Linux arm64 — partner ARM runner image
+          - os: ubuntu-22.04-arm
+            platform: linux
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      # ── Linux: install build deps. The Makefile pkg-configs GTK + WebKit
+      #    + (optional) gtk-layer-shell. No AppIndicator package is needed
+      #    since the tray was removed.
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            git \
+            pkg-config \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libgtk-layer-shell-dev
+
+      # ── Build the main Sussurro binary (overlay + settings webview).
+      #    On macOS the Makefile links Cocoa / QuartzCore / CoreVideo /
+      #    Foundation; on Linux it pkg-configs GTK + WebKit.
+      - name: Build sussurro
+        run: make build
+
+      # ── Build the sussurro-transcribe CLI (no GUI deps).
+      - name: Build sussurro-transcribe
+        run: make build-transcribe
+
+      # ── Package main app — produces:
+      #      release/sussurro-<platform>-<arch>.tar.gz
+      #      release/sussurro-<platform>-<arch>.tar.gz.sha256
+      #    plus, on macOS, an Sussurro.app bundle inside the tarball, and on
+      #    Linux a desktop/sussurro.desktop + hicolor icons tree.
+      - name: Package sussurro
+        run: ./scripts/package-release.sh "${{ needs.resolve.outputs.version }}"
+
+      # ── Package transcribe CLI — produces:
+      #      release/sussurro-transcribe-<platform>-<arch>.tar.gz
+      #      release/sussurro-transcribe-<platform>-<arch>.tar.gz.sha256
+      - name: Package sussurro-transcribe
+        run: ./scripts/package-transcribe.sh "${{ needs.resolve.outputs.version }}"
+
+      - name: List release artefacts
+        run: ls -lh release/
+
+      - name: Upload artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sussurro-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            release/sussurro-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz
+            release/sussurro-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz.sha256
+            release/sussurro-transcribe-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz
+            release/sussurro-transcribe-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # 3. Collect all artefacts from the matrix and publish the GitHub Release.
+  # ---------------------------------------------------------------------------
+  release:
+    name: Publish GitHub Release
+    needs: [resolve, build]
+    if: needs.resolve.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download matrix artefacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artefacts
+          merge-multiple: true
+
+      - name: List downloaded artefacts
+        run: ls -lh artefacts/
+
+      # Pull the changelog section for this version out of CHANGELOG.md so the
+      # GitHub Release body matches the maintained changelog. Falls back to a
+      # generic message if the section is missing.
+      - name: Extract changelog section
+        id: changelog
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.resolve.outputs.version }}"
+          BODY_FILE="$(mktemp)"
+
+          # awk: print lines between `## [VERSION]` (inclusive of the version
+          # heading's blank-line follower) and the next `## [` heading.
+          awk -v ver="$VERSION" '
+            $0 ~ "^## \\[" ver "\\]" {flag=1; next}
+            flag && $0 ~ "^## \\[" {flag=0}
+            flag {print}
+          ' CHANGELOG.md > "$BODY_FILE"
+
+          if [ ! -s "$BODY_FILE" ]; then
+            {
+              echo "Sussurro ${VERSION} release."
+              echo
+              echo "See [CHANGELOG.md](CHANGELOG.md) for full release notes."
+            } > "$BODY_FILE"
+          fi
+
+          {
+            echo "body<<__SUSSURRO_BODY_EOF__"
+            cat "$BODY_FILE"
+            echo "__SUSSURRO_BODY_EOF__"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.resolve.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: Sussurro ${{ needs.resolve.outputs.version }}
+          body: ${{ steps.changelog.outputs.body }}
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+          files: |
+            artefacts/sussurro-macos-arm64.tar.gz
+            artefacts/sussurro-macos-arm64.tar.gz.sha256
+            artefacts/sussurro-macos-amd64.tar.gz
+            artefacts/sussurro-macos-amd64.tar.gz.sha256
+            artefacts/sussurro-linux-amd64.tar.gz
+            artefacts/sussurro-linux-amd64.tar.gz.sha256
+            artefacts/sussurro-linux-arm64.tar.gz
+            artefacts/sussurro-linux-arm64.tar.gz.sha256
+            artefacts/sussurro-transcribe-macos-arm64.tar.gz
+            artefacts/sussurro-transcribe-macos-arm64.tar.gz.sha256
+            artefacts/sussurro-transcribe-macos-amd64.tar.gz
+            artefacts/sussurro-transcribe-macos-amd64.tar.gz.sha256
+            artefacts/sussurro-transcribe-linux-amd64.tar.gz
+            artefacts/sussurro-transcribe-linux-amd64.tar.gz.sha256
+            artefacts/sussurro-transcribe-linux-arm64.tar.gz
+            artefacts/sussurro-transcribe-linux-arm64.tar.gz.sha256
