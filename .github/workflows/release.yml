@@ -9,8 +9,16 @@ name: Release
 # `V<version>` from the workflow's commit SHA.
 #
 # A `workflow_dispatch` entry point is also exposed so the same release can
-# be re-triggered manually (handy when a build flaked and you don't want to
-# bump the version again).
+# be re-triggered manually:
+#   - `force=true`     → re-publish over an existing real V<version> release
+#                        (used when a build flaked and you don't want to
+#                        bump the version again).
+#   - `dry_run=true`   → publish to a *draft pre-release* tagged
+#                        `V<version>-rc-<run_id>` instead of the real
+#                        `V<version>`. Lets you exercise every matrix entry
+#                        on real runners without affecting prod. Delete the
+#                        draft Release + its tag from the GitHub UI when
+#                        you're done verifying.
 
 on:
   push:
@@ -25,6 +33,19 @@ on:
         description: >
           If 'true', release even when a Release for the version in
           internal/version/version.go already exists (overwriting its assets).
+          Ignored when dry_run is 'true'.
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+      dry_run:
+        description: >
+          If 'true', publish to a draft pre-release tagged
+          `V<version>-rc-<run_id>` instead of the real `V<version>` release,
+          so you can verify the matrix output without affecting prod. The
+          tag and Release can be deleted from the GitHub UI when you're done.
         required: false
         default: 'false'
         type: choice
@@ -48,6 +69,7 @@ jobs:
       version: ${{ steps.set.outputs.version }}
       tag: ${{ steps.set.outputs.tag }}
       skip: ${{ steps.set.outputs.skip }}
+      is_dry_run: ${{ steps.set.outputs.is_dry_run }}
     steps:
       - uses: actions/checkout@v4
 
@@ -56,6 +78,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           FORCE: ${{ github.event.inputs.force || 'false' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
 
@@ -68,27 +92,37 @@ jobs:
             exit 1
           fi
 
-          TAG="V${VERSION}"
-          echo "Resolved: VERSION=${VERSION}  TAG=${TAG}"
-
-          # If a Release already exists for this tag, skip — unless we were
-          # explicitly told to force re-release via workflow_dispatch.
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            if [ "$FORCE" = "true" ]; then
-              echo "::warning::Release ${TAG} already exists. Force-rerelease requested — proceeding."
-              SKIP="false"
-            else
-              echo "::notice::Release ${TAG} already exists. Skipping. (Bump internal/version/version.go to release a new version, or re-run via workflow_dispatch with force=true.)"
-              SKIP="true"
-            fi
-          else
+          if [ "$DRY_RUN" = "true" ]; then
+            # Dry-run mode: tag is unique per run, so the existing-release
+            # check is irrelevant. Downstream jobs see is_dry_run=true and
+            # publish a draft pre-release that doesn't touch prod.
+            TAG="V${VERSION}-rc-${RUN_ID}"
             SKIP="false"
+            echo "::notice::Dry-run mode — tag will be ${TAG} (draft pre-release, safe to delete after verification)."
+          else
+            TAG="V${VERSION}"
+            # If a Release already exists for this tag, skip — unless we were
+            # explicitly told to force re-release via workflow_dispatch.
+            if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              if [ "$FORCE" = "true" ]; then
+                echo "::warning::Release ${TAG} already exists. Force-rerelease requested — proceeding."
+                SKIP="false"
+              else
+                echo "::notice::Release ${TAG} already exists. Skipping. (Bump internal/version/version.go to release a new version, or re-run via workflow_dispatch with force=true.)"
+                SKIP="true"
+              fi
+            else
+              SKIP="false"
+            fi
           fi
+
+          echo "Resolved: VERSION=${VERSION}  TAG=${TAG}  DRY_RUN=${DRY_RUN}  SKIP=${SKIP}"
 
           {
             echo "version=${VERSION}"
             echo "tag=${TAG}"
             echo "skip=${SKIP}"
+            echo "is_dry_run=${DRY_RUN}"
           } >> "$GITHUB_OUTPUT"
 
   # ---------------------------------------------------------------------------
@@ -248,10 +282,14 @@ jobs:
         with:
           tag_name: ${{ needs.resolve.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          name: Sussurro ${{ needs.resolve.outputs.version }}
+          # Dry-run runs publish as draft pre-releases titled "(dry-run)"
+          # so they're easy to spot in the Releases page and can be deleted
+          # after the matrix output has been verified. Real runs publish
+          # cleanly.
+          name: ${{ needs.resolve.outputs.is_dry_run == 'true' && format('Sussurro {0} (dry-run)', needs.resolve.outputs.version) || format('Sussurro {0}', needs.resolve.outputs.version) }}
           body: ${{ steps.changelog.outputs.body }}
-          draft: false
-          prerelease: false
+          draft: ${{ needs.resolve.outputs.is_dry_run == 'true' }}
+          prerelease: ${{ needs.resolve.outputs.is_dry_run == 'true' }}
           fail_on_unmatched_files: true
           files: |
             artefacts/sussurro-macos-arm64.tar.gz
