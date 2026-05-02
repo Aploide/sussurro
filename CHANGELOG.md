@@ -2,6 +2,18 @@
 
 All notable changes to Sussurro will be documented in this file.
 
+## [2.3] - 2026-05-02
+
+### Added
+- **Foldable Settings sections** (`internal/ui/assets`): every Settings block (Speech Recognition, Transcription Language, Language Model, Output, Global Hotkey) now supports collapse/expand with a header caret.
+
+### Changed
+- **Settings layout sizing** (`internal/ui/assets`): model/setting/hotkey rows now use fixed control sizing and minimum row heights to prevent clipping and keep action controls aligned.
+- **Scrollable Settings content behavior** (`internal/ui/assets`): the main settings pane now reliably scrolls while restart/status bars remain anchored.
+
+### Fixed
+- **Hotkey edit handler duplication** (`internal/ui/assets/app.js`): the Change button now replaces its click handler on rerender instead of stacking multiple listeners.
+
 ## [2.2] - 2026-04-07
 
 ### Added
