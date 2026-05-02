@@ -2,6 +2,7 @@
 
 // ---- Bootstrap ----
 document.addEventListener('DOMContentLoaded', async () => {
+  initFoldableSections();
   await reloadSettings();
 });
 
@@ -38,6 +39,23 @@ function render(data) {
   // Lowercase output
   renderLowercaseOutput(data.lowercaseOutput);
   renderSkipLLMCleanup(data.skipLLMCleanup);
+}
+
+// ---- Foldable sections ----
+function initFoldableSections() {
+  const sections = document.querySelectorAll('.section.foldable');
+  sections.forEach(section => {
+    const header = section.querySelector('[data-section-toggle]');
+    const body = section.querySelector('.section-body');
+    if (!header || !body) return;
+
+    header.onclick = () => {
+      const collapse = !section.classList.contains('collapsed');
+      section.classList.toggle('collapsed', collapse);
+      body.hidden = collapse;
+      header.setAttribute('aria-expanded', collapse ? 'false' : 'true');
+    };
+  });
 }
 
 // ---- Model list ----
@@ -220,7 +238,7 @@ function renderHotkey(trigger, mode, isWayland) {
   updateHotkeyDisplay(trigger);
 
   const editBtn = document.getElementById('hotkey-edit-btn');
-  if (editBtn) editBtn.addEventListener('click', () => showRecordModal(trigger));
+  if (editBtn) editBtn.onclick = () => showRecordModal(trigger);
 
   // Mode selector
   if (modeRow) {

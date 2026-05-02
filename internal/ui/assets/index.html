@@ -13,85 +13,109 @@
   <div class="content">
 
     <!-- Speech Recognition -->
-    <div class="section">
-      <div class="section-label">Speech Recognition (Whisper)</div>
-      <div id="whisper-list"></div>
+    <div class="section foldable" data-section-id="speech">
+      <button class="section-header" type="button" data-section-toggle aria-expanded="true">
+        <span class="section-label">Speech Recognition (Whisper)</span>
+        <span class="section-caret" aria-hidden="true">⌄</span>
+      </button>
+      <div class="section-body">
+        <div id="whisper-list"></div>
+      </div>
     </div>
 
     <!-- Transcription Language -->
-    <div class="section">
-      <div class="section-label">Transcription Language</div>
-      <div class="setting-row">
-        <div>
-          <div class="toggle-label">Language</div>
-          <div class="toggle-desc">Language Whisper listens for</div>
+    <div class="section foldable" data-section-id="language">
+      <button class="section-header" type="button" data-section-toggle aria-expanded="true">
+        <span class="section-label">Transcription Language</span>
+        <span class="section-caret" aria-hidden="true">⌄</span>
+      </button>
+      <div class="section-body">
+        <div class="setting-row">
+          <div>
+            <div class="toggle-label">Language</div>
+            <div class="toggle-desc">Language Whisper listens for</div>
+          </div>
+          <select id="language-select"></select>
         </div>
-        <select id="language-select"></select>
       </div>
     </div>
 
     <!-- Language Model -->
-    <div class="section">
-      <div class="section-label">Language Model (LLM)</div>
-      <div id="llm-list"></div>
+    <div class="section foldable" data-section-id="llm">
+      <button class="section-header" type="button" data-section-toggle aria-expanded="true">
+        <span class="section-label">Language Model (LLM)</span>
+        <span class="section-caret" aria-hidden="true">⌄</span>
+      </button>
+      <div class="section-body">
+        <div id="llm-list"></div>
+      </div>
     </div>
 
     <!-- Output -->
-    <div class="section">
-      <div class="section-label">Output</div>
-      <div class="setting-row">
-        <div>
-          <div class="toggle-label">Raw output</div>
-          <div class="toggle-desc">Skip LLM cleanup and use Whisper text as-is</div>
+    <div class="section foldable" data-section-id="output">
+      <button class="section-header" type="button" data-section-toggle aria-expanded="true">
+        <span class="section-label">Output</span>
+        <span class="section-caret" aria-hidden="true">⌄</span>
+      </button>
+      <div class="section-body">
+        <div class="setting-row">
+          <div>
+            <div class="toggle-label">Raw output</div>
+            <div class="toggle-desc">Skip LLM cleanup and use Whisper text as-is</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="raw-output-toggle">
+            <span class="toggle-slider"></span>
+          </label>
         </div>
-        <label class="toggle-switch">
-          <input type="checkbox" id="raw-output-toggle">
-          <span class="toggle-slider"></span>
-        </label>
-      </div>
-      <div class="setting-row">
-        <div>
-          <div class="toggle-label">Lowercase output</div>
-          <div class="toggle-desc">Force all transcribed text to lowercase</div>
+        <div class="setting-row">
+          <div>
+            <div class="toggle-label">Lowercase output</div>
+            <div class="toggle-desc">Force all transcribed text to lowercase</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="lowercase-toggle">
+            <span class="toggle-slider"></span>
+          </label>
         </div>
-        <label class="toggle-switch">
-          <input type="checkbox" id="lowercase-toggle">
-          <span class="toggle-slider"></span>
-        </label>
       </div>
     </div>
 
     <!-- Global Hotkey -->
-    <div class="section">
-      <div class="section-label">Global Hotkey</div>
-
-      <!-- X11 row -->
-      <div id="hotkey-x11" class="hotkey-row" hidden>
-        <div>
-          <div class="toggle-label">Hotkey</div>
-          <div id="hotkey-display" class="hotkey-display" style="margin-top:6px"></div>
+    <div class="section foldable" data-section-id="hotkey">
+      <button class="section-header" type="button" data-section-toggle aria-expanded="true">
+        <span class="section-label">Global Hotkey</span>
+        <span class="section-caret" aria-hidden="true">⌄</span>
+      </button>
+      <div class="section-body">
+        <!-- X11 row -->
+        <div id="hotkey-x11" class="hotkey-row" hidden>
+          <div>
+            <div class="toggle-label">Hotkey</div>
+            <div id="hotkey-display" class="hotkey-display" style="margin-top:6px"></div>
+          </div>
+          <button class="hotkey-edit-btn" id="hotkey-edit-btn">Change</button>
         </div>
-        <button class="hotkey-edit-btn" id="hotkey-edit-btn">Change</button>
-      </div>
 
-      <!-- Mode row (X11 / macOS only) -->
-      <div id="hotkey-mode-row" class="setting-row" hidden>
-        <div>
-          <div class="toggle-label">Mode</div>
-          <div class="toggle-desc">Push to Talk: hold to record &middot; Toggle: press once to start/stop</div>
+        <!-- Mode row (X11 / macOS only) -->
+        <div id="hotkey-mode-row" class="setting-row" hidden>
+          <div>
+            <div class="toggle-label">Mode</div>
+            <div class="toggle-desc">Push to Talk: hold to record &middot; Toggle: press once to start/stop</div>
+          </div>
+          <select id="hotkey-mode-select">
+            <option value="push-to-talk">Push to Talk</option>
+            <option value="toggle">Toggle</option>
+          </select>
         </div>
-        <select id="hotkey-mode-select">
-          <option value="push-to-talk">Push to Talk</option>
-          <option value="toggle">Toggle</option>
-        </select>
-      </div>
 
-      <!-- Wayland note -->
-      <div id="hotkey-wayland" class="hotkey-wayland-note" hidden>
-        On Wayland, global hotkeys require a custom keyboard shortcut in your desktop environment.<br>
-        Configure your DE to run: <code style="color:#e8e8ea;background:#1a1a1c;padding:2px 5px;border-radius:4px">sussurro-trigger start</code> on key down,
-        and <code style="color:#e8e8ea;background:#1a1a1c;padding:2px 5px;border-radius:4px">sussurro-trigger stop</code> on key up.<br>
-        See <a href="#" onclick="window.openURL('https://github.com/cesp99/sussurro/blob/master/docs/wayland.md'); return false">docs/wayland.md</a> for instructions.
+        <!-- Wayland note -->
+        <div id="hotkey-wayland" class="hotkey-wayland-note" hidden>
+          On Wayland, global hotkeys require a custom keyboard shortcut in your desktop environment.<br>
+          Configure your DE to run: <code style="color:#e8e8ea;background:#1a1a1c;padding:2px 5px;border-radius:4px">sussurro-trigger start</code> on key down,
+          and <code style="color:#e8e8ea;background:#1a1a1c;padding:2px 5px;border-radius:4px">sussurro-trigger stop</code> on key up.<br>
+          See <a href="#" onclick="window.openURL('https://github.com/cesp99/sussurro/blob/master/docs/wayland.md'); return false">docs/wayland.md</a> for instructions.
+        </div>
       </div>
     </div>
 
