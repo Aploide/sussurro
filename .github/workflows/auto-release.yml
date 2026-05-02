@@ -90,6 +90,9 @@ jobs:
             build-essential cmake pkg-config \
             libgtk-3-dev libwebkit2gtk-4.1-dev \
             libayatana-appindicator3-dev libgtk-layer-shell-dev
+          # Prefer the legacy appindicator backend when available for broader
+          # compatibility with distros that don't ship ayatana SONAMEs.
+          sudo apt-get install -y --no-install-recommends libappindicator3-dev || true
 
       - name: Build and package
         shell: bash
@@ -97,7 +100,11 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           chmod +x scripts/package-release.sh scripts/package-transcribe.sh
-          make build build-transcribe
+          if [[ "${{ matrix.platform }}" == "linux" ]] && pkg-config --exists appindicator3-0.1; then
+            make build build-transcribe UI_TAGS="-tags legacy_appindicator"
+          else
+            make build build-transcribe
+          fi
           ./scripts/package-release.sh "${{ needs.detect-version.outputs.version }}" "${{ matrix.platform }}" "${{ matrix.arch }}"
           cp "release/sussurro-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz" dist/
           cp "release/sussurro-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz.sha256" dist/
