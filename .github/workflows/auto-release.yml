@@ -98,16 +98,24 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          chmod +x scripts/package-release.sh
-          make build
+          mkdir -p dist
+          chmod +x scripts/package-release.sh scripts/package-transcribe.sh
+          make build build-transcribe
           ./scripts/package-release.sh "${{ needs.detect-version.outputs.version }}" "${{ matrix.platform }}" "${{ matrix.arch }}"
+          cp "release/sussurro-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz" dist/
+          cp "release/sussurro-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz.sha256" dist/
+          ./scripts/package-transcribe.sh "${{ needs.detect-version.outputs.version }}" "${{ matrix.platform }}" "${{ matrix.arch }}"
+          cp "release/sussurro-transcribe-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz" dist/
+          cp "release/sussurro-transcribe-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz.sha256" dist/
 
       - uses: actions/upload-artifact@v4
         with:
           name: sussurro-${{ matrix.platform }}-${{ matrix.arch }}
           path: |
-            release/sussurro-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz
-            release/sussurro-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz.sha256
+            dist/sussurro-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz
+            dist/sussurro-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz.sha256
+            dist/sussurro-transcribe-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz
+            dist/sussurro-transcribe-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz.sha256
 
   draft-release:
     needs:
