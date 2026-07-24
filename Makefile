@@ -12,6 +12,12 @@ LIBRARY_PATH := $(abspath $(WHISPER_DIR))
 # go-llama.cpp configuration
 LLAMA_DIR := third_party/go-llama.cpp
 
+# Pinned dependency revisions for reproducible builds.
+# WHISPER_COMMIT matches the whisper.cpp bindings pseudo-version in go.mod;
+# GO_LLAMA_COMMIT is the fork's main HEAD (llama.cpp submodule recent enough for Qwen3).
+WHISPER_COMMIT ?= 764482c3175d9c3bc6089c1ec84df7d1b9537d83
+GO_LLAMA_COMMIT ?= b2c101738f26f466f1a30317d50a88ce7c0ada12
+
 # Detect number of CPU cores for parallel builds
 NPROCS := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)
 
@@ -26,6 +32,41 @@ else
 	GGML_METAL_PATH :=
 endif
 
+# Windows (MSYS2 MINGW64): Vulkan-accelerated whisper.cpp, CPU go-llama.cpp.
+# go-llama.cpp has no vulkan BUILD_TYPE upstream, and enabling Vulkan in both
+# ggml copies would collide on the generated SPIR-V shader symbols that the
+# wsp_ rename in patch-whisper.sh does not cover.
+ifeq ($(OS),Windows_NT)
+	EXE := .exe
+	# patch-whisper.sh renames the GGML_ CMake options too, hence WSP_GGML_VULKAN.
+	WHISPER_CMAKE_EXTRA := -G Ninja -DWSP_GGML_VULKAN=ON
+	GGML_VULKAN_PATH := -L$(WHISPER_DIR)/build/ggml/src/ggml-vulkan
+	# go-llama.cpp: skip llama.cpp's cli/server tools, and give the vendored
+	# cpp-httplib a Windows 10 baseline (MinGW's default _WIN32_WINNT is older).
+	LLAMA_CMAKE_ARGS := -DLLAMA_BUILD_TOOLS=OFF -DLLAMA_BUILD_APP=OFF -DLLAMA_BUILD_SERVER=OFF \
+		-DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0A00
+	# --start-group makes ld re-scan the static archives regardless of ordering;
+	# trailing libs cover the Vulkan loader, libstdc++ for ggml-vulkan, and the
+	# OpenMP runtime go-llama.cpp builds against (its -fopenmp LDFLAG is
+	# linux-tagged, so it must be supplied here). -static keeps every -l
+	# (including the bindings' own -lstdc++) on the static archives — mixing
+	# libstdc++.a with libstdc++.dll.a causes duplicate-symbol errors — and
+	# yields an exe with no MinGW runtime DLL dependencies.
+	# vulkan-1 must stay dynamic: there is no static Vulkan loader (the DLL is
+	# shipped by Windows / the GPU driver), so toggle -Bdynamic just for it.
+	WIN_LDFLAGS := -Wl,--start-group -lwhisper -lggml -lggml-base -lggml-cpu -lggml-vulkan -Wl,--end-group \
+		-Wl,-Bdynamic -lvulkan-1 -Wl,-Bstatic -lstdc++ -fopenmp -static
+	# MinGW gcc expects ';'-separated C_INCLUDE_PATH/LIBRARY_PATH; the patched
+	# bindings carry their own -I/-L flags, so the env vars are not needed.
+	C_INCLUDE_PATH :=
+	LIBRARY_PATH :=
+else
+	EXE :=
+	WHISPER_CMAKE_EXTRA :=
+	GGML_VULKAN_PATH :=
+	WIN_LDFLAGS :=
+endif
+
 # Conservative CPU target for Apple Silicon.
 # -mcpu=apple-m1 is the ARMv8.5-A baseline shared by all M-series chips (M1/M2/M3/M4).
 # Without this, building on an M2+ machine can emit instructions (e.g. SME/AMX2)
@@ -38,6 +79,7 @@ endif
 endif
 
 # ---- UI / overlay dependencies (Linux only) ----
+ifneq ($(OS),Windows_NT)
 HAS_LAYER_SHELL    := $(shell pkg-config --exists gtk-layer-shell          2>/dev/null && echo yes || echo no)
 HAS_AYATANA        := $(shell pkg-config --exists ayatana-appindicator3-0.1 2>/dev/null && echo yes || echo no)
 HAS_APPINDICATOR   := $(shell pkg-config --exists appindicator3-0.1         2>/dev/null && echo yes || echo no)
@@ -81,6 +123,7 @@ UI_TAGS := -tags legacy_appindicator
 endif
 endif
 endif
+endif  # !Windows_NT
 
 # Base CGO link flags (whisper + llama)
 BASE_LDFLAGS := -L$(WHISPER_DIR)/build/src -L$(WHISPER_DIR)/build/ggml/src \
@@ -100,6 +143,7 @@ deps:
 	@if [ ! -d "$(WHISPER_DIR)" ]; then \
 		echo "Cloning whisper.cpp..."; \
 		git clone https://github.com/ggerganov/whisper.cpp.git $(WHISPER_DIR); \
+		git -C $(WHISPER_DIR) checkout --quiet $(WHISPER_COMMIT); \
 		echo "Patching whisper.cpp symbols..."; \
 		chmod +x scripts/patch-whisper.sh; \
 		./scripts/patch-whisper.sh; \
@@ -110,15 +154,39 @@ deps:
 		-DBUILD_SHARED_LIBS=OFF \
 		-DWHISPER_BUILD_TESTS=OFF \
 		-DWHISPER_BUILD_EXAMPLES=OFF \
+		$(WHISPER_CMAKE_EXTRA) \
 		$(if $(ARM_COMPAT_CFLAGS),-DCMAKE_C_FLAGS="$(ARM_COMPAT_CFLAGS)" -DCMAKE_CXX_FLAGS="$(ARM_COMPAT_CFLAGS)")
 	@cmake --build $(WHISPER_DIR)/build --config Release --target whisper -j $(NPROCS)
+ifeq ($(OS),Windows_NT)
+	@# The renamed CMake targets emit ggml archives without the "lib" prefix on
+	@# Windows; provide lib-prefixed copies so -lggml/-lggml-vulkan/... resolve.
+	@for d in "$(WHISPER_DIR)/build/ggml/src" "$(WHISPER_DIR)/build/ggml/src/ggml-vulkan" "$(WHISPER_DIR)/build/ggml/src/ggml-cpu"; do \
+		for f in "$$d"/ggml*.a; do \
+			[ -f "$$f" ] || continue; \
+			base=$$(basename "$$f"); \
+			case "$$base" in lib*) continue;; esac; \
+			cp -f "$$f" "$$d/lib$$base"; \
+		done; \
+	done
+endif
 	@if [ ! -d "$(LLAMA_DIR)" ]; then \
 		echo "Cloning go-llama.cpp..."; \
 		git clone --recursive https://github.com/AshkanYarmoradi/go-llama.cpp $(LLAMA_DIR); \
+		git -C $(LLAMA_DIR) checkout --quiet $(GO_LLAMA_COMMIT); \
+		git -C $(LLAMA_DIR) submodule update --init --recursive; \
 	fi
+ifeq ($(OS),Windows_NT)
+	@echo "Patching go-llama.cpp for Windows..."
+	@chmod +x scripts/patch-llama-windows.sh
+	@./scripts/patch-llama-windows.sh
+endif
 	@echo "Building go-llama.cpp library..."
 	@$(MAKE) -C $(LLAMA_DIR) clean
+ifeq ($(OS),Windows_NT)
+	@$(MAKE) -j $(NPROCS) -C $(LLAMA_DIR) libbinding.a BUILD_TYPE=$(BUILD_TYPE) CMAKE_ARGS="$(LLAMA_CMAKE_ARGS)"
+else
 	@$(MAKE) -j $(NPROCS) -C $(LLAMA_DIR) libbinding.a BUILD_TYPE=$(BUILD_TYPE)
+endif
 
 # Create webkit2gtk-4.0 compatibility .pc when only 4.1 is installed
 compat-pc:
@@ -135,7 +203,10 @@ endif
 build: deps compat-pc
 	@echo "Building $(APP_NAME)..."
 	@mkdir -p $(BUILD_DIR)
-ifeq ($(UNAME_S),Darwin)
+ifeq ($(OS),Windows_NT)
+	CGO_LDFLAGS="$(BASE_LDFLAGS) $(GGML_VULKAN_PATH) $(WIN_LDFLAGS)" \
+	go build -o $(BUILD_DIR)/$(APP_NAME)$(EXE) ./$(CMD_DIR)
+else ifeq ($(UNAME_S),Darwin)
 	CGO_LDFLAGS="$(BASE_LDFLAGS) -framework Cocoa -framework QuartzCore -framework CoreVideo -framework Foundation" \
 	go build -o $(BUILD_DIR)/$(APP_NAME) ./$(CMD_DIR)
 else
@@ -153,7 +224,10 @@ endif
 build-transcribe: deps
 	@echo "Building sussurro-transcribe..."
 	@mkdir -p $(BUILD_DIR)
-ifeq ($(UNAME_S),Darwin)
+ifeq ($(OS),Windows_NT)
+	CGO_LDFLAGS="$(BASE_LDFLAGS) $(GGML_VULKAN_PATH) $(WIN_LDFLAGS)" \
+	go build -o $(BUILD_DIR)/sussurro-transcribe$(EXE) ./cmd/transcribe
+else ifeq ($(UNAME_S),Darwin)
 	CGO_LDFLAGS="$(BASE_LDFLAGS) -framework Accelerate -framework Foundation" \
 	go build -o $(BUILD_DIR)/sussurro-transcribe ./cmd/transcribe
 else

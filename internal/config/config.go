@@ -312,7 +312,11 @@ func LoadConfig(path string) (*Config, error) {
 		viper.SetConfigName("config") // Look for config.yaml (or .json, .toml)
 		viper.SetConfigType("yaml")
 		viper.AddConfigPath(".")
-		viper.AddConfigPath("$HOME/.sussurro")
+		// Use the resolved home directory rather than a "$HOME" literal:
+		// viper does not expand it, and the variable does not exist on Windows.
+		if home, err := os.UserHomeDir(); err == nil {
+			viper.AddConfigPath(filepath.Join(home, ".sussurro"))
+		}
 		viper.AddConfigPath("./configs")
 	}
 

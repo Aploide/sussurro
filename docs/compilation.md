@@ -166,3 +166,70 @@ Run `xcode-select --install` and accept the license agreement.
 
 ### `fatal error: gtk/gtk.h: No such file or directory`
 GTK3 development headers are missing. Install `libgtk-3-dev` (Ubuntu) or `gtk3` (Arch) and retry.
+
+---
+
+## Windows
+
+Windows builds use MSYS2's MINGW64 environment (CGO requires a MinGW
+toolchain; MSVC is not supported) and enable the ggml **Vulkan** backend for
+whisper.cpp, so transcription runs on any Vulkan-capable GPU through the
+regular graphics driver — no CUDA toolkit needed.
+
+### Prerequisites
+
+1. **Go (windows/amd64)** ≥ 1.25 — https://go.dev/dl/ (the dependency tree
+   requires 1.25; older toolchains auto-download it when `GOTOOLCHAIN=auto`,
+   the default).
+2. **MSYS2** — https://www.msys2.org. In the **MSYS2 MINGW64** shell:
+
+```bash
+pacman -S --needed make git \
+  mingw-w64-x86_64-gcc mingw-w64-x86_64-make mingw-w64-x86_64-pkgconf \
+  mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja \
+  mingw-w64-x86_64-vulkan-headers mingw-w64-x86_64-vulkan-loader \
+  mingw-w64-x86_64-shaderc
+```
+
+Make sure `go` is reachable from the MINGW64 shell, e.g. add to `~/.bashrc`:
+
+```bash
+export PATH="$PATH:/c/Program Files/Go/bin"
+```
+
+### Build
+
+From the **MSYS2 MINGW64** shell:
+
+```bash
+git -c core.autocrlf=false clone https://github.com/cesp99/sussurro.git
+cd sussurro
+make build build-transcribe   # produces bin/sussurro.exe and bin/sussurro-transcribe.exe
+```
+
+Notes:
+
+- Clone with `core.autocrlf=false` (or rely on the repo's `.gitattributes`) —
+  CRLF line endings break the `scripts/*.sh` patch steps.
+- `make deps` clones pinned revisions of whisper.cpp and go-llama.cpp, applies
+  `scripts/patch-whisper.sh` (symbol renames) and
+  `scripts/patch-llama-windows.sh` (MinGW fixes), and builds whisper.cpp with
+  `-DWSP_GGML_VULKAN=ON`. The first build takes 10–20 minutes.
+- The binaries are statically linked (no MinGW runtime DLLs) and run from any
+  shell; only `vulkan-1.dll` (from the graphics driver) and the WebView2
+  runtime (preinstalled on Windows 11) are needed at runtime.
+- The LLM cleanup stage runs on CPU; Vulkan acceleration applies to Whisper.
+
+### Windows Troubleshooting
+
+**`RegisterHotKey failed`** — another app owns the trigger combination;
+change `hotkey.trigger` in `%USERPROFILE%\.sussurro\config.yaml`.
+
+**`have you installed the static version of the vulkan-1 library?`** — the
+`mingw-w64-x86_64-vulkan-loader` package is missing.
+
+**`glslc: command not found` during deps** — install
+`mingw-w64-x86_64-shaderc`.
+
+**Settings window never appears / blank** — verify the WebView2 Evergreen
+runtime is installed (Windows 10).
