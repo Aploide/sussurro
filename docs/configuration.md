@@ -43,11 +43,19 @@ original ending is automatically retried on smaller pieces and, as a last
 resort, kept verbatim. The cleanup therefore never summarizes — worst case a
 few filler words survive in a difficult passage.
 
-`models.llm.extended_prompt: true` switches to a richer instruction set that
-also formats dictated enumerations as lists and adds paragraph breaks. The
+Dictated enumerations ("first... second... third...") are automatically
+reformatted into numbered list lines. This is done deterministically after
+cleanup (LLMs apply layout instructions inconsistently), so it works with any
+model and never alters wording — a spoken series must start with "first" and
+contain at least two in-order markers to trigger.
+
+`models.llm.extended_prompt: true` switches to a richer instruction set with
+an explicit no-summarization contract and a prompt-level dictionary. The
 bundled `qwen3-sussurro` fine-tune does not follow these extra instructions
 (it is trained on the default prompt) — use this option together with a
-general instruct model in `models.llm.path`.
+general instruct model in `models.llm.path` (e.g. a Qwen3 Instruct GGUF) for
+noticeably more thorough filler removal on long dictations, at the cost of
+slower CPU cleanup.
 
 ### Audio Settings
 ```yaml
