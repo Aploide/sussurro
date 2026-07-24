@@ -23,6 +23,9 @@ type AppConfig struct {
 	LogLevel        string `mapstructure:"log_level"`
 	LowercaseOutput bool   `mapstructure:"lowercase_output"`
 	SkipLLMCleanup  bool   `mapstructure:"skip_llm_cleanup"`
+	// Dictionary lists names and terms the cleanup stage must spell exactly
+	// as written (personal vocabulary the ASR tends to mishear).
+	Dictionary []string `mapstructure:"dictionary"`
 }
 
 type AudioConfig struct {
@@ -50,6 +53,12 @@ type LLMConfig struct {
 	ContextSize int    `mapstructure:"context_size"`
 	GpuLayers   int    `mapstructure:"gpu_layers"`
 	Threads     int    `mapstructure:"threads"`
+	// ExtendedPrompt enables richer cleanup instructions (no-summarization
+	// contract, list formatting, prompt-level dictionary). Leave false for
+	// the bundled qwen3-sussurro fine-tune, which only behaves with the
+	// prompt it was trained on; set true when pointing path at a general
+	// instruct model.
+	ExtendedPrompt bool `mapstructure:"extended_prompt"`
 }
 
 type HotkeyConfig struct {
