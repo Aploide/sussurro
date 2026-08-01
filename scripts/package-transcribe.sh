@@ -33,6 +33,17 @@ if [[ "${PLATFORM}" == "darwin" ]]; then
     PLATFORM="macos"
 fi
 
+# MSYS2 / Git Bash report MINGW64_NT-* / MSYS_NT-* → windows
+case "${PLATFORM}" in
+    mingw*|msys*|cygwin*) PLATFORM="windows" ;;
+esac
+
+# Binary name differs on Windows
+BIN_NAME="sussurro-transcribe"
+if [[ "${PLATFORM}" == "windows" ]]; then
+    BIN_NAME="sussurro-transcribe.exe"
+fi
+
 # ── Setup ──────────────────────────────────────────────────────────────────────
 
 RELEASE_NAME="sussurro-transcribe-${PLATFORM}-${ARCH}"
@@ -45,16 +56,16 @@ rm -rf release
 mkdir -p "${RELEASE_DIR}"
 
 # Check if binary exists
-if [ ! -f "bin/sussurro-transcribe" ]; then
-    echo "Error: bin/sussurro-transcribe not found. Run 'make build-transcribe' first."
+if [ ! -f "bin/${BIN_NAME}" ]; then
+    echo "Error: bin/${BIN_NAME} not found. Run 'make build-transcribe' first."
     exit 1
 fi
 
 # ── Files ──────────────────────────────────────────────────────────────────────
 
 echo "Copying binary..."
-cp bin/sussurro-transcribe "${RELEASE_DIR}/sussurro-transcribe"
-chmod +x "${RELEASE_DIR}/sussurro-transcribe"
+cp "bin/${BIN_NAME}" "${RELEASE_DIR}/${BIN_NAME}"
+chmod +x "${RELEASE_DIR}/${BIN_NAME}"
 
 echo "Copying example config..."
 cp configs/default.yaml "${RELEASE_DIR}/config.example.yaml"
@@ -70,6 +81,9 @@ cp configs/default.yaml "${RELEASE_DIR}/config.example.yaml"
         echo "1. Make the binary executable:  chmod +x sussurro-transcribe"
         echo "2. Remove macOS quarantine:     xattr -d com.apple.quarantine sussurro-transcribe"
         echo "3. Run:                         ./sussurro-transcribe -i audio.mp3"
+    elif [[ "${PLATFORM}" == "windows" ]]; then
+        echo "1. Open a terminal in this folder"
+        echo "2. Run:                         .\\sussurro-transcribe.exe -i audio.mp3"
     else
         echo "1. Make the binary executable:  chmod +x sussurro-transcribe"
         echo "2. Run:                         ./sussurro-transcribe -i audio.mp3"
@@ -82,13 +96,22 @@ cp configs/default.yaml "${RELEASE_DIR}/config.example.yaml"
         echo "  Arch/Manjaro:   sudo pacman -S ffmpeg"
         echo "  Ubuntu/Debian:  sudo apt install ffmpeg"
         echo "  Fedora:         sudo dnf install ffmpeg"
+    elif [[ "${PLATFORM}" == "windows" ]]; then
+        echo "  Windows:        winget install Gyan.FFmpeg"
     else
         echo "  macOS:          brew install ffmpeg"
     fi
     echo ""
-    echo "- AI models are shared with the main Sussurro app (~/.sussurro/models/)."
-    echo "  Run 'sussurro' at least once to download them, or use -config to point"
-    echo "  to a config file with custom model paths."
+    if [[ "${PLATFORM}" == "windows" ]]; then
+        echo "- AI models are shared with the main Sussurro app"
+        echo "  (%USERPROFILE%\\.sussurro\\models\\). Run 'sussurro' at least once to"
+        echo "  download them, or use -config to point to a config file with custom"
+        echo "  model paths."
+    else
+        echo "- AI models are shared with the main Sussurro app (~/.sussurro/models/)."
+        echo "  Run 'sussurro' at least once to download them, or use -config to point"
+        echo "  to a config file with custom model paths."
+    fi
     echo ""
     echo "Usage:"
     echo "------"
@@ -104,17 +127,31 @@ cp configs/default.yaml "${RELEASE_DIR}/config.example.yaml"
 
 # ── Tarball + checksum ─────────────────────────────────────────────────────────
 
-echo "Creating tarball..."
-cd release
-tar -czf "${RELEASE_NAME}.tar.gz" "${RELEASE_NAME}/"
-cd ..
+if [[ "${PLATFORM}" == "windows" ]]; then
+    # Windows users expect a zip (Explorer extracts it natively).
+    ARCHIVE="${RELEASE_NAME}.zip"
+    echo "Creating zip..."
+    cd release
+    if command -v zip &> /dev/null; then
+        zip -qr "${ARCHIVE}" "${RELEASE_NAME}/"
+    else
+        bsdtar -a -cf "${ARCHIVE}" "${RELEASE_NAME}/"
+    fi
+    cd ..
+else
+    ARCHIVE="${RELEASE_NAME}.tar.gz"
+    echo "Creating tarball..."
+    cd release
+    tar -czf "${ARCHIVE}" "${RELEASE_NAME}/"
+    cd ..
+fi
 
 echo "Generating checksum..."
 cd release
 if command -v sha256sum &> /dev/null; then
-    sha256sum "${RELEASE_NAME}.tar.gz" > "${RELEASE_NAME}.tar.gz.sha256"
+    sha256sum "${ARCHIVE}" > "${ARCHIVE}.sha256"
 elif command -v shasum &> /dev/null; then
-    shasum -a 256 "${RELEASE_NAME}.tar.gz" > "${RELEASE_NAME}.tar.gz.sha256"
+    shasum -a 256 "${ARCHIVE}" > "${ARCHIVE}.sha256"
 else
     echo "Warning: sha256sum or shasum not found. Skipping checksum generation."
 fi
@@ -125,12 +162,12 @@ cd ..
 echo ""
 echo "Release package created successfully!"
 echo ""
-echo "Package : release/${RELEASE_NAME}.tar.gz"
-echo "SHA256  : release/${RELEASE_NAME}.tar.gz.sha256"
+echo "Package : release/${ARCHIVE}"
+echo "SHA256  : release/${ARCHIVE}.sha256"
 echo ""
 echo "Contents:"
 ls -lh "release/${RELEASE_NAME}/"
 echo ""
 echo "Upload these files to GitHub Releases:"
-echo "  - release/${RELEASE_NAME}.tar.gz"
-echo "  - release/${RELEASE_NAME}.tar.gz.sha256"
+echo "  - release/${ARCHIVE}"
+echo "  - release/${ARCHIVE}.sha256"

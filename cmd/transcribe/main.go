@@ -12,6 +12,7 @@ import (
 	"github.com/cesp99/sussurro/internal/config"
 	"github.com/cesp99/sussurro/internal/llm"
 	"github.com/cesp99/sussurro/internal/logger"
+	"github.com/cesp99/sussurro/internal/version"
 )
 
 func main() {
@@ -21,7 +22,13 @@ func main() {
 	clean := flag.Bool("clean", false, "Run LLM cleanup on transcription")
 	language := flag.String("lang", "", "Override ASR language (e.g. en, auto)")
 	debug := flag.Bool("debug", false, "Enable debug output")
+	showVersion := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("sussurro-transcribe %s\n", version.Version)
+		return
+	}
 
 	if *inputFile == "" {
 		fmt.Fprintln(os.Stderr, "Usage: sussurro-transcribe -i <audio-file> [-o output.txt] [-clean] [-lang en] [-config path]")

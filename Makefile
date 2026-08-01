@@ -2,6 +2,13 @@ APP_NAME := sussurro
 BUILD_DIR := bin
 CMD_DIR := cmd/sussurro
 
+# Version stamped into the binaries. Release builds pass VERSION=<git tag>
+# (see .github/workflows/release.yml); local builds leave it empty and the
+# binary reports the "dev" default from internal/version.
+VERSION ?=
+VERSION_PKG := github.com/cesp99/sussurro/internal/version
+GO_LDFLAGS := $(if $(VERSION),-ldflags "-X $(VERSION_PKG).Version=$(VERSION)")
+
 # Whisper.cpp configuration
 WHISPER_DIR := third_party/whisper.cpp
 WHISPER_INCLUDE := $(abspath $(WHISPER_DIR)/include)
@@ -205,10 +212,10 @@ build: deps compat-pc
 	@mkdir -p $(BUILD_DIR)
 ifeq ($(OS),Windows_NT)
 	CGO_LDFLAGS="$(BASE_LDFLAGS) $(GGML_VULKAN_PATH) $(WIN_LDFLAGS)" \
-	go build -o $(BUILD_DIR)/$(APP_NAME)$(EXE) ./$(CMD_DIR)
+	go build $(GO_LDFLAGS) -o $(BUILD_DIR)/$(APP_NAME)$(EXE) ./$(CMD_DIR)
 else ifeq ($(UNAME_S),Darwin)
 	CGO_LDFLAGS="$(BASE_LDFLAGS) -framework Cocoa -framework QuartzCore -framework CoreVideo -framework Foundation" \
-	go build -o $(BUILD_DIR)/$(APP_NAME) ./$(CMD_DIR)
+	go build $(GO_LDFLAGS) -o $(BUILD_DIR)/$(APP_NAME) ./$(CMD_DIR)
 else
 	@echo "  Layer shell  : $(HAS_LAYER_SHELL)"
 	@echo "  Ayatana tray : $(HAS_AYATANA)"
@@ -217,7 +224,7 @@ else
 	PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_UI)" \
 	CGO_CFLAGS="$(LAYER_CFLAGS) $(WV_CFLAGS)" \
 	CGO_LDFLAGS="$(BASE_LDFLAGS) $(LAYER_LDFLAGS) $(WV_LDFLAGS)" \
-	go build $(UI_TAGS) -o $(BUILD_DIR)/$(APP_NAME) ./$(CMD_DIR)
+	go build $(UI_TAGS) $(GO_LDFLAGS) -o $(BUILD_DIR)/$(APP_NAME) ./$(CMD_DIR)
 endif
 
 # Build sussurro-transcribe CLI (no UI dependencies)
@@ -226,13 +233,13 @@ build-transcribe: deps
 	@mkdir -p $(BUILD_DIR)
 ifeq ($(OS),Windows_NT)
 	CGO_LDFLAGS="$(BASE_LDFLAGS) $(GGML_VULKAN_PATH) $(WIN_LDFLAGS)" \
-	go build -o $(BUILD_DIR)/sussurro-transcribe$(EXE) ./cmd/transcribe
+	go build $(GO_LDFLAGS) -o $(BUILD_DIR)/sussurro-transcribe$(EXE) ./cmd/transcribe
 else ifeq ($(UNAME_S),Darwin)
 	CGO_LDFLAGS="$(BASE_LDFLAGS) -framework Accelerate -framework Foundation" \
-	go build -o $(BUILD_DIR)/sussurro-transcribe ./cmd/transcribe
+	go build $(GO_LDFLAGS) -o $(BUILD_DIR)/sussurro-transcribe ./cmd/transcribe
 else
 	CGO_LDFLAGS="$(BASE_LDFLAGS)" \
-	go build -o $(BUILD_DIR)/sussurro-transcribe ./cmd/transcribe
+	go build $(GO_LDFLAGS) -o $(BUILD_DIR)/sussurro-transcribe ./cmd/transcribe
 endif
 
 run: build

@@ -150,6 +150,32 @@ You can also place model files manually and update the paths in `~/.sussurro/con
 
 ---
 
+## Versioning
+
+The version is not stored in the source tree — the git tag is the source of
+truth. `internal/version.Version` defaults to `dev`, and builds stamp the real
+value in via `-ldflags`:
+
+```bash
+make build VERSION=2.4        # binary reports 2.4
+make build                    # binary reports dev
+```
+
+Pushing a version tag runs `.github/workflows/release.yml`, which builds
+Linux (amd64 + arm64), macOS (arm64) and Windows (amd64), stamps the tag into
+every binary, and publishes a GitHub release with the archives and checksums:
+
+```bash
+git tag v2.4
+git push origin v2.4
+```
+
+A tag with a pre-release suffix (`v2.4-rc1`) is published as a pre-release and
+is not marked "latest", so the install scripts keep pointing at the last stable
+release.
+
+---
+
 ## Troubleshooting
 
 ### `pkg-config: webkit2gtk-4.0 not found`

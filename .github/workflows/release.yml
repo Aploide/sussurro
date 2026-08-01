@@ -1,0 +1,246 @@
+name: Release
+
+# The pushed git tag is the single source of truth for the release version:
+# `git tag v2.4 && git push origin v2.4` builds every platform, stamps 2.4 into
+# the binaries via -ldflags, and publishes the release. Nothing is read from
+# internal/version/version.go — that file only holds the "dev" fallback used by
+# local builds.
+
+on:
+  push:
+    tags:
+      # Historical tags used both cases (V2.2, v2.3); accept either.
+      - 'v*'
+      - 'V*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to (re)build and publish, e.g. v2.4'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  resolve-version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      version: ${{ steps.v.outputs.version }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+    steps:
+      - id: v
+        shell: bash
+        env:
+          RAW_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          tag="${RAW_TAG}"
+          # Strip the leading v/V to get the version the packaging scripts and
+          # the binary itself report (assets are named without it anyway).
+          version="${tag#[vV]}"
+
+          if [[ -z "${version}" ]]; then
+            echo "Refusing to release: tag '${tag}' has no version component." >&2
+            exit 1
+          fi
+          if [[ ! "${version}" =~ ^[0-9]+(\.[0-9]+)*(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Refusing to release: tag '${tag}' is not a version tag (expected e.g. v2.4 or v2.4-rc1)." >&2
+            exit 1
+          fi
+
+          # A pre-release suffix (v2.4-rc1) must not become the "latest" release
+          # that install.sh and install.ps1 resolve to.
+          prerelease=false
+          [[ "${version}" == *-* ]] && prerelease=true
+
+          {
+            echo "tag=${tag}"
+            echo "version=${version}"
+            echo "prerelease=${prerelease}"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Releasing ${tag} (version ${version}, prerelease=${prerelease})"
+
+  build-unix:
+    needs: resolve-version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: linux
+            arch: amd64
+          - os: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+          - os: macos-14
+            platform: macos
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-version.outputs.tag }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install Linux build dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake pkg-config \
+            libgtk-3-dev libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev libgtk-layer-shell-dev
+          # Prefer the legacy appindicator backend when available for broader
+          # compatibility with distros that don't ship ayatana SONAMEs.
+          sudo apt-get install -y --no-install-recommends libappindicator3-dev || true
+
+      - name: Build and package
+        shell: bash
+        env:
+          VERSION: ${{ needs.resolve-version.outputs.version }}
+          PLATFORM: ${{ matrix.platform }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          chmod +x scripts/package-release.sh scripts/package-transcribe.sh
+
+          if [[ "${PLATFORM}" == "linux" ]] && pkg-config --exists appindicator3-0.1; then
+            make build build-transcribe VERSION="${VERSION}" UI_TAGS="-tags legacy_appindicator"
+          else
+            make build build-transcribe VERSION="${VERSION}"
+          fi
+
+          # Both packaging scripts wipe release/ on entry, so each archive is
+          # copied into dist/ before the next one runs.
+          ./scripts/package-release.sh "${VERSION}" "${PLATFORM}" "${ARCH}"
+          cp "release/sussurro-${PLATFORM}-${ARCH}.tar.gz" dist/
+          cp "release/sussurro-${PLATFORM}-${ARCH}.tar.gz.sha256" dist/
+
+          ./scripts/package-transcribe.sh "${VERSION}" "${PLATFORM}" "${ARCH}"
+          cp "release/sussurro-transcribe-${PLATFORM}-${ARCH}.tar.gz" dist/
+          cp "release/sussurro-transcribe-${PLATFORM}-${ARCH}.tar.gz.sha256" dist/
+
+      - name: Verify stamped version
+        shell: bash
+        env:
+          VERSION: ${{ needs.resolve-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # sussurro-transcribe prints the version without touching audio devices
+          # or the display, so it is the safe binary to assert against.
+          reported="$(./bin/sussurro-transcribe -version 2>&1 || true)"
+          echo "${reported}"
+          if [[ "${reported}" != *"${VERSION}"* ]]; then
+            echo "Binary does not report the tag version ${VERSION}." >&2
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sussurro-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  build-windows:
+    needs: resolve-version
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-version.outputs.tag }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          # inherit lets the msys2 shell see the setup-go toolchain;
+          # /mingw64/bin still wins for gcc/cmake/ninja.
+          path-type: inherit
+          install: make git zip
+          pacboy: >-
+            gcc:p cmake:p ninja:p pkgconf:p
+            vulkan-headers:p vulkan-loader:p shaderc:p
+
+      - name: Build and package
+        env:
+          VERSION: ${{ needs.resolve-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          chmod +x scripts/*.sh
+          make build build-transcribe VERSION="${VERSION}"
+
+          ./scripts/package-release.sh "${VERSION}" windows amd64
+          cp release/sussurro-windows-amd64.zip dist/
+          cp release/sussurro-windows-amd64.zip.sha256 dist/
+
+          ./scripts/package-transcribe.sh "${VERSION}" windows amd64
+          cp release/sussurro-transcribe-windows-amd64.zip dist/
+          cp release/sussurro-transcribe-windows-amd64.zip.sha256 dist/
+
+      - name: Verify stamped version
+        env:
+          VERSION: ${{ needs.resolve-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          reported="$(./bin/sussurro-transcribe.exe -version 2>&1 || true)"
+          echo "${reported}"
+          if [[ "${reported}" != *"${VERSION}"* ]]; then
+            echo "Binary does not report the tag version ${VERSION}." >&2
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sussurro-windows-amd64
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs:
+      - resolve-version
+      - build-unix
+      - build-windows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List assets
+        run: ls -lh dist
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.resolve-version.outputs.tag }}
+          name: Sussurro ${{ needs.resolve-version.outputs.tag }}
+          draft: false
+          prerelease: ${{ needs.resolve-version.outputs.prerelease == 'true' }}
+          make_latest: ${{ needs.resolve-version.outputs.prerelease == 'true' && 'false' || 'true' }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
+            dist/*.zip
+            dist/*.zip.sha256
