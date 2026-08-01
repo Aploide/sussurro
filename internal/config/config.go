@@ -23,6 +23,9 @@ type AppConfig struct {
 	LogLevel        string `mapstructure:"log_level"`
 	LowercaseOutput bool   `mapstructure:"lowercase_output"`
 	SkipLLMCleanup  bool   `mapstructure:"skip_llm_cleanup"`
+	// Dictionary lists names and terms the cleanup stage must spell exactly
+	// as written (personal vocabulary the ASR tends to mishear).
+	Dictionary []string `mapstructure:"dictionary"`
 }
 
 type AudioConfig struct {
@@ -50,6 +53,12 @@ type LLMConfig struct {
 	ContextSize int    `mapstructure:"context_size"`
 	GpuLayers   int    `mapstructure:"gpu_layers"`
 	Threads     int    `mapstructure:"threads"`
+	// ExtendedPrompt enables richer cleanup instructions (no-summarization
+	// contract, list formatting, prompt-level dictionary). Leave false for
+	// the bundled qwen3-sussurro fine-tune, which only behaves with the
+	// prompt it was trained on; set true when pointing path at a general
+	// instruct model.
+	ExtendedPrompt bool `mapstructure:"extended_prompt"`
 }
 
 type HotkeyConfig struct {
@@ -312,7 +321,11 @@ func LoadConfig(path string) (*Config, error) {
 		viper.SetConfigName("config") // Look for config.yaml (or .json, .toml)
 		viper.SetConfigType("yaml")
 		viper.AddConfigPath(".")
-		viper.AddConfigPath("$HOME/.sussurro")
+		// Use the resolved home directory rather than a "$HOME" literal:
+		// viper does not expand it, and the variable does not exist on Windows.
+		if home, err := os.UserHomeDir(); err == nil {
+			viper.AddConfigPath(filepath.Join(home, ".sussurro"))
+		}
 		viper.AddConfigPath("./configs")
 	}
 

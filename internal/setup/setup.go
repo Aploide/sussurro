@@ -72,6 +72,9 @@ const (
   name: "Sussurro"
   debug: false
   log_level: "info" # debug, info, warn, error
+  # Personal dictionary: names and terms the cleanup stage must spell exactly
+  # as written here (fixes words the ASR tends to mishear).
+  dictionary: []
 
 audio:
   sample_rate: 16000

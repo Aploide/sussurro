@@ -1,20 +1,22 @@
 package ui
 
 import (
-	_ "embed"
+	"runtime"
 
 	"github.com/getlantern/systray"
 )
 
-//go:embed assets/tray.png
-var trayIcon []byte
-
-//go:embed assets/tray_rec.png
-var trayIconRec []byte
+// trayIcon / trayIconRec are embedded per-platform in tray_icons_unix.go
+// (PNG) and tray_icons_windows.go (ICO — LoadImageW on Windows only accepts
+// real ICO content).
 
 // runTray starts the system tray in the calling goroutine (blocks).
 // It must be started with go m.runTray() so it doesn't block the UI thread.
 func (m *Manager) runTray() {
+	// Windows message queues are per-thread: systray creates its hidden window
+	// and pumps GetMessage from this goroutine, so it must stay on one OS
+	// thread. Harmless on the DBus (Linux) and Cocoa (macOS) backends.
+	runtime.LockOSThread()
 	systray.Run(m.onTrayReady, m.onTrayExit)
 }
 

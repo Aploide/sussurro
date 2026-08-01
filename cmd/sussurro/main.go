@@ -119,6 +119,8 @@ func run() {
 		os.Exit(1)
 	}
 	defer llmEngine.Close()
+	llmEngine.SetDictionary(cfg.App.Dictionary)
+	llmEngine.SetExtendedPrompt(cfg.Models.LLM.ExtendedPrompt)
 
 	// Initialize Injector
 	injector, err := injection.NewInjector()

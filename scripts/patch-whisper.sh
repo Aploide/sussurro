@@ -74,7 +74,19 @@ if [ -f "$WHISPER_DIR/ggml/src/ggml-metal/CMakeLists.txt" ]; then
     $SED_INPLACE 's/__wsp_ggml_metallib/__wsp_ggml_mtl/g' "$WHISPER_DIR/ggml/src/ggml-metal/CMakeLists.txt"
 fi
 
-# 7. Ensure Go bindings can locate headers and static libs without external env vars
+# 7. Revert the quantize_q rename inside the Vulkan backend.
+# There, quantize_q8_1 is a SPIR-V shader: vulkan-shaders-gen resolves it to
+# the source file quantize_q8_1.comp (shader files are not renamed), so the
+# renamed name strings would make shader generation silently skip it and the
+# host references would never link. It is not a ggml quantization function,
+# so reverting cannot collide with go-llama.cpp's ggml.
+if [ -d "$WHISPER_DIR/ggml/src/ggml-vulkan" ]; then
+    $SED_INPLACE 's/wsp_quantize_q8_1/quantize_q8_1/g' \
+        "$WHISPER_DIR/ggml/src/ggml-vulkan/ggml-vulkan.cpp" \
+        "$WHISPER_DIR/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp"
+fi
+
+# 8. Ensure Go bindings can locate headers and static libs without external env vars
 BINDINGS_GO="$WHISPER_DIR/bindings/go/whisper.go"
 if [ -f "$BINDINGS_GO" ]; then
     if ! grep -q '#cgo CFLAGS: -I${SRCDIR}/../../include -I${SRCDIR}/../../ggml/include' "$BINDINGS_GO"; then

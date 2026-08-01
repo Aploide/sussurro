@@ -33,6 +33,17 @@ if [[ "${PLATFORM}" == "darwin" ]]; then
     PLATFORM="macos"
 fi
 
+# MSYS2 / Git Bash report MINGW64_NT-* / MSYS_NT-* → windows
+case "${PLATFORM}" in
+    mingw*|msys*|cygwin*) PLATFORM="windows" ;;
+esac
+
+# Binary name differs on Windows
+BIN_NAME="sussurro"
+if [[ "${PLATFORM}" == "windows" ]]; then
+    BIN_NAME="sussurro.exe"
+fi
+
 # ── Setup ──────────────────────────────────────────────────────────────────────
 
 RELEASE_NAME="sussurro-${PLATFORM}-${ARCH}"
@@ -45,16 +56,16 @@ rm -rf release
 mkdir -p "${RELEASE_DIR}"
 
 # Check if binary exists
-if [ ! -f "bin/sussurro" ]; then
-    echo "Error: bin/sussurro not found. Run 'make build' first."
+if [ ! -f "bin/${BIN_NAME}" ]; then
+    echo "Error: bin/${BIN_NAME} not found. Run 'make build' first."
     exit 1
 fi
 
 # ── Files ──────────────────────────────────────────────────────────────────────
 
 echo "Copying binary..."
-cp bin/sussurro "${RELEASE_DIR}/sussurro"
-chmod +x "${RELEASE_DIR}/sussurro"
+cp "bin/${BIN_NAME}" "${RELEASE_DIR}/${BIN_NAME}"
+chmod +x "${RELEASE_DIR}/${BIN_NAME}"
 
 # trigger.sh is a Wayland/X11 helper — only relevant on Linux
 if [[ "${PLATFORM}" == "linux" ]]; then
@@ -77,6 +88,12 @@ cp configs/default.yaml "${RELEASE_DIR}/config.example.yaml"
         echo "1. Make the binary executable:  chmod +x sussurro"
         echo "2. Remove macOS quarantine:     xattr -d com.apple.quarantine sussurro"
         echo "3. Run:                         ./sussurro"
+    elif [[ "${PLATFORM}" == "windows" ]]; then
+        echo "1. Run sussurro.exe (double-click, or from a terminal for setup prompts)"
+        echo "2. Hold Ctrl+Shift+Space to talk, release to transcribe."
+        echo ""
+        echo "Requirements: Windows 10/11 with the WebView2 runtime (preinstalled"
+        echo "on Windows 11). GPU acceleration uses Vulkan via your graphics driver."
     else
         echo "1. Make the binary executable:  chmod +x sussurro trigger.sh"
         echo "2. Run:                         ./sussurro"
@@ -112,17 +129,31 @@ cp configs/default.yaml "${RELEASE_DIR}/config.example.yaml"
 
 # ── Tarball + checksum ─────────────────────────────────────────────────────────
 
-echo "Creating tarball..."
-cd release
-tar -czf "${RELEASE_NAME}.tar.gz" "${RELEASE_NAME}/"
-cd ..
+if [[ "${PLATFORM}" == "windows" ]]; then
+    # Windows users expect a zip (Explorer extracts it natively).
+    ARCHIVE="${RELEASE_NAME}.zip"
+    echo "Creating zip..."
+    cd release
+    if command -v zip &> /dev/null; then
+        zip -qr "${ARCHIVE}" "${RELEASE_NAME}/"
+    else
+        bsdtar -a -cf "${ARCHIVE}" "${RELEASE_NAME}/"
+    fi
+    cd ..
+else
+    ARCHIVE="${RELEASE_NAME}.tar.gz"
+    echo "Creating tarball..."
+    cd release
+    tar -czf "${ARCHIVE}" "${RELEASE_NAME}/"
+    cd ..
+fi
 
 echo "Generating checksum..."
 cd release
 if command -v sha256sum &> /dev/null; then
-    sha256sum "${RELEASE_NAME}.tar.gz" > "${RELEASE_NAME}.tar.gz.sha256"
+    sha256sum "${ARCHIVE}" > "${ARCHIVE}.sha256"
 elif command -v shasum &> /dev/null; then
-    shasum -a 256 "${RELEASE_NAME}.tar.gz" > "${RELEASE_NAME}.tar.gz.sha256"
+    shasum -a 256 "${ARCHIVE}" > "${ARCHIVE}.sha256"
 else
     echo "Warning: sha256sum or shasum not found. Skipping checksum generation."
 fi
@@ -133,12 +164,12 @@ cd ..
 echo ""
 echo "Release package created successfully!"
 echo ""
-echo "Package : release/${RELEASE_NAME}.tar.gz"
-echo "SHA256  : release/${RELEASE_NAME}.tar.gz.sha256"
+echo "Package : release/${ARCHIVE}"
+echo "SHA256  : release/${ARCHIVE}.sha256"
 echo ""
 echo "Contents:"
 ls -lh "release/${RELEASE_NAME}/"
 echo ""
 echo "Upload these files to GitHub Releases:"
-echo "  - release/${RELEASE_NAME}.tar.gz"
-echo "  - release/${RELEASE_NAME}.tar.gz.sha256"
+echo "  - release/${ARCHIVE}"
+echo "  - release/${ARCHIVE}.sha256"

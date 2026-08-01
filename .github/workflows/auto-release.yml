@@ -121,10 +121,53 @@ jobs:
             dist/sussurro-transcribe-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz
             dist/sussurro-transcribe-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz.sha256
 
+  build-windows:
+    needs: detect-version
+    if: needs.detect-version.outputs.should_release == 'true'
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          # inherit lets the msys2 shell see the setup-go toolchain;
+          # /mingw64/bin still wins for gcc/cmake/ninja.
+          path-type: inherit
+          install: make git zip
+          pacboy: >-
+            gcc:p cmake:p ninja:p pkgconf:p
+            vulkan-headers:p vulkan-loader:p shaderc:p
+
+      - name: Build and package
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          chmod +x scripts/*.sh
+          make build build-transcribe
+          ./scripts/package-release.sh "${{ needs.detect-version.outputs.version }}" windows amd64
+          cp release/sussurro-windows-amd64.zip dist/
+          cp release/sussurro-windows-amd64.zip.sha256 dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sussurro-windows-amd64
+          path: |
+            dist/sussurro-windows-amd64.zip
+            dist/sussurro-windows-amd64.zip.sha256
+
   draft-release:
     needs:
       - detect-version
       - build-assets
+      - build-windows
     if: needs.detect-version.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -171,3 +214,5 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/*.tar.gz.sha256
+            dist/*.zip
+            dist/*.zip.sha256

@@ -4,6 +4,12 @@ app:
   log_level: "info" # debug, info, warn, error
   lowercase_output: false
   skip_llm_cleanup: false
+  # Personal dictionary: names and terms the cleanup stage must spell exactly
+  # as written here (fixes words the ASR tends to mishear).
+  # dictionary:
+  #   - "Sussurro"
+  #   - "whisper.cpp"
+  dictionary: []
 
 audio:
   sample_rate: 16000
@@ -23,6 +29,10 @@ models:
     context_size: 32768
     gpu_layers: 0
     threads: 4
+    # Extended cleanup instructions (no-summarization contract, list
+    # formatting, prompt-level dictionary). Leave false for the bundled
+    # qwen3-sussurro model; set true when using a general instruct model.
+    extended_prompt: false
 
 hotkey:
   trigger: "ctrl+shift+space"

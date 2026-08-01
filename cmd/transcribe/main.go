@@ -87,6 +87,8 @@ func main() {
 			os.Exit(1)
 		}
 		defer llmEngine.Close()
+		llmEngine.SetDictionary(cfg.App.Dictionary)
+		llmEngine.SetExtendedPrompt(cfg.Models.LLM.ExtendedPrompt)
 
 		cleaned, err := llmEngine.CleanupText(text)
 		if err != nil {
