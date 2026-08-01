@@ -1,4 +1,4 @@
-module github.com/cesp99/sussurro
+module github.com/aploide/sussurro
 
 go 1.25.0
 

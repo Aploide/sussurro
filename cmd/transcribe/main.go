@@ -8,11 +8,11 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/cesp99/sussurro/internal/asr"
-	"github.com/cesp99/sussurro/internal/config"
-	"github.com/cesp99/sussurro/internal/llm"
-	"github.com/cesp99/sussurro/internal/logger"
-	"github.com/cesp99/sussurro/internal/version"
+	"github.com/aploide/sussurro/internal/asr"
+	"github.com/aploide/sussurro/internal/config"
+	"github.com/aploide/sussurro/internal/llm"
+	"github.com/aploide/sussurro/internal/logger"
+	"github.com/aploide/sussurro/internal/version"
 )
 
 func main() {

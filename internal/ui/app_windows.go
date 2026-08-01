@@ -9,7 +9,7 @@ import (
 	"time"
 	"unsafe"
 
-	ihk "github.com/cesp99/sussurro/internal/hotkey"
+	ihk "github.com/aploide/sussurro/internal/hotkey"
 	"golang.org/x/sys/windows"
 )
 

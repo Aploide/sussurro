@@ -2,7 +2,7 @@
 
 package ui
 
-import ihk "github.com/cesp99/sussurro/internal/hotkey"
+import ihk "github.com/aploide/sussurro/internal/hotkey"
 
 // installOverlayHotkey registers an X11 global hotkey via GDK XGrabKey.
 // On Wayland, the overlay is a *linuxOverlay but IsWayland() returns true,

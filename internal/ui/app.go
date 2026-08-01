@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cesp99/sussurro/internal/config"
+	"github.com/aploide/sussurro/internal/config"
 )
 
 // Manager is the top-level UI controller.

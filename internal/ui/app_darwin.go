@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	ihk "github.com/cesp99/sussurro/internal/hotkey"
+	ihk "github.com/aploide/sussurro/internal/hotkey"
 	xhotkey "golang.design/x/hotkey"
 )
 

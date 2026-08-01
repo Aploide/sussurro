@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/cesp99/sussurro/internal/logger"
+	"github.com/aploide/sussurro/internal/logger"
 	"github.com/ggerganov/whisper.cpp/bindings/go/pkg/whisper"
 )
 

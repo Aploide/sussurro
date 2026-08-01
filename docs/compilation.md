@@ -228,7 +228,7 @@ export PATH="$PATH:/c/Program Files/Go/bin"
 From the **MSYS2 MINGW64** shell:
 
 ```bash
-git -c core.autocrlf=false clone https://github.com/cesp99/sussurro.git
+git -c core.autocrlf=false clone https://github.com/aploide/sussurro.git
 cd sussurro
 make build build-transcribe   # produces bin/sussurro.exe and bin/sussurro-transcribe.exe
 ```

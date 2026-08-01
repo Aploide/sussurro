@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	llama "github.com/AshkanYarmoradi/go-llama.cpp"
-	"github.com/cesp99/sussurro/internal/logger"
+	"github.com/aploide/sussurro/internal/logger"
 )
 
 // Pre-compiled regexes — compiling on every call is expensive.

@@ -7,12 +7,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cesp99/sussurro/internal/asr"
-	"github.com/cesp99/sussurro/internal/audio"
-	"github.com/cesp99/sussurro/internal/clipboard"
-	ctxProvider "github.com/cesp99/sussurro/internal/context"
-	"github.com/cesp99/sussurro/internal/injection"
-	"github.com/cesp99/sussurro/internal/llm"
+	"github.com/aploide/sussurro/internal/asr"
+	"github.com/aploide/sussurro/internal/audio"
+	"github.com/aploide/sussurro/internal/clipboard"
+	ctxProvider "github.com/aploide/sussurro/internal/context"
+	"github.com/aploide/sussurro/internal/injection"
+	"github.com/aploide/sussurro/internal/llm"
 )
 
 // audioBufferCapFor returns a sensible pre-allocation capacity (in samples)

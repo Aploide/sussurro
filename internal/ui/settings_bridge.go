@@ -8,9 +8,9 @@ import (
 	"os/exec"
 	"runtime"
 
-	"github.com/cesp99/sussurro/internal/config"
-	"github.com/cesp99/sussurro/internal/setup"
-	"github.com/cesp99/sussurro/internal/version"
+	"github.com/aploide/sussurro/internal/config"
+	"github.com/aploide/sussurro/internal/setup"
+	"github.com/aploide/sussurro/internal/version"
 )
 
 // modelInfo describes a model for the settings UI.

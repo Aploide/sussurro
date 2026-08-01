@@ -6,7 +6,7 @@ CMD_DIR := cmd/sussurro
 # (see .github/workflows/release.yml); local builds leave it empty and the
 # binary reports the "dev" default from internal/version.
 VERSION ?=
-VERSION_PKG := github.com/cesp99/sussurro/internal/version
+VERSION_PKG := github.com/aploide/sussurro/internal/version
 GO_LDFLAGS := $(if $(VERSION),-ldflags "-X $(VERSION_PKG).Version=$(VERSION)")
 
 # Whisper.cpp configuration
