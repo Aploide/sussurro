@@ -20,7 +20,7 @@
         "url": "https://sussurro.eyed.to"
       },
       "repositoryUrl": {
-        "url": "https://github.com/cesp99/sussurro"
+        "url": "https://github.com/aploide/sussurro"
       },
       "licenses": [
         "spdx:GPL-3.0-only"
@@ -32,6 +32,7 @@
         "golang",
         "linux",
         "macos",
+        "windows",
         "open-source",
         "local-first"
       ]

@@ -40,9 +40,26 @@ No extra dependencies required. The overlay capsule, settings window, system tra
 
 > **Accessibility permission:** On first run macOS will ask you to grant Accessibility access (System Settings → Privacy & Security → Accessibility). This is required for the global hotkey (CGEventTap).
 
-## Step 3: Download Sussurro
+### Windows
+No extra dependencies required beyond the **WebView2 runtime**, which powers the overlay and settings window and is preinstalled on Windows 11. On Windows 10, get it from [Microsoft](https://developer.microsoft.com/microsoft-edge/webview2/).
 
-Go to [GitHub Releases](https://github.com/cesp99/sussurro/releases) and download the binary for your platform:
+GPU acceleration for Whisper runs on **Vulkan** through your graphics driver; if no Vulkan device is available it falls back to CPU.
+
+## Step 3: Install Sussurro
+
+The fastest path is the install script, which resolves the latest release, verifies its checksum, and puts the binary on your PATH:
+
+```bash
+# macOS & Linux
+curl -fsSL https://raw.githubusercontent.com/aploide/sussurro/master/scripts/install.sh | bash
+```
+
+```powershell
+# Windows
+irm https://raw.githubusercontent.com/aploide/sussurro/master/scripts/install.ps1 | iex
+```
+
+To install manually instead, grab the archive for your platform from [GitHub Releases](https://github.com/aploide/sussurro/releases):
 
 ```bash
 tar -xzf sussurro-*.tar.gz
@@ -53,12 +70,20 @@ chmod +x sussurro
 xattr -d com.apple.quarantine sussurro 2>/dev/null || true
 ```
 
+On Windows, unzip `sussurro-windows-amd64.zip` and run `sussurro.exe` from the extracted folder.
+
+> Release archives are published for `linux-amd64`, `linux-arm64`, `macos-arm64`, and `windows-amd64`. Intel Macs are not prebuilt — see [Compilation](compilation.md).
+
 ## Step 4: Run for the First Time
 
 > **Important:** At this stage Sussurro must be launched from a terminal. Double-clicking the binary or using a `.desktop` shortcut is not yet supported — the overlay and tray icon will not appear correctly outside a terminal session.
 
 ```bash
-./sussurro
+./sussurro          # macOS / Linux
+```
+
+```powershell
+sussurro            # Windows
 ```
 
 Follow the prompts to choose and download the AI models:
@@ -66,24 +91,24 @@ Follow the prompts to choose and download the AI models:
 - **Whisper Large v3 Turbo** (~1.62 GB) — slower, best accuracy
 - **Qwen 3 Sussurro LLM** (~1.28 GB) — always required
 
-After download completes, the overlay capsule appears at the bottom of your screen on both Linux and macOS.
+After download completes, the overlay capsule appears at the bottom of your screen on Linux, macOS, and Windows.
 
 > **Tip:** Switch Whisper model any time via the Settings window or `./sussurro --whisper`.
 
 ## Step 5: Configure Hotkey (Wayland Only)
 
-**Skip this if you're on X11 or macOS — hotkeys work automatically.**
+**Skip this if you're on X11, macOS, or Windows — hotkeys work automatically.**
 
-On Wayland, configure a keyboard shortcut in your DE that calls the trigger script.
+On Wayland, configure a keyboard shortcut in your DE that calls the trigger script. The install script puts it on your PATH as `sussurro-trigger`; if you unpacked the archive manually, use the full path to the bundled `trigger.sh` instead.
 
 ### GNOME (Wayland)
 1. Settings → Keyboard → Keyboard Shortcuts → Custom Shortcuts → **+**
-2. Name: `Sussurro Start`, Command: `/path/to/trigger.sh start`, Shortcut: `Ctrl+Shift+Space`
-3. Add a second: `Sussurro Stop`, Command: `/path/to/trigger.sh stop`, same shortcut on key-release
+2. Name: `Sussurro Start`, Command: `sussurro-trigger start`, Shortcut: `Ctrl+Shift+Space`
+3. Add a second: `Sussurro Stop`, Command: `sussurro-trigger stop`, same shortcut on key-release
 
 ### KDE Plasma (Wayland)
 1. System Settings → Shortcuts → Custom Shortcuts → New → Global Shortcut → Command/URL
-2. Trigger: `Ctrl+Shift+Space`, Action: `/path/to/trigger.sh`
+2. Trigger: `Ctrl+Shift+Space`, Action: `sussurro-trigger`
 
 ### Sway / Hyprland
 See [wayland.md](wayland.md) for config file snippets.
@@ -91,7 +116,7 @@ See [wayland.md](wayland.md) for config file snippets.
 ## Step 6: Test It
 
 1. Open any text editor and click inside it
-2. **Linux X11 / macOS:** Hold the configured hotkey (default `Ctrl+Shift+Space` on Linux, `Cmd+Shift+Space` on macOS), speak, release
+2. **Linux X11 / macOS / Windows:** Hold the configured hotkey (default `Ctrl+Shift+Space` on Linux and Windows, `Cmd+Shift+Space` on macOS), speak, release
 3. **Wayland:** Press once, speak, press again
 4. Watch the capsule animate — then text appears
 
@@ -104,7 +129,7 @@ Open the Settings window:
 From Settings you can:
 - Switch or download Whisper models with a live progress bar
 - Change the transcription language (Auto Detect, English, German, Spanish, French, Portuguese, Russian, Italian)
-- Change the global hotkey (X11 / macOS) — takes effect immediately, no restart needed
+- Change the global hotkey (X11 / macOS / Windows) — takes effect immediately, no restart needed
   - Hold up to 3 keys in the recorder, then release them all to save
 
 ## Troubleshooting

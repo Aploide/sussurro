@@ -1,11 +1,25 @@
 #!/usr/bin/env bash
-# sussurro-transcribe installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/cesp99/sussurro/master/scripts/install-transcribe.sh | bash
+# sussurro-transcribe installer (macOS + Linux)
+# Usage: curl -fsSL https://raw.githubusercontent.com/aploide/sussurro/master/scripts/install-transcribe.sh | bash
+#
+# Windows is installed with scripts/install-transcribe.ps1 instead:
+#   irm https://raw.githubusercontent.com/aploide/sussurro/master/scripts/install-transcribe.ps1 | iex
 set -euo pipefail
 
-REPO="cesp99/sussurro"
+REPO="aploide/sussurro"
 BINARY="sussurro-transcribe"
 INSTALL_DIR=""   # resolved below
+
+# Scratch dir for the download. Kept at global scope with a global trap: the
+# EXIT trap fires after main() returns, so a `local` here would already be out
+# of scope and `set -u` would abort the cleanup instead of running it.
+TMP_WORKDIR=""
+cleanup() { [ -n "${TMP_WORKDIR}" ] && rm -rf "${TMP_WORKDIR}"; }
+trap cleanup EXIT
+
+# Platform-arch combinations the release workflow actually publishes.
+# Keep in sync with the build matrix in .github/workflows/release.yml.
+SUPPORTED_TARGETS="linux-amd64 linux-arm64 macos-arm64"
 
 # ── colours ──────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -14,7 +28,7 @@ CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
 info()    { printf "${CYAN}  →${RESET} %s\n" "$*"; }
 success() { printf "${GREEN}  ✓${RESET} %s\n" "$*"; }
 warn()    { printf "${YELLOW}  ⚠${RESET} %s\n" "$*"; }
-die()     { printf "${RED}  ✗${RESET} %s\n" "$*" >&2; exit 1; }
+die()     { printf "${RED}  ✗${RESET} %b\n" "$*" >&2; exit 1; }
 header()  { printf "\n${BOLD}%s${RESET}\n" "$*"; }
 
 # ── detect OS & arch ─────────────────────────────────────────────────────────
@@ -24,7 +38,9 @@ detect_platform() {
     case "$(uname -s)" in
         Darwin) os="macos" ;;
         Linux)  os="linux" ;;
-        *)      die "Unsupported OS: $(uname -s). Only macOS and Linux are supported." ;;
+        MINGW*|MSYS*|CYGWIN*)
+            die "This script installs the macOS and Linux builds.\n    On Windows run instead:\n      irm https://raw.githubusercontent.com/${REPO}/master/scripts/install-transcribe.ps1 | iex" ;;
+        *)      die "Unsupported OS: $(uname -s). Only macOS, Linux, and Windows (via install-transcribe.ps1) are supported." ;;
     esac
 
     case "$(uname -m)" in
@@ -34,6 +50,19 @@ detect_platform() {
     esac
 
     echo "${os}-${arch}"
+}
+
+# ── refuse targets the release workflow does not build ───────────────────────
+check_target_published() {
+    local platform="$1" target
+    for target in ${SUPPORTED_TARGETS}; do
+        [ "${target}" = "${platform}" ] && return 0
+    done
+
+    if [ "${platform}" = "macos-amd64" ]; then
+        die "No prebuilt binary for Intel Macs (macos-amd64).\n    Releases ship Apple Silicon (macos-arm64) only.\n    Build from source: https://github.com/${REPO}/blob/master/docs/compilation.md"
+    fi
+    die "No prebuilt binary for '${platform}'.\n    Published targets: ${SUPPORTED_TARGETS}\n    Build from source: https://github.com/${REPO}/blob/master/docs/compilation.md"
 }
 
 # ── check for ffmpeg ──────────────────────────────────────────────────────────
@@ -75,7 +104,7 @@ ensure_in_path() {
     if [[ ":$PATH:" != *":$dir:"* ]]; then
         warn "$dir is not in your PATH."
         local shell_rc=""
-        case "$SHELL" in
+        case "${SHELL:-}" in
             */zsh)  shell_rc="$HOME/.zshrc"  ;;
             */bash) shell_rc="$HOME/.bashrc" ;;
             *)      shell_rc="$HOME/.profile" ;;
@@ -102,14 +131,52 @@ fetch_latest_version() {
     echo "$tag"
 }
 
-# ── download helper ───────────────────────────────────────────────────────────
+# ── download helpers ──────────────────────────────────────────────────────────
 download() {
     local url="$1" dest="$2"
     if command -v curl &>/dev/null; then
-        curl -fsSL --progress-bar "$url" -o "$dest"
+        curl -fL --progress-bar "$url" -o "$dest"
     else
         wget -q --show-progress "$url" -O "$dest"
     fi
+}
+
+download_quiet() {
+    local url="$1" dest="$2"
+    if command -v curl &>/dev/null; then
+        curl -fsSL "$url" -o "$dest"
+    else
+        wget -qO "$dest" "$url"
+    fi
+}
+
+# ── verify the archive against the published .sha256 ─────────────────────────
+verify_checksum() {
+    local archive="$1" checksum_url="$2" expected actual
+
+    if ! download_quiet "$checksum_url" "${archive}.sha256" 2>/dev/null; then
+        warn "Checksum file not published for this release — skipping verification."
+        return 0
+    fi
+
+    expected=$(awk '{print $1}' "${archive}.sha256")
+    if [ -z "$expected" ]; then
+        warn "Checksum file is empty — skipping verification."
+        return 0
+    fi
+
+    if command -v sha256sum &>/dev/null; then
+        actual=$(sha256sum "$archive" | awk '{print $1}')
+    elif command -v shasum &>/dev/null; then
+        actual=$(shasum -a 256 "$archive" | awk '{print $1}')
+    else
+        warn "Neither sha256sum nor shasum found — skipping verification."
+        return 0
+    fi
+
+    [ "$expected" = "$actual" ] \
+        || die "Checksum mismatch — refusing to install.\n    expected: ${expected}\n    actual:   ${actual}"
+    success "Checksum verified"
 }
 
 # ── check whether Sussurro config exists ─────────────────────────────────────
@@ -133,6 +200,7 @@ main() {
     local platform
     platform=$(detect_platform)
     info "Detected platform: ${platform}"
+    check_target_published "${platform}"
 
     # 2. Check runtime dependencies
     check_ffmpeg
@@ -145,32 +213,34 @@ main() {
 
     # 4. Build download URL
     #    The dedicated transcribe archive: sussurro-transcribe-linux-amd64.tar.gz
-    local archive_base="sussurro-transcribe-${platform}"
+    local archive_base="${BINARY}-${platform}"
     local archive_name="${archive_base}.tar.gz"
     local download_url="https://github.com/${REPO}/releases/download/${version}/${archive_name}"
 
-    # 5. Download to a temp dir
+    # 5. Download to a temp dir (removed by the global EXIT trap)
     local tmpdir
-    tmpdir=$(mktemp -d)
-    trap 'rm -rf "$tmpdir"' EXIT
+    TMP_WORKDIR=$(mktemp -d)
+    tmpdir="${TMP_WORKDIR}"
 
     info "Downloading ${archive_name}..."
     download "$download_url" "${tmpdir}/${archive_name}" \
-        || die "Download failed. Make sure a release for '${platform}' exists at:\n  ${download_url}"
+        || die "Download failed. Make sure a release for '${platform}' exists at:\n    ${download_url}"
 
     # 6. Verify download
     local sz
     sz=$(wc -c < "${tmpdir}/${archive_name}")
     [ "$sz" -gt 1024 ] || die "Downloaded file looks corrupt (only ${sz} bytes)."
 
+    verify_checksum "${tmpdir}/${archive_name}" "${download_url}.sha256"
+
     # 7. Extract
     info "Extracting..."
     tar -xzf "${tmpdir}/${archive_name}" -C "$tmpdir"
 
-    # Binary lives inside: sussurro-linux-amd64/sussurro-transcribe
+    # Archive layout: sussurro-transcribe-linux-amd64/sussurro-transcribe
     local extracted_binary="${tmpdir}/${archive_base}/${BINARY}"
     [ -f "$extracted_binary" ] \
-        || die "Binary not found in archive. Expected: ${archive_base}/${BINARY}\nThe release may not include the transcribe companion yet."
+        || die "Binary not found in archive. Expected: ${archive_base}/${BINARY}\n    The release may not include the transcribe companion yet."
 
     # 8. Install
     INSTALL_DIR=$(pick_install_dir)
@@ -201,7 +271,7 @@ main() {
     printf "  Basic:      ${CYAN}sussurro-transcribe -i audio.mp3${RESET}\n"
     printf "  With LLM:   ${CYAN}sussurro-transcribe -i audio.wav -clean${RESET}\n"
     printf "  To file:    ${CYAN}sussurro-transcribe -i audio.mp3 -o out.txt${RESET}\n"
-    printf "\n  Full docs:  https://github.com/cesp99/sussurro/blob/master/docs/transcribe.md\n\n"
+    printf "\n  Full docs:  https://github.com/${REPO}/blob/master/docs/transcribe.md\n\n"
 }
 
 main "$@"

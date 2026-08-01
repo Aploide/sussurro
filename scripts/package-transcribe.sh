@@ -122,7 +122,7 @@ cp configs/default.yaml "${RELEASE_DIR}/config.example.yaml"
     echo ""
     echo "Documentation:"
     echo "--------------"
-    echo "Full docs:  https://github.com/cesp99/sussurro/blob/master/docs/transcribe.md"
+    echo "Full docs:  https://github.com/aploide/sussurro/blob/master/docs/transcribe.md"
 } > "${RELEASE_DIR}/INSTALL.txt"
 
 # ── Tarball + checksum ─────────────────────────────────────────────────────────

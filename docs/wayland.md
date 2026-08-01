@@ -36,10 +36,14 @@ See [dependencies.md](dependencies.md) for other optional packages.
 
 ### Option 1: Using the Helper Script (Recommended)
 
+`scripts/install.sh` installs the helper on your PATH as **`sussurro-trigger`**, so
+that name is what the examples below use. If you unpacked a release archive by
+hand, substitute the full path to the bundled `trigger.sh` instead.
+
 1. Open your desktop environment's keyboard settings
 2. Add a custom keyboard shortcut
 3. Set the shortcut key: `Ctrl+Shift+Space`
-4. Set the command to: `/path/to/sussurro/scripts/trigger.sh`
+4. Set the command to: `sussurro-trigger`
 
 ### Option 2: Direct Socket Command
 
@@ -59,7 +63,7 @@ If you prefer not to use the script:
 3. Click **"Custom Shortcuts"** at the bottom
 4. Click the **"+"** button to add a new shortcut
 5. Name: `Sussurro Voice Input`
-6. Command: `/path/to/sussurro/scripts/trigger.sh`
+6. Command: `sussurro-trigger`
 7. Click **"Set Shortcut"** and press `Ctrl+Shift+Space`
 8. Click **"Add"**
 
@@ -69,7 +73,7 @@ If you prefer not to use the script:
 2. Click **"Custom Shortcuts"** in the left panel
 3. Right-click in the empty area → **"New"** → **"Global Shortcut"** → **"Command/URL"**
 4. In the **"Trigger"** tab, click the button and press `Ctrl+Shift+Space`
-5. In the **"Action"** tab, enter: `/path/to/sussurro/scripts/trigger.sh`
+5. In the **"Action"** tab, enter: `sussurro-trigger`
 6. Click **"Apply"**
 
 ### Sway (i3-like Wayland compositor)
@@ -77,7 +81,7 @@ If you prefer not to use the script:
 Add to your `~/.config/sway/config`:
 
 ```
-bindsym Ctrl+Shift+Space exec /path/to/sussurro/scripts/trigger.sh
+bindsym Ctrl+Shift+Space exec sussurro-trigger
 ```
 
 Then reload Sway: `swaymsg reload`
@@ -87,7 +91,7 @@ Then reload Sway: `swaymsg reload`
 Add to your `~/.config/hypr/hyprland.conf`:
 
 ```
-bind = CTRL SHIFT, Space, exec, /path/to/sussurro/scripts/trigger.sh
+bind = CTRL SHIFT, Space, exec, sussurro-trigger
 ```
 
 Then reload: `hyprctl reload`

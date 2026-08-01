@@ -1,5 +1,5 @@
-# Sussurro Windows installer.
-# Usage: irm https://raw.githubusercontent.com/aploide/sussurro/master/scripts/install.ps1 | iex
+# sussurro-transcribe Windows installer.
+# Usage: irm https://raw.githubusercontent.com/aploide/sussurro/master/scripts/install-transcribe.ps1 | iex
 
 $ErrorActionPreference = "Stop"
 
@@ -7,15 +7,14 @@ $ErrorActionPreference = "Stop"
 # which api.github.com rejects outright. PowerShell 7+ already defaults to 1.2+.
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
-# Invoke-WebRequest's progress bar makes large downloads several times slower
-# in Windows PowerShell; suppress it and report progress ourselves.
 $previousProgress = $ProgressPreference
 $ProgressPreference = "SilentlyContinue"
 
 $repo       = "aploide/sussurro"
-$assetName  = "sussurro-windows-amd64.zip"
+$assetName  = "sussurro-transcribe-windows-amd64.zip"
+# Share the main app's install directory so both binaries land on one PATH entry.
 $installDir = Join-Path $env:LOCALAPPDATA "Programs\Sussurro"
-$extractDir = Join-Path $env:TEMP "sussurro-extract"
+$extractDir = Join-Path $env:TEMP "sussurro-transcribe-extract"
 $zipPath    = Join-Path $env:TEMP $assetName
 $shaPath    = Join-Path $env:TEMP "$assetName.sha256"
 
@@ -24,12 +23,9 @@ function Write-Ok($message)   { Write-Host "  [ok] $message" -ForegroundColor Gr
 function Write-Warn($message) { Write-Host "  [!] $message" -ForegroundColor Yellow }
 
 try {
-    Write-Host "Sussurro Windows Installer" -ForegroundColor Cyan
-    Write-Host "=========================="
+    Write-Host "sussurro-transcribe Windows Installer" -ForegroundColor Cyan
+    Write-Host "====================================="
 
-    # Releases publish an x64 build only. Windows on ARM runs it through the
-    # x64 emulation layer, but Vulkan acceleration depends on the emulated
-    # driver stack, so warn rather than pretend it is a supported target.
     $arch = $env:PROCESSOR_ARCHITECTURE
     if ($arch -eq "ARM64") {
         Write-Warn "Detected ARM64. Only an x64 build is published; it will run under emulation and GPU acceleration may be unavailable."
@@ -37,32 +33,25 @@ try {
         throw "Unsupported architecture '$arch'. Releases ship windows-amd64 only. Build from source: https://github.com/$repo/blob/master/docs/compilation.md"
     }
 
-    # The overlay and settings window are WebView2-backed, so a missing runtime
-    # surfaces as a silent UI failure at first launch rather than an install error.
-    $webview2Keys = @(
-        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
-        "HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
-        "HKCU:\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
-    )
-    $hasWebView2 = $webview2Keys | Where-Object { Test-Path $_ } | Select-Object -First 1
-    if (-not $hasWebView2) {
-        Write-Warn "WebView2 runtime not detected. The overlay and settings window need it."
-        Write-Warn "Install it from https://developer.microsoft.com/microsoft-edge/webview2/ (preinstalled on Windows 11)."
+    # ffmpeg decodes the input audio; without it the CLI fails on every file.
+    if (Get-Command ffmpeg -ErrorAction SilentlyContinue) {
+        Write-Ok "ffmpeg found"
+    } else {
+        Write-Warn "ffmpeg not found - sussurro-transcribe needs it to decode audio files."
+        Write-Warn "Install it with:  winget install Gyan.FFmpeg"
     }
 
-    # Latest release
     Write-Step "Fetching latest release..."
     $release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest"
     $tag = $release.tag_name
     $asset = $release.assets | Where-Object { $_.name -eq $assetName }
     if (-not $asset) {
-        throw "No Windows build found in release $tag. Windows builds start after v2.3."
+        throw "No Windows transcribe build found in release $tag. Windows builds start after v2.3."
     }
 
-    Write-Step "Downloading Sussurro $tag..."
+    Write-Step "Downloading sussurro-transcribe $tag..."
     Invoke-WebRequest $asset.browser_download_url -OutFile $zipPath
 
-    # Every release asset ships a `<asset>.sha256` from scripts/package-release.sh.
     $checksumAsset = $release.assets | Where-Object { $_.name -eq "$assetName.sha256" }
     if ($checksumAsset) {
         Write-Step "Verifying checksum..."
@@ -89,14 +78,16 @@ try {
     if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
     Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
 
-    # Zip layout: sussurro-windows-amd64/{sussurro.exe,config.example.yaml,INSTALL.txt}
-    $payload = Join-Path $extractDir "sussurro-windows-amd64"
-    if (-not (Test-Path (Join-Path $payload "sussurro.exe"))) {
-        throw "sussurro.exe not found in the archive. Expected sussurro-windows-amd64\sussurro.exe"
+    # Zip layout: sussurro-transcribe-windows-amd64/{sussurro-transcribe.exe,...}
+    $payload = Join-Path $extractDir "sussurro-transcribe-windows-amd64"
+    $exe = Join-Path $payload "sussurro-transcribe.exe"
+    if (-not (Test-Path $exe)) {
+        throw "sussurro-transcribe.exe not found in the archive. Expected sussurro-transcribe-windows-amd64\sussurro-transcribe.exe"
     }
-    Copy-Item "$payload\*" $installDir -Recurse -Force
+    # Copy only the binary: the archive's config.example.yaml and INSTALL.txt
+    # would otherwise overwrite the main app's copies in the shared directory.
+    Copy-Item $exe $installDir -Force
 
-    # Add to user PATH if missing
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
     if ([string]::IsNullOrEmpty($userPath)) {
         [Environment]::SetEnvironmentVariable("Path", $installDir, "User")
@@ -106,11 +97,18 @@ try {
         Write-Ok "Added $installDir to your user PATH (new terminals will pick it up)."
     }
 
+    # Models are shared with the main app rather than downloaded by this CLI.
+    if (-not (Test-Path (Join-Path $env:USERPROFILE ".sussurro\config.yaml"))) {
+        Write-Warn "%USERPROFILE%\.sussurro\config.yaml not found."
+        Write-Warn "Run 'sussurro' once to download the shared models, or pass -config <path>."
+    }
+
     Write-Host ""
-    Write-Host "Sussurro $tag installed!" -ForegroundColor Green
-    Write-Host "Run 'sussurro' from a new terminal (or $installDir\sussurro.exe)."
-    Write-Host "First run downloads the AI models (~1.8 GB) and creates %USERPROFILE%\.sussurro."
-    Write-Host "Hold Ctrl+Shift+Space to talk, release to transcribe."
+    Write-Host "sussurro-transcribe $tag installed!" -ForegroundColor Green
+    Write-Host "  Basic:     sussurro-transcribe -i audio.mp3"
+    Write-Host "  With LLM:  sussurro-transcribe -i audio.wav -clean"
+    Write-Host "  To file:   sussurro-transcribe -i audio.mp3 -o out.txt"
+    Write-Host "  Docs:      https://github.com/$repo/blob/master/docs/transcribe.md"
 }
 finally {
     Remove-Item $zipPath, $shaPath, $extractDir -Recurse -Force -ErrorAction SilentlyContinue
