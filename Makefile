@@ -87,16 +87,18 @@ endif
 
 # ---- UI / overlay dependencies (Linux only) ----
 ifneq ($(OS),Windows_NT)
-HAS_LAYER_SHELL    := $(shell pkg-config --exists gtk-layer-shell          2>/dev/null && echo yes || echo no)
-HAS_AYATANA        := $(shell pkg-config --exists ayatana-appindicator3-0.1 2>/dev/null && echo yes || echo no)
-HAS_APPINDICATOR   := $(shell pkg-config --exists appindicator3-0.1         2>/dev/null && echo yes || echo no)
+# The pkg-config module is gtk-layer-shell-0; "gtk-layer-shell" is the *package*
+# name on most distros and never resolves, so probe both (older 0.6 releases
+# shipped only the unsuffixed .pc).
+LAYER_SHELL_PC     := $(shell pkg-config --exists gtk-layer-shell-0 2>/dev/null && echo gtk-layer-shell-0 || (pkg-config --exists gtk-layer-shell 2>/dev/null && echo gtk-layer-shell))
+HAS_LAYER_SHELL    := $(if $(LAYER_SHELL_PC),yes,no)
 
 LAYER_CFLAGS  := $(shell pkg-config --cflags gtk+-3.0 2>/dev/null)
 LAYER_LDFLAGS := $(shell pkg-config --libs   gtk+-3.0 2>/dev/null)
 
 ifeq ($(HAS_LAYER_SHELL),yes)
-LAYER_CFLAGS  += $(shell pkg-config --cflags gtk-layer-shell 2>/dev/null) -DHAVE_GTK_LAYER_SHELL
-LAYER_LDFLAGS += $(shell pkg-config --libs   gtk-layer-shell 2>/dev/null)
+LAYER_CFLAGS  += $(shell pkg-config --cflags $(LAYER_SHELL_PC) 2>/dev/null) -DHAVE_GTK_LAYER_SHELL
+LAYER_LDFLAGS += $(shell pkg-config --libs   $(LAYER_SHELL_PC) 2>/dev/null)
 endif
 
 WV_CFLAGS  := $(shell pkg-config --cflags webkit2gtk-4.1 2>/dev/null || pkg-config --cflags webkit2gtk-4.0 2>/dev/null)
@@ -121,15 +123,10 @@ COMPAT_PC_DIR :=
 PKG_CONFIG_PATH_UI := $(PKG_CONFIG_PATH)
 endif
 
-# Build tags: use legacy_appindicator when ayatana is not available but appindicator3 is
+# The tray uses fyne.io/systray, whose Linux backend is pure Go over the DBus
+# StatusNotifierItem protocol. No libappindicator / libayatana-appindicator is
+# linked, so there is no backend to select at build time.
 UI_TAGS :=
-ifeq ($(UNAME_S),Linux)
-ifeq ($(HAS_AYATANA),no)
-ifeq ($(HAS_APPINDICATOR),yes)
-UI_TAGS := -tags legacy_appindicator
-endif
-endif
-endif
 endif  # !Windows_NT
 
 # Base CGO link flags (whisper + llama)
@@ -217,9 +214,7 @@ else ifeq ($(UNAME_S),Darwin)
 	CGO_LDFLAGS="$(BASE_LDFLAGS) -framework Cocoa -framework QuartzCore -framework CoreVideo -framework Foundation" \
 	go build $(GO_LDFLAGS) -o $(BUILD_DIR)/$(APP_NAME) ./$(CMD_DIR)
 else
-	@echo "  Layer shell  : $(HAS_LAYER_SHELL)"
-	@echo "  Ayatana tray : $(HAS_AYATANA)"
-	@echo "  AppIndicator : $(HAS_APPINDICATOR)"
+	@echo "  Layer shell  : $(HAS_LAYER_SHELL)$(if $(LAYER_SHELL_PC), ($(LAYER_SHELL_PC)))"
 	@echo "  Build tags   : $(UI_TAGS)"
 	PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_UI)" \
 	CGO_CFLAGS="$(LAYER_CFLAGS) $(WV_CFLAGS)" \

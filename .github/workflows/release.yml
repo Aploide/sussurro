@@ -93,14 +93,19 @@ jobs:
       - name: Install Linux build dependencies
         if: matrix.platform == 'linux'
         run: |
+          set -euo pipefail
           sudo apt-get update
+          # No appindicator -dev package here on purpose: the tray is
+          # fyne.io/systray, whose Linux backend is pure Go over DBus. Linking
+          # libayatana-appindicator3 is what made past releases refuse to start
+          # on distros that only ship the legacy libappindicator3 SONAME.
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake pkg-config \
-            libgtk-3-dev libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev libgtk-layer-shell-dev
-          # Prefer the legacy appindicator backend when available for broader
-          # compatibility with distros that don't ship ayatana SONAMEs.
-          sudo apt-get install -y --no-install-recommends libappindicator3-dev || true
+            libgtk-3-dev libwebkit2gtk-4.1-dev libgtk-layer-shell-dev
+
+          # gtk-layer-shell is required for the Wayland overlay to be a proper
+          # layer surface; a silently missing .pc compiles that path out.
+          pkg-config --exists gtk-layer-shell-0
 
       - name: Build and package
         shell: bash
@@ -113,11 +118,7 @@ jobs:
           mkdir -p dist
           chmod +x scripts/package-release.sh scripts/package-transcribe.sh
 
-          if [[ "${PLATFORM}" == "linux" ]] && pkg-config --exists appindicator3-0.1; then
-            make build build-transcribe VERSION="${VERSION}" UI_TAGS="-tags legacy_appindicator"
-          else
-            make build build-transcribe VERSION="${VERSION}"
-          fi
+          make build build-transcribe VERSION="${VERSION}"
 
           # Both packaging scripts wipe release/ on entry, so each archive is
           # copied into dist/ before the next one runs.
@@ -128,6 +129,29 @@ jobs:
           ./scripts/package-transcribe.sh "${VERSION}" "${PLATFORM}" "${ARCH}"
           cp "release/sussurro-transcribe-${PLATFORM}-${ARCH}.tar.gz" dist/
           cp "release/sussurro-transcribe-${PLATFORM}-${ARCH}.tar.gz.sha256" dist/
+
+      - name: Verify Linux shared-library dependencies
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          needed="$(readelf -d ./bin/sussurro | awk '/\(NEEDED\)/ {gsub(/[][]/, "", $NF); print $NF}')"
+          echo "${needed}"
+
+          # A release that links either appindicator SONAME only starts on the
+          # half of the distros that ship that exact variant. The tray must stay
+          # on the pure-Go DBus backend.
+          if grep -q 'appindicator' <<< "${needed}"; then
+            echo "Refusing to release: sussurro links an appindicator library." >&2
+            exit 1
+          fi
+
+          # Guards against the pkg-config probe silently failing again and
+          # shipping an overlay with the layer-shell path compiled out.
+          if ! grep -q '^libgtk-layer-shell\.so' <<< "${needed}"; then
+            echo "Refusing to release: sussurro is not linked against gtk-layer-shell." >&2
+            exit 1
+          fi
 
       - name: Verify stamped version
         shell: bash

@@ -3,7 +3,7 @@ package ui
 import (
 	"runtime"
 
-	"github.com/getlantern/systray"
+	"fyne.io/systray"
 )
 
 // trayIcon / trayIconRec are embedded per-platform in tray_icons_unix.go

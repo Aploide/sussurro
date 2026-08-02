@@ -5,7 +5,7 @@ package ui
 import (
 	"os"
 
-	"github.com/getlantern/systray"
+	"fyne.io/systray"
 )
 
 // platformExit terminates the process. systray.Quit() removes the notification

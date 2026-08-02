@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/aploide/sussurro/internal/config"
 )
 
 // ProgressCallback is called periodically during model downloads.
@@ -61,8 +63,8 @@ func SetActiveModel(modelID string) error {
 
 	// Replace either known ASR path with the new one
 	updated := string(configBytes)
-	updated = strings.ReplaceAll(updated, filepath.Join(modelsDir, fileASRSmall), newPath)
-	updated = strings.ReplaceAll(updated, filepath.Join(modelsDir, fileASRLarge), newPath)
+	updated = config.ReplacePathInYAML(updated, filepath.Join(modelsDir, fileASRSmall), newPath)
+	updated = config.ReplacePathInYAML(updated, filepath.Join(modelsDir, fileASRLarge), newPath)
 
 	return os.WriteFile(configFile, []byte(updated), 0644)
 }
@@ -85,11 +87,11 @@ audio:
 
 models:
   asr:
-    path: "{{ASR_PATH}}"
+    path: {{ASR_PATH}}
     type: "whisper"
     threads: 4
   llm:
-    path: "{{LLM_PATH}}"
+    path: {{LLM_PATH}}
     context_size: 32768
     gpu_layers: 0
     threads: 4
@@ -149,8 +151,10 @@ func EnsureSetup() error {
 		defaultASRPath := filepath.Join(modelsDir, fileASRSmall)
 		llmDefaultPath := filepath.Join(modelsDir, "qwen3-sussurro-q4_k_m.gguf")
 
-		configContent := strings.ReplaceAll(defaultConfigTemplate, "{{ASR_PATH}}", defaultASRPath)
-		configContent = strings.ReplaceAll(configContent, "{{LLM_PATH}}", llmDefaultPath)
+		// The placeholders stand where a quoted scalar goes, so the paths are
+		// substituted already quoted (a bare Windows path breaks YAML).
+		configContent := strings.ReplaceAll(defaultConfigTemplate, "{{ASR_PATH}}", config.YAMLPathLiteral(defaultASRPath))
+		configContent = strings.ReplaceAll(configContent, "{{LLM_PATH}}", config.YAMLPathLiteral(llmDefaultPath))
 
 		if err := os.WriteFile(configFile, []byte(configContent), 0644); err != nil {
 			return fmt.Errorf("failed to write config file: %w", err)
@@ -207,7 +211,7 @@ func EnsureSetup() error {
 						// Replace old model path with new one
 						oldPathInConfig := filepath.Join(modelsDir, filename)
 						newPathInConfig := llmPath
-						updatedConfig := strings.ReplaceAll(string(configContent), oldPathInConfig, newPathInConfig)
+						updatedConfig := config.ReplacePathInYAML(string(configContent), oldPathInConfig, newPathInConfig)
 
 						if err := os.WriteFile(configFile, []byte(updatedConfig), 0644); err != nil {
 							fmt.Printf("Warning: Could not update config file: %v\n", err)
@@ -258,7 +262,7 @@ func EnsureSetup() error {
 				// Update config to point to the large model path
 				if configBytes, err := os.ReadFile(configFile); err == nil {
 					oldSmallPath := filepath.Join(modelsDir, fileASRSmall)
-					updated := strings.ReplaceAll(string(configBytes), oldSmallPath, chosenASRPath)
+					updated := config.ReplacePathInYAML(string(configBytes), oldSmallPath, chosenASRPath)
 					if err := os.WriteFile(configFile, []byte(updated), 0644); err != nil {
 						fmt.Printf("Warning: Could not update config file: %v\n", err)
 					}

@@ -20,14 +20,18 @@ The overlay, settings window, and system tray require the following libraries at
 |---------|---------|-------------|
 | GTK 3 | Overlay window, UI toolkit | `gtk3` / `libgtk-3-0` |
 | WebKit2GTK | Settings window HTML renderer | `webkit2gtk-4.1` / `libwebkit2gtk-4.1-0` |
-| AppIndicator | System tray icon | `libappindicator-gtk3` / `libayatana-appindicator3-1` |
 | gtk-layer-shell | True Wayland overlay (optional) | `gtk-layer-shell` / `libgtk-layer-shell0` |
 | wl-clipboard | Clipboard on Wayland | `wl-clipboard` |
+
+The system tray needs **no library**: it is spoken over DBus
+(StatusNotifierItem) in pure Go, so neither `libappindicator-gtk3` nor
+`libayatana-appindicator3-1` is required. What it does need is a desktop that
+hosts SNI items — see [Tray icon missing](#tray-icon-missing) below.
 
 #### Arch Linux / Manjaro
 ```bash
 # Required
-sudo pacman -S gtk3 webkit2gtk-4.1 libappindicator-gtk3
+sudo pacman -S gtk3 webkit2gtk-4.1
 
 # Wayland clipboard (required on Wayland)
 sudo pacman -S wl-clipboard
@@ -42,7 +46,7 @@ sudo pacman -S xdotool xorg-xprop
 #### Ubuntu / Debian (22.04+)
 ```bash
 # Required
-sudo apt install libgtk-3-0 libwebkit2gtk-4.1-0 libayatana-appindicator3-1
+sudo apt install libgtk-3-0 libwebkit2gtk-4.1-0
 
 # Wayland clipboard
 sudo apt install wl-clipboard
@@ -56,12 +60,12 @@ sudo apt install xdotool x11-utils
 
 #### Fedora (38+)
 ```bash
-sudo dnf install gtk3 webkit2gtk4.1 libappindicator-gtk3 wl-clipboard
+sudo dnf install gtk3 webkit2gtk4.1 wl-clipboard
 ```
 
 #### openSUSE
 ```bash
-sudo zypper install libgtk-3-0 libwebkit2gtk-4.1 libappindicator3-1 wl-clipboard
+sudo zypper install libgtk-3-0 libwebkit2gtk-4.1 wl-clipboard
 ```
 
 ---
@@ -94,7 +98,7 @@ All runtime libraries plus their `-dev` / header packages:
 
 #### Arch Linux / Manjaro
 ```bash
-sudo pacman -S gtk3 webkit2gtk-4.1 libappindicator-gtk3 base-devel cmake git go
+sudo pacman -S gtk3 webkit2gtk-4.1 base-devel cmake git go
 
 # Optional (adds wlr-layer-shell support to the overlay)
 sudo pacman -S gtk-layer-shell
@@ -102,7 +106,7 @@ sudo pacman -S gtk-layer-shell
 
 #### Ubuntu / Debian (22.04+)
 ```bash
-sudo apt install libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+sudo apt install libgtk-3-dev libwebkit2gtk-4.1-dev \
                  build-essential cmake git golang-go
 
 # Optional
@@ -111,7 +115,7 @@ sudo apt install libgtk-layer-shell-dev
 
 #### Fedora (38+)
 ```bash
-sudo dnf install gtk3-devel webkit2gtk4.1-devel libappindicator-gtk3-devel \
+sudo dnf install gtk3-devel webkit2gtk4.1-devel \
                  gcc gcc-c++ cmake git golang
 ```
 
@@ -138,7 +142,7 @@ pkg-config --exists webkit2gtk-4.1 && echo "WebKit 4.1: OK" || \
   pkg-config --exists webkit2gtk-4.0 && echo "WebKit 4.0: OK" || echo "WebKit: MISSING"
 
 # Check layer-shell (optional)
-pkg-config --exists gtk-layer-shell && echo "Layer shell: OK" || echo "Layer shell: not installed (overlay will use fallback)"
+pkg-config --exists gtk-layer-shell-0 && echo "Layer shell: OK" || echo "Layer shell: not installed (overlay will use fallback)"
 
 # Check Wayland clipboard
 which wl-copy && echo "wl-clipboard: OK" || echo "wl-clipboard: MISSING"
@@ -150,6 +154,14 @@ which wl-copy && echo "wl-clipboard: OK" || echo "wl-clipboard: MISSING"
 
 ### Settings window blank or doesn't open
 WebKit2GTK is missing or the wrong version. Install `webkit2gtk-4.1` (or `webkit2gtk-4.0` on older distros).
+
+If the window opens as an empty grey frame, it is WebKitGTK's DMABUF renderer,
+which fails on some driver/compositor pairs — notably the NVIDIA proprietary
+driver under Wayland, where it kills the GDK connection outright
+(`Gdk-Message: Error 71 (Protocol error) dispatching to Wayland display`).
+Sussurro sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` for itself at startup, so this
+should not happen; if you set that variable to `0` in your environment you are
+forcing the accelerated path back on.
 
 ### Tray icon missing
 Some desktop environments need an SNI proxy:

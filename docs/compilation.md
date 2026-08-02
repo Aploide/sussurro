@@ -39,13 +39,13 @@ sudo dnf install gcc gcc-c++ cmake git golang
 
 ## Build
 
-Requires GTK3, WebKit2GTK, and AppIndicator development headers.
+Requires GTK3 and WebKit2GTK development headers.
 
 ### Step 1: Install build dependencies
 
 #### Arch Linux / Manjaro
 ```bash
-sudo pacman -S gtk3 webkit2gtk-4.1 libappindicator-gtk3 base-devel cmake git go
+sudo pacman -S gtk3 webkit2gtk-4.1 base-devel cmake git go
 
 # Optional: adds wlr-layer-shell overlay on Wayland
 sudo pacman -S gtk-layer-shell
@@ -53,7 +53,7 @@ sudo pacman -S gtk-layer-shell
 
 #### Ubuntu / Debian (22.04+)
 ```bash
-sudo apt install libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+sudo apt install libgtk-3-dev libwebkit2gtk-4.1-dev \
                  build-essential cmake git golang-go
 
 # Optional: Wayland layer-shell overlay
@@ -62,7 +62,7 @@ sudo apt install libgtk-layer-shell-dev
 
 #### Fedora (38+)
 ```bash
-sudo dnf install gtk3-devel webkit2gtk4.1-devel libappindicator-gtk3-devel \
+sudo dnf install gtk3-devel webkit2gtk4.1-devel \
                  gcc gcc-c++ cmake git golang
 ```
 
@@ -94,20 +94,23 @@ The build target handles several platform quirks automatically — you do not ne
 
 `make build` auto-creates `.build-compat/pkgconfig/webkit2gtk-4.0.pc` — a shim `.pc` file that redirects pkg-config queries for `webkit2gtk-4.0` to the installed `webkit2gtk-4.1`. It then sets `PKG_CONFIG_PATH` to include this directory for the duration of the build. No manual steps needed.
 
-### AppIndicator variant detection
+### System tray
 
-The system tray library (`getlantern/systray`) supports two AppIndicator backends:
-
-| Build tag | Library used | Package |
-|-----------|-------------|---------|
-| *(default)* | `ayatana-appindicator3-0.1` | Ubuntu/Fedora/openSUSE |
-| `legacy_appindicator` | `appindicator3-0.1` | Arch Linux / Manjaro |
-
-`make build` probes `pkg-config` for both libraries and automatically adds `-tags legacy_appindicator` when only the Arch variant is available.
+The tray uses `fyne.io/systray`, whose Linux backend speaks the DBus
+StatusNotifierItem protocol in pure Go. Nothing links against
+`libappindicator3` or `libayatana-appindicator3`, so there is no backend to
+select and no AppIndicator development package to install — one binary runs on
+every distro. Only the desktop-side SNI host matters at runtime (see
+[dependencies.md](dependencies.md)).
 
 ### Layer-shell detection
 
-`make build` checks for `gtk-layer-shell` via `pkg-config`. If found, it compiles the overlay with true wlr-layer-shell support (proper Wayland overlay, always above all windows). If not found, the overlay falls back to a regular floating window with `_NET_WM_STATE_ABOVE` on X11.
+`make build` checks for `gtk-layer-shell-0` via `pkg-config` (the module name is
+suffixed; the *package* is called `gtk-layer-shell` / `libgtk-layer-shell-dev`).
+If found, it compiles the overlay with true wlr-layer-shell support (proper
+Wayland overlay, always above all windows). If not found, the overlay falls back
+to a regular floating window with `_NET_WM_STATE_ABOVE` on X11. `make build`
+prints `Layer shell : yes|no` so you can confirm which path was compiled in.
 
 ---
 
@@ -181,8 +184,10 @@ release.
 ### `pkg-config: webkit2gtk-4.0 not found`
 You are on Arch and the compat shim wasn't created. Run `make build` (not `go build` directly) — it creates the shim automatically via the `compat-pc` target.
 
-### `appindicator3-0.1 not found`
-The wrong AppIndicator library is linked. Use `make build` which auto-detects the correct library.
+### `error while loading shared libraries: libayatana-appindicator3.so.1`
+Releases up to and including v2.4 linked one of the two AppIndicator variants
+and only start where that exact SONAME is installed. Later builds link neither.
+Upgrade to a newer release, or rebuild from source.
 
 ### `gtk-layer-shell: not found` (warning, not error)
 The overlay will use a regular floating window. Install `gtk-layer-shell` (Arch: `sudo pacman -S gtk-layer-shell`, Ubuntu: `sudo apt install libgtk-layer-shell-dev`) and rebuild for true Wayland overlay.

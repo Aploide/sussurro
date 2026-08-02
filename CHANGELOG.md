@@ -2,6 +2,17 @@
 
 All notable changes to Sussurro will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+- **Settings window opened as an empty grey frame on NVIDIA + Wayland** (`internal/ui/webkit_linux.go`): WebKitGTK's DMABUF renderer takes the GDK connection down with `Error 71 (Protocol error)` as soon as the first frame is composited — the page has already loaded, so the window appears but never paints. Sussurro now sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` before the webview is created, unless the environment already specifies a value. Reproduced with a bare `webview_go` program and a trivial HTML page, so it affects any WebKitGTK app on that stack, not just the settings page.
+- **Windows: every first run died with `yaml: line 18: did not find expected hexdecimal number`** (`internal/setup`, `internal/config`): `EnsureSetup` wrote the generated `~/.sussurro/config.yaml` model paths as double-quoted YAML scalars, where a backslash opens an escape sequence — the `\U` of `C:\Users\…` is YAML's 32-bit unicode escape and demands eight hex digits. Line 18 is `models.asr.path`, so the config was rejected before the app could start (and therefore could never repair itself). Paths are now emitted as single-quoted scalars, which have no escape sequences at all. `LoadConfig` also re-quotes an unparseable path line in place and retries once, so installs already broken by an earlier version recover on the next launch instead of needing the file deleted by hand.
+- **Released Linux binaries failed to start with `libayatana-appindicator3.so.1: cannot open shared object file`** (`go.mod`, `internal/ui/tray.go`, `Makefile`, `.github/workflows/release.yml`): the tray moved from `github.com/getlantern/systray` to `fyne.io/systray`, whose Linux backend implements the DBus StatusNotifierItem protocol in pure Go. Release binaries no longer link `libappindicator3` or `libayatana-appindicator3`, so one artifact runs on distros shipping either variant — or neither. The release workflow previously tried to force the legacy backend with `apt-get install libappindicator3-dev || true`, which is a silent no-op on Ubuntu 24.04 (`libayatana-appindicator3-dev` declares both `Provides:` and `Conflicts:` on that name), so every release was linked against the Ayatana SONAME regardless. The `legacy_appindicator` build tag and its `pkg-config` probe are gone.
+- **Wayland layer-shell overlay was compiled out of every build** (`Makefile`): the probe queried `pkg-config --exists gtk-layer-shell`, but the module is named `gtk-layer-shell-0` (`gtk-layer-shell` is the distro *package* name). `HAVE_GTK_LAYER_SHELL` was therefore never defined and `gtk_layer_init_for_window()` never compiled in, silently downgrading the Wayland overlay to a plain floating window.
+
+### Added
+- **Release linkage guard** (`.github/workflows/release.yml`): the Linux jobs now fail the release if `bin/sussurro` links any appindicator library or is missing `libgtk-layer-shell.so`, so neither regression can ship silently again.
+
 ## [2.3] - 2026-05-02
 
 ### Added

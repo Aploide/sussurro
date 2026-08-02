@@ -100,8 +100,8 @@ The UI layer runs alongside the pipeline and provides visual feedback without bl
 - On macOS, `NSWindowDelegate` intercepts the close button to hide (not destroy) the window, preserving the WebKit backing store across open/close cycles.
 
 ### System Tray (`internal/ui/app.go`)
-- Powered by **`github.com/getlantern/systray`**.
-- Arch Linux uses the `legacy_appindicator` build tag (`appindicator3-0.1`); Ubuntu/Fedora use the default Ayatana backend. macOS uses the native `NSStatusItem`.
+- Powered by **`fyne.io/systray`**.
+- On Linux the backend is pure Go over the DBus StatusNotifierItem protocol — no `libappindicator3` / `libayatana-appindicator3` is linked, so a single binary runs on every distro regardless of which variant it ships. macOS uses the native `NSStatusItem`; Windows uses `Shell_NotifyIcon`.
 - Menu: **Open Settings** / **Quit**.
 
 ### Process Exit

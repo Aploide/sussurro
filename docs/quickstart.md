@@ -13,26 +13,26 @@ echo $XDG_SESSION_TYPE   # prints "wayland" or "x11"
 ### Wayland users
 ```bash
 # Arch/Manjaro
-sudo pacman -S gtk3 webkit2gtk-4.1 libappindicator-gtk3 wl-clipboard gtk-layer-shell
+sudo pacman -S gtk3 webkit2gtk-4.1 wl-clipboard gtk-layer-shell
 
 # Ubuntu/Debian (22.04+)
-sudo apt install libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+sudo apt install libgtk-3-dev libwebkit2gtk-4.1-dev \
                  wl-clipboard libgtk-layer-shell-dev
 
 # Fedora
-sudo dnf install gtk3 webkit2gtk4.1 libappindicator-gtk3 wl-clipboard
+sudo dnf install gtk3 webkit2gtk4.1 wl-clipboard
 ```
 
 ### X11 users
 ```bash
 # Arch/Manjaro
-sudo pacman -S gtk3 webkit2gtk-4.1 libappindicator-gtk3
+sudo pacman -S gtk3 webkit2gtk-4.1
 
 # Ubuntu/Debian
-sudo apt install libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev
+sudo apt install libgtk-3-dev libwebkit2gtk-4.1-dev
 
 # Fedora
-sudo dnf install gtk3 webkit2gtk4.1 libappindicator-gtk3
+sudo dnf install gtk3 webkit2gtk4.1
 ```
 
 ### macOS

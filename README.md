@@ -85,7 +85,7 @@ cd sussurro
 make build        # → bin/sussurro  (overlay + settings + tray)
 ```
 
-Requires GTK3, WebKit2GTK, and AppIndicator dev headers on Linux. On Windows, build under MSYS2 MINGW64 with the Vulkan SDK packages. See [Compilation](docs/compilation.md) for full instructions and per-platform dependency lists.
+Requires GTK3 and WebKit2GTK dev headers on Linux. On Windows, build under MSYS2 MINGW64 with the Vulkan SDK packages. See [Compilation](docs/compilation.md) for full instructions and per-platform dependency lists.
 
 ---
 

@@ -4,7 +4,7 @@
 
 ### Windows caveats
 Windows is supported (overlay via a Win32 layered window + GDI+, settings via
-WebView2, tray via `getlantern/systray`, hotkeys via `RegisterHotKey`,
+WebView2, tray via `fyne.io/systray`, hotkeys via `RegisterHotKey`,
 Vulkan-accelerated Whisper). Remaining caveats:
 
 - **Hotkey conflicts**: `RegisterHotKey` fails if another application already

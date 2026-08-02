@@ -346,7 +346,17 @@ func LoadConfig(path string) (*Config, error) {
 				return nil, err
 			}
 		} else {
-			return nil, err
+			// Configs written on Windows before the path quoting fix are not
+			// valid YAML at all (see yamlpath.go), so the app could never start
+			// to correct them. viper records the file it chose even when the
+			// parse fails, so repair it in place and retry once.
+			repaired, rerr := repairConfigPaths(viper.ConfigFileUsed())
+			if rerr != nil || !repaired {
+				return nil, err
+			}
+			if err := viper.ReadInConfig(); err != nil {
+				return nil, err
+			}
 		}
 	}
 
