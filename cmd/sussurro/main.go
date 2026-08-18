@@ -167,6 +167,11 @@ func run() {
 		log.Info("Partial transcription enabled", "interval", cfg.Workflow.StreamingInterval())
 	}
 
+	// One dispatcher for every input source, so hotkeys, the trigger socket,
+	// and future adapters need no knowledge of the interaction mode.
+	// Review mode is wired in a later bead; immediate mode is unchanged.
+	input := session.NewImmediateDispatcher(pipe)
+
 	pipe.SetLowercaseOutput(cfg.App.LowercaseOutput)
 	pipe.SetSkipLLMCleanup(cfg.App.SkipLLMCleanup)
 
@@ -196,7 +201,7 @@ func run() {
 		buildHotkeyCallbacks := func(mode string) (onDown func(), onUp func()) {
 			if mode == "toggle" {
 				return func() {
-					if session.DispatchImmediateInput(pipe, session.InputToggle) {
+					if input.Dispatch(session.InputToggle) {
 						log.Info("Transcribing...")
 					} else {
 						log.Info("Listening...")
@@ -204,8 +209,8 @@ func run() {
 				}, func() {}
 			}
 			// Default: push-to-talk
-			return func() { log.Info("Listening..."); session.DispatchImmediateInput(pipe, session.InputPress) },
-				func() { log.Info("Transcribing..."); session.DispatchImmediateInput(pipe, session.InputRelease) }
+			return func() { log.Info("Listening..."); input.Dispatch(session.InputPress) },
+				func() { log.Info("Transcribing..."); input.Dispatch(session.InputRelease) }
 		}
 		uiMgr.SetHotkeyCallbackFactory(buildHotkeyCallbacks)
 
@@ -221,11 +226,11 @@ func run() {
 			if err := triggerServer.Start(
 				func() {
 					log.Debug("Trigger: Starting recording")
-					session.DispatchImmediateInput(pipe, session.InputPress)
+					input.Dispatch(session.InputPress)
 				},
 				func() {
 					log.Debug("Trigger: Stopping recording")
-					session.DispatchImmediateInput(pipe, session.InputRelease)
+					input.Dispatch(session.InputRelease)
 				},
 			); err != nil {
 				log.Error("Failed to start trigger server", "error", err)
@@ -259,11 +264,11 @@ func run() {
 		if err := triggerServer.Start(
 			func() {
 				log.Debug("Trigger: Starting recording")
-				session.DispatchImmediateInput(pipe, session.InputPress)
+				input.Dispatch(session.InputPress)
 			},
 			func() {
 				log.Debug("Trigger: Stopping recording")
-				session.DispatchImmediateInput(pipe, session.InputRelease)
+				input.Dispatch(session.InputRelease)
 			},
 		); err != nil {
 			log.Error("Failed to start trigger server", "error", err)
@@ -276,7 +281,7 @@ func run() {
 		var onDown, onUp func()
 		if cfg.Hotkey.Mode == "toggle" {
 			onDown = func() {
-				if session.DispatchImmediateInput(pipe, session.InputToggle) {
+				if input.Dispatch(session.InputToggle) {
 					log.Info("Transcribing...")
 				} else {
 					log.Info("Listening...")
@@ -284,8 +289,8 @@ func run() {
 			}
 			onUp = func() {}
 		} else {
-			onDown = func() { log.Info("Listening..."); session.DispatchImmediateInput(pipe, session.InputPress) }
-			onUp = func() { log.Info("Transcribing..."); session.DispatchImmediateInput(pipe, session.InputRelease) }
+			onDown = func() { log.Info("Listening..."); input.Dispatch(session.InputPress) }
+			onUp = func() { log.Info("Transcribing..."); input.Dispatch(session.InputRelease) }
 		}
 
 		hkHandler, err := hotkey.NewHandler(cfg.Hotkey.Trigger, log)
