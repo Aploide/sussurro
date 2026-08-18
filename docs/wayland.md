@@ -105,6 +105,40 @@ After setup, the workflow is simple:
 3. **Press** `Ctrl+Shift+Space` again → Recording stops and processes
 4. Text appears in your active application
 
+## Trigger commands
+
+The socket accepts one command per connection and replies with a status line.
+`toggle` is the default and what every existing binding sends, so no
+configuration change is required.
+
+| Command   | Effect                                                        | Mode      |
+|-----------|---------------------------------------------------------------|-----------|
+| `toggle`  | Start recording, or stop one already running                  | Any       |
+| `press`   | Begin recording; in review mode, begin an edit instruction    | Any       |
+| `release` | End the recording started by `press`                          | Any       |
+| `cancel`  | Abandon the session and discard any held text                 | Review    |
+| `deliver` | Insert the reviewed text                                      | Review    |
+| `submit`  | Insert the reviewed text and press Enter                      | Review    |
+
+`cancel`, `deliver`, and `submit` require review mode (`workflow.mode: review`
+in the config); in immediate mode they are refused with an error rather than
+silently ignored.
+
+The bundled script takes the command as its argument:
+
+```bash
+scripts/trigger.sh          # toggle, same as before
+scripts/trigger.sh press
+scripts/trigger.sh deliver
+```
+
+Compositors that can bind key press and release separately should bind `press`
+and `release` for true push-to-talk. Those that only fire once per shortcut
+should keep using `toggle`.
+
+Replies are `RECORDING`, `STOPPED`, `IDLE`, `CANCELLED`, `DELIVERED`, or
+`ERROR <reason>`. The script exits non-zero on an error reply.
+
 ## Troubleshooting
 
 ### "Connection refused" or socket errors

@@ -223,16 +223,7 @@ func run() {
 				os.Exit(1)
 			}
 			defer triggerServer.Stop()
-			if err := triggerServer.Start(
-				func() {
-					log.Debug("Trigger: Starting recording")
-					input.Dispatch(session.InputPress)
-				},
-				func() {
-					log.Debug("Trigger: Stopping recording")
-					input.Dispatch(session.InputRelease)
-				},
-			); err != nil {
+			if err := triggerServer.Start(input); err != nil {
 				log.Error("Failed to start trigger server", "error", err)
 				os.Exit(1)
 			}
@@ -261,16 +252,7 @@ func run() {
 		}
 		defer triggerServer.Stop()
 
-		if err := triggerServer.Start(
-			func() {
-				log.Debug("Trigger: Starting recording")
-				input.Dispatch(session.InputPress)
-			},
-			func() {
-				log.Debug("Trigger: Stopping recording")
-				input.Dispatch(session.InputRelease)
-			},
-		); err != nil {
+		if err := triggerServer.Start(input); err != nil {
 			log.Error("Failed to start trigger server", "error", err)
 			os.Exit(1)
 		}
