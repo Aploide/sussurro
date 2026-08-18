@@ -35,6 +35,8 @@ type initialData struct {
 	Language        string      `json:"language"`
 	LowercaseOutput bool        `json:"lowercaseOutput"`
 	SkipLLMCleanup  bool        `json:"skipLLMCleanup"`
+	// Workflow carries the review controls and this host's capabilities.
+	Workflow workflowSettings `json:"workflow"`
 }
 
 // bindBridge attaches all Go↔JS bridge functions to the webview.
@@ -51,6 +53,21 @@ func bindBridge(sw *settingsWindow) {
 		data := buildInitialData(mgr)
 		b, _ := json.Marshal(data)
 		return string(b)
+	})
+
+	// One entry point for every workflow setting: the key names the field, so
+	// six controls need one binding rather than six near-identical ones.
+	sw.w.Bind("saveWorkflowSetting", func(key, value string) (result string) {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("panic in saveWorkflowSetting", "error", r)
+				result = fmt.Sprintf("error: panic: %v", r)
+			}
+		}()
+		if err := saveWorkflowSetting(mgr.cfg, key, value); err != nil {
+			return fmt.Sprintf("error: %v", err)
+		}
+		return "ok"
 	})
 
 	sw.w.Bind("saveHotkey", func(trigger string) (result string) {
@@ -272,6 +289,7 @@ func buildInitialData(mgr *Manager) initialData {
 		Language:        mgr.cfg.Models.ASR.Language,
 		LowercaseOutput: mgr.cfg.App.LowercaseOutput,
 		SkipLLMCleanup:  mgr.cfg.App.SkipLLMCleanup,
+		Workflow:        buildWorkflowSettings(mgr.cfg, hostCapabilities()),
 	}
 }
 

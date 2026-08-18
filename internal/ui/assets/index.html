@@ -81,6 +81,94 @@
       </div>
     </div>
 
+    <div class="section foldable" data-section-id="workflow">
+      <button class="section-header" type="button" data-section-toggle aria-expanded="true">
+        <span class="section-label">Review workflow</span>
+        <span class="section-caret" aria-hidden="true">⌄</span>
+      </button>
+      <div class="section-body">
+        <div class="setting-row">
+          <div>
+            <label class="toggle-label" for="workflow-mode">Interaction mode</label>
+            <div class="toggle-desc">Immediate delivers straight away; review holds the text so you can check, edit, or cancel it</div>
+          </div>
+          <select id="workflow-mode" class="setting-select"></select>
+        </div>
+
+        <div class="setting-row">
+          <div>
+            <div class="toggle-label">Live transcription</div>
+            <div class="toggle-desc">Show text while you are still speaking. Uses extra CPU</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="workflow-streaming-toggle">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <div class="setting-row">
+          <div>
+            <label class="toggle-label" for="workflow-streaming-interval">Update interval</label>
+            <div class="toggle-desc">Time between live updates, between 100ms and 10s</div>
+          </div>
+          <input type="text" id="workflow-streaming-interval" class="setting-input"
+                 inputmode="text" autocomplete="off" spellcheck="false" placeholder="750ms">
+        </div>
+
+        <div class="setting-row">
+          <div>
+            <label class="toggle-label" for="workflow-delivery-backend">Text delivery</label>
+            <div class="toggle-desc">How reviewed text is inserted into the focused window</div>
+          </div>
+          <select id="workflow-delivery-backend" class="setting-select"></select>
+        </div>
+
+        <div class="setting-row">
+          <div>
+            <label class="toggle-label" for="workflow-input-backend">Input source</label>
+            <div class="toggle-desc">Where recording gestures come from. Takes effect after a restart</div>
+          </div>
+          <select id="workflow-input-backend" class="setting-select"></select>
+        </div>
+
+        <div class="setting-row" id="workflow-evdev-row" hidden>
+          <div>
+            <label class="toggle-label" for="workflow-input-device">Input device</label>
+            <div class="toggle-desc">Keyboard name or path. Leave empty to use the first one found</div>
+          </div>
+          <input type="text" id="workflow-input-device" class="setting-input"
+                 autocomplete="off" spellcheck="false" placeholder="first keyboard">
+        </div>
+
+        <div class="setting-row" id="workflow-chord-row" hidden>
+          <div>
+            <label class="toggle-label" for="workflow-input-chord">Recording chord</label>
+            <div class="toggle-desc">Keys that start recording. Leave empty to follow the global hotkey</div>
+          </div>
+          <input type="text" id="workflow-input-chord" class="setting-input"
+                 autocomplete="off" spellcheck="false" placeholder="ctrl+shift+space">
+        </div>
+
+        <div class="setting-row" id="workflow-cancel-chord-row" hidden>
+          <div>
+            <label class="toggle-label" for="workflow-input-cancel-chord">Cancel chord</label>
+            <div class="toggle-desc">Keys that abandon a review session. Leave empty to disable</div>
+          </div>
+          <input type="text" id="workflow-input-cancel-chord" class="setting-input"
+                 autocomplete="off" spellcheck="false" placeholder="disabled">
+        </div>
+
+        <div class="setting-row" id="workflow-voice-editing-row">
+          <div>
+            <div class="toggle-label">Voice editing</div>
+            <div class="toggle-desc" id="workflow-voice-editing-desc"></div>
+          </div>
+        </div>
+
+        <div class="setting-note" id="workflow-status" role="status" aria-live="polite" hidden></div>
+      </div>
+    </div>
+
     <!-- Global Hotkey -->
     <div class="section foldable" data-section-id="hotkey">
       <button class="section-header" type="button" data-section-toggle aria-expanded="true">

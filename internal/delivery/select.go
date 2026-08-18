@@ -73,3 +73,9 @@ func SelectBackend(name BackendName, capabilities Capabilities) (Backend, error)
 		return nil, fmt.Errorf("unknown delivery backend %q", name)
 	}
 }
+
+// ToolAvailable reports whether a delivery tool is installed on this host.
+// Exported so the settings UI can show why a backend is unselectable.
+func ToolAvailable(tool string) bool {
+	return available(nil, tool)
+}

@@ -39,6 +39,7 @@ function render(data) {
   // Lowercase output
   renderLowercaseOutput(data.lowercaseOutput);
   renderSkipLLMCleanup(data.skipLLMCleanup);
+  renderWorkflow(data.workflow);
 }
 
 // ---- Foldable sections ----
@@ -215,6 +216,156 @@ function renderSkipLLMCleanup(enabled) {
   toggle.checked = !!enabled;
   toggle.onchange = async () => {
     await window.saveSkipLLMCleanup(toggle.checked);
+  };
+}
+
+// ---- Review workflow ----
+
+// Populates a <select> from the capability list Go supplied. Unavailable
+// options stay visible but disabled, with the reason in the label, so the user
+// can tell "not offered here" from "needs something installed".
+function fillChoices(select, choices, current) {
+  if (!select) return;
+  select.innerHTML = '';
+  (choices || []).forEach(choice => {
+    const option = document.createElement('option');
+    option.value = choice.value;
+    option.textContent = choice.reason
+      ? `${choice.label} — ${choice.reason}`
+      : choice.label;
+    // Never disable the value already in the config: the user must be able to
+    // see what is selected, even if this host cannot honour it.
+    option.disabled = !choice.available && choice.value !== current;
+    select.appendChild(option);
+  });
+  select.value = current;
+}
+
+// Shows the outcome of a save. Validation errors come from the same validator
+// the config file uses, so the message is worth surfacing verbatim.
+function showWorkflowStatus(message, isError) {
+  const status = document.getElementById('workflow-status');
+  if (!status) return;
+  status.hidden = !message;
+  status.textContent = message || '';
+  status.classList.toggle('setting-note-error', !!isError);
+}
+
+// Saves one workflow setting, reverting the control if Go rejects the value.
+async function saveWorkflow(key, value, revert) {
+  const result = await window.saveWorkflowSetting(key, String(value));
+  if (typeof result === 'string' && result.startsWith('error:')) {
+    showWorkflowStatus(result.slice('error:'.length).trim(), true);
+    if (revert) revert();
+    return false;
+  }
+  showWorkflowStatus('Saved', false);
+  return true;
+}
+
+function renderWorkflow(workflow) {
+  if (!workflow) return;
+
+  const modeSelect     = document.getElementById('workflow-mode');
+  const streaming      = document.getElementById('workflow-streaming-toggle');
+  const interval       = document.getElementById('workflow-streaming-interval');
+  const deliverySelect = document.getElementById('workflow-delivery-backend');
+  const inputSelect    = document.getElementById('workflow-input-backend');
+  const device         = document.getElementById('workflow-input-device');
+  const chord          = document.getElementById('workflow-input-chord');
+  const cancelChord    = document.getElementById('workflow-input-cancel-chord');
+
+  fillChoices(modeSelect, workflow.modes, workflow.mode);
+  fillChoices(deliverySelect, workflow.deliveryBackends, workflow.deliveryBackend);
+  fillChoices(inputSelect, workflow.inputBackends, workflow.inputBackend);
+
+  // The evdev-only rows are meaningless for any other input source.
+  const showEvdevRows = backend => {
+    const evdev = backend === 'evdev';
+    ['workflow-evdev-row', 'workflow-chord-row', 'workflow-cancel-chord-row'].forEach(id => {
+      const row = document.getElementById(id);
+      if (row) row.hidden = !evdev;
+    });
+  };
+  showEvdevRows(workflow.inputBackend);
+
+  const renderVoiceEditing = mode => {
+    const desc = document.getElementById('workflow-voice-editing-desc');
+    if (!desc) return;
+    desc.textContent = mode === 'review'
+      ? 'Hold the hotkey over reviewed text to dictate a correction'
+      : 'Available in review mode';
+  };
+  renderVoiceEditing(workflow.mode);
+
+  if (modeSelect) {
+    let previous = workflow.mode;
+    modeSelect.onchange = async () => {
+      const chosen = modeSelect.value;
+      const ok = await saveWorkflow('workflow.mode', chosen, () => { modeSelect.value = previous; });
+      if (ok) {
+        previous = chosen;
+        renderVoiceEditing(chosen);
+      }
+    };
+  }
+
+  if (streaming) {
+    streaming.checked = !!workflow.streamingEnabled;
+    streaming.onchange = async () => {
+      await saveWorkflow('workflow.streaming.enabled', streaming.checked,
+        () => { streaming.checked = !streaming.checked; });
+    };
+  }
+
+  bindTextSetting(interval, workflow.streamingInterval, 'workflow.streaming.interval');
+  bindTextSetting(device, workflow.inputDevice, 'workflow.input.device');
+  bindTextSetting(chord, workflow.inputChord, 'workflow.input.chord');
+  bindTextSetting(cancelChord, workflow.inputCancelChord, 'workflow.input.cancel_chord');
+
+  if (deliverySelect) {
+    let previous = workflow.deliveryBackend;
+    deliverySelect.onchange = async () => {
+      const chosen = deliverySelect.value;
+      const ok = await saveWorkflow('workflow.delivery.backend', chosen,
+        () => { deliverySelect.value = previous; });
+      if (ok) previous = chosen;
+    };
+  }
+
+  if (inputSelect) {
+    let previous = workflow.inputBackend;
+    inputSelect.onchange = async () => {
+      const chosen = inputSelect.value;
+      const ok = await saveWorkflow('workflow.input.backend', chosen,
+        () => { inputSelect.value = previous; });
+      if (!ok) return;
+      previous = chosen;
+      showEvdevRows(chosen);
+      showWorkflowStatus('Saved. Restart Sussurro for the new input source to take effect', false);
+    };
+  }
+}
+
+// Binds a text field that saves on blur or Enter, reverting a rejected value.
+function bindTextSetting(field, initial, key) {
+  if (!field) return;
+  field.value = initial || '';
+
+  let previous = field.value;
+  const commit = async () => {
+    if (field.value === previous) return;
+    const chosen = field.value;
+    const ok = await saveWorkflow(key, chosen, () => { field.value = previous; });
+    if (ok) previous = chosen;
+  };
+
+  field.onblur = commit;
+  field.onkeydown = event => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      field.blur();
+    }
   };
 }
 

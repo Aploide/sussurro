@@ -329,6 +329,44 @@ kbd {
 }
 .hotkey-wayland-note a { color: var(--blue); text-decoration: none; }
 
+/* ---- Review workflow controls ---- */
+
+.setting-select,
+.setting-input {
+  min-width: 150px;
+  max-width: 190px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text);
+  font-size: 11px;
+  font-family: var(--font);
+}
+
+.setting-select { cursor: pointer; }
+
+.setting-select:focus-visible,
+.setting-input:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* An unavailable option stays visible with its reason, so the user can tell
+   "not offered here" from "needs something installed". */
+.setting-select option:disabled { color: var(--muted); }
+
+.setting-input::placeholder { color: var(--muted); }
+
+.setting-note {
+  font-size: 11px;
+  color: var(--muted);
+  padding: 8px 14px 12px;
+  line-height: 1.5;
+}
+.setting-note-error { color: var(--red); }
+
 /* ---- Recording modal ---- */
 .modal-backdrop {
   display: none;

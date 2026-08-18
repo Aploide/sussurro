@@ -374,3 +374,13 @@ func TestMalformedChordRejected(t *testing.T) {
 		})
 	}
 }
+
+// readShippedDefaults returns the contents of the shipped configs/default.yaml.
+func readShippedDefaults(t *testing.T) string {
+	t.Helper()
+	body, err := os.ReadFile(filepath.Join("..", "..", "configs", "default.yaml"))
+	if err != nil {
+		t.Fatalf("reading shipped default.yaml: %v", err)
+	}
+	return string(body)
+}

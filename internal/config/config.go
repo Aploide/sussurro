@@ -75,11 +75,10 @@ type InjectionConfig struct {
 
 // SaveHotkey rewrites only the hotkey.trigger field in the YAML config file.
 func SaveHotkey(cfg *Config, trigger string) error {
-	homeDir, err := os.UserHomeDir()
+	configFile, err := userConfigPath()
 	if err != nil {
-		return fmt.Errorf("cannot find home directory: %w", err)
+		return err
 	}
-	configFile := filepath.Join(homeDir, ".sussurro", "config.yaml")
 
 	data, err := os.ReadFile(configFile)
 	if err != nil {
@@ -108,11 +107,10 @@ func SaveHotkey(cfg *Config, trigger string) error {
 // SaveHotkeyMode rewrites only the hotkey.mode field in the YAML config file.
 // If the key does not exist (old config), it inserts it after the trigger: line.
 func SaveHotkeyMode(cfg *Config, mode string) error {
-	homeDir, err := os.UserHomeDir()
+	configFile, err := userConfigPath()
 	if err != nil {
-		return fmt.Errorf("cannot find home directory: %w", err)
+		return err
 	}
-	configFile := filepath.Join(homeDir, ".sussurro", "config.yaml")
 
 	data, err := os.ReadFile(configFile)
 	if err != nil {
@@ -149,11 +147,10 @@ func SaveHotkeyMode(cfg *Config, mode string) error {
 // SaveLanguage rewrites only the models.asr.language field in the YAML config file.
 // If the key does not exist (old config), it inserts it after the threads: line in the asr: section.
 func SaveLanguage(cfg *Config, language string) error {
-	homeDir, err := os.UserHomeDir()
+	configFile, err := userConfigPath()
 	if err != nil {
-		return fmt.Errorf("cannot find home directory: %w", err)
+		return err
 	}
-	configFile := filepath.Join(homeDir, ".sussurro", "config.yaml")
 
 	data, err := os.ReadFile(configFile)
 	if err != nil {
@@ -212,11 +209,10 @@ func SaveLanguage(cfg *Config, language string) error {
 // SaveLowercaseOutput rewrites only the app.lowercase_output field in the YAML config file.
 // If the key does not exist (old config), it inserts it after the log_level: line in the app: section.
 func SaveLowercaseOutput(cfg *Config, enabled bool) error {
-	homeDir, err := os.UserHomeDir()
+	configFile, err := userConfigPath()
 	if err != nil {
-		return fmt.Errorf("cannot find home directory: %w", err)
+		return err
 	}
-	configFile := filepath.Join(homeDir, ".sussurro", "config.yaml")
 
 	data, err := os.ReadFile(configFile)
 	if err != nil {
@@ -259,11 +255,10 @@ func SaveLowercaseOutput(cfg *Config, enabled bool) error {
 // If the key does not exist (old config), it inserts it after lowercase_output:
 // (or after log_level: if lowercase_output: is also missing).
 func SaveSkipLLMCleanup(cfg *Config, enabled bool) error {
-	homeDir, err := os.UserHomeDir()
+	configFile, err := userConfigPath()
 	if err != nil {
-		return fmt.Errorf("cannot find home directory: %w", err)
+		return err
 	}
-	configFile := filepath.Join(homeDir, ".sussurro", "config.yaml")
 
 	data, err := os.ReadFile(configFile)
 	if err != nil {
