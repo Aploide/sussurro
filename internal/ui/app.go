@@ -15,7 +15,7 @@ type Manager struct {
 	settings *settingsWindow
 
 	// Channels for thread-safe state delivery from pipeline goroutines.
-	stateChangeCh chan AppState
+	stateChangeCh chan ViewModel
 	rmsCh         chan float32
 	quitCh        chan struct{}
 	quitOnce      sync.Once
@@ -40,7 +40,7 @@ type Manager struct {
 func NewManager(cfg *config.Config) (*Manager, error) {
 	return &Manager{
 		cfg:           cfg,
-		stateChangeCh: make(chan AppState, 16),
+		stateChangeCh: make(chan ViewModel, 16),
 		rmsCh:         make(chan float32, 256),
 		quitCh:        make(chan struct{}),
 	}, nil
@@ -93,8 +93,24 @@ func (m *Manager) OnStateChange(state AppState) {
 	if !state.Valid() {
 		return
 	}
+	m.publish(CompactModel(state))
+}
+
+// Present queues an already-built view model for display. Review-mode
+// adapters call this from their own goroutines.
+func (m *Manager) Present(model ViewModel) {
+	if !model.State.Valid() || !model.Mode.Valid() {
+		return
+	}
+	m.publish(model)
+}
+
+// publish queues a model without blocking the caller. Dropping an update
+// under pressure is correct: each model is a complete snapshot, so the next
+// one supersedes anything lost.
+func (m *Manager) publish(model ViewModel) {
 	select {
-	case m.stateChangeCh <- state:
+	case m.stateChangeCh <- model:
 	default: // drop if channel full (non-blocking)
 	}
 }
@@ -111,9 +127,9 @@ func (m *Manager) OnRMSData(rms float32) {
 func (m *Manager) processUpdates() {
 	for {
 		select {
-		case state := <-m.stateChangeCh:
-			m.overlay.SetState(state)
-			m.updateTrayIcon(state)
+		case model := <-m.stateChangeCh:
+			present(m.overlay, model)
+			m.updateTrayIcon(model.State)
 
 		case rms := <-m.rmsCh:
 			m.overlay.PushRMS(rms)
