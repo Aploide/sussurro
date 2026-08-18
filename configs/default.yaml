@@ -40,3 +40,22 @@ hotkey:
 
 injection:
   method: "keyboard"
+
+# Streaming review workflow. Every value below reproduces the original
+# immediate-dictation behavior, so omitting this whole section changes nothing.
+workflow:
+  # immediate: deliver each transcription as soon as it completes.
+  # review:    hold the text for inspection, editing, and explicit delivery.
+  mode: "immediate"
+  streaming:
+    # Show partial transcriptions while recording. Costs extra CPU.
+    enabled: false
+    # Minimum gap between partial transcription passes (100ms-10s).
+    interval: "750ms"
+  input:
+    # auto, native (in-process hotkey), trigger (compositor socket),
+    # or evdev (Linux input devices; needs input group membership).
+    backend: "auto"
+  delivery:
+    # auto, clipboard-paste, wtype (Wayland), or ydotool (uinput daemon).
+    backend: "auto"

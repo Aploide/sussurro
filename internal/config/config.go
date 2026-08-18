@@ -15,6 +15,9 @@ type Config struct {
 	Models    ModelsConfig    `mapstructure:"models"`
 	Hotkey    HotkeyConfig    `mapstructure:"hotkey"`
 	Injection InjectionConfig `mapstructure:"injection"`
+	// Workflow holds the opt-in streaming review settings. Absent from
+	// pre-review configs, where Normalize supplies immediate-mode defaults.
+	Workflow WorkflowConfig `mapstructure:"workflow"`
 }
 
 type AppConfig struct {
@@ -333,10 +336,16 @@ func LoadConfig(path string) (*Config, error) {
 	viper.SetDefault("hotkey.mode", "push-to-talk")
 	viper.SetDefault("app.lowercase_output", false)
 	viper.SetDefault("app.skip_llm_cleanup", false)
+	setWorkflowDefaults(viper.GetViper())
 
 	viper.SetEnvPrefix("SUSSURRO")
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	viper.AutomaticEnv()
+	// AutomaticEnv alone does not surface keys that Unmarshal has to discover,
+	// so bind the workflow keys explicitly.
+	if err := bindWorkflowEnv(viper.GetViper()); err != nil {
+		return nil, err
+	}
 
 	if err := viper.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
@@ -363,6 +372,11 @@ func LoadConfig(path string) (*Config, error) {
 	var cfg Config
 	if err := viper.Unmarshal(&cfg); err != nil {
 		return nil, err
+	}
+
+	cfg.Workflow.Normalize()
+	if err := cfg.Workflow.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 
 	return &cfg, nil
