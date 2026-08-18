@@ -1,7 +1,6 @@
 package pipeline
 
 import (
-	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -9,9 +8,7 @@ import (
 
 	"github.com/aploide/sussurro/internal/asr"
 	"github.com/aploide/sussurro/internal/audio"
-	"github.com/aploide/sussurro/internal/clipboard"
 	ctxProvider "github.com/aploide/sussurro/internal/context"
-	"github.com/aploide/sussurro/internal/injection"
 	"github.com/aploide/sussurro/internal/llm"
 	"github.com/aploide/sussurro/internal/session"
 )
@@ -41,15 +38,15 @@ type StateNotifier interface {
 // Pipeline orchestrates the flow of data from audio capture to text output
 type Pipeline struct {
 	audioEngine *audio.CaptureEngine
-	asrEngine   *asr.Engine
-	llmEngine   *llm.Engine
+	asrEngine   transcriber
+	llmEngine   cleaner
 	ctxProvider ctxProvider.Provider
-	injector    *injection.Injector
 	log         *slog.Logger
 	vadParams   audio.VADParams
 
-	onCompletion func()        // Callback for when processing finishes
-	uiNotifier   StateNotifier // optional; nil means no UI
+	onCompletion   func()         // Callback for when processing finishes
+	uiNotifier     StateNotifier  // optional; nil means no UI
+	resultConsumer ResultConsumer // optional; nil discards results
 
 	// Channels for data flow
 	audioChan chan []float32
@@ -73,7 +70,6 @@ func NewPipeline(
 	asrEngine *asr.Engine,
 	llmEngine *llm.Engine,
 	ctxProvider ctxProvider.Provider,
-	injector *injection.Injector,
 	log *slog.Logger,
 	sampleRate int,
 	maxDuration string,
@@ -86,7 +82,6 @@ func NewPipeline(
 		asrEngine:      asrEngine,
 		llmEngine:      llmEngine,
 		ctxProvider:    ctxProvider,
-		injector:       injector,
 		log:            log,
 		vadParams:      vadParams,
 		audioBufferCap: audioBufferCapFor(maxDuration, sampleRate),
@@ -115,6 +110,12 @@ func (p *Pipeline) SetSkipLLMCleanup(v bool) {
 // SetOnCompletion sets a callback to be called when processing is done
 func (p *Pipeline) SetOnCompletion(callback func()) {
 	p.onCompletion = callback
+}
+
+// SetResultConsumer installs the consumer that receives completed recognition
+// results. Must be called before Start(). A nil consumer discards results.
+func (p *Pipeline) SetResultConsumer(consumer ResultConsumer) {
+	p.resultConsumer = consumer
 }
 
 // SetUINotifier installs a StateNotifier for UI state updates.
@@ -332,10 +333,14 @@ func (p *Pipeline) processSegment(samples []float32) {
 	p.log.Debug("ASR Output", "text", text, "duration", time.Since(start))
 
 	// 2. Context: Get Current Window Info
-	ctxInfo, err := p.ctxProvider.GetContext()
+	var ctxInfo ctxProvider.ContextInfo
+	info, err := p.ctxProvider.GetContext()
 	if err != nil {
 		p.log.Warn("Failed to get context", "error", err)
 		// Proceed without context
+	}
+	if info != nil {
+		ctxInfo = *info
 	}
 
 	p.mu.Lock()
@@ -343,6 +348,7 @@ func (p *Pipeline) processSegment(samples []float32) {
 	p.mu.Unlock()
 
 	cleanedText := text
+	cleaned := false
 	if !skipLLMCleanup {
 		// 3. LLM: Cleanup and Contextualize
 		// TODO: Pass context info to LLM if supported
@@ -351,6 +357,8 @@ func (p *Pipeline) processSegment(samples []float32) {
 			p.log.Error("LLM cleanup failed", "error", err)
 			// Fallback to raw text
 			cleanedText = text
+		} else {
+			cleaned = true
 		}
 	} else {
 		p.log.Debug("Skipping LLM cleanup (raw output enabled)")
@@ -370,19 +378,22 @@ func (p *Pipeline) processSegment(samples []float32) {
 		"total_duration", time.Since(start),
 	)
 
-	// 4. Output: Print to Stdout
-	fmt.Println(cleanedText)
+	// 4. Publish the result. Delivery is the consumer's responsibility, so
+	// review mode can hold the text before anything reaches the focused window.
+	p.publish(Result{
+		Raw:     text,
+		Text:    cleanedText,
+		Context: ctxInfo,
+		Cleaned: cleaned,
+	})
+}
 
-	// 5. Output: Inject Text
-	// First write to clipboard as backup/mechanism
-	if err := clipboard.Write(cleanedText); err != nil {
-		p.log.Error("Failed to write to clipboard", "error", err)
+// publish hands a completed result to the installed consumer (nil-safe).
+func (p *Pipeline) publish(result Result) {
+	consumer := p.resultConsumer
+	if consumer == nil {
+		p.log.Debug("No result consumer installed, discarding result")
+		return
 	}
-
-	// Then inject via keyboard
-	if p.injector != nil {
-		if err := p.injector.Inject(cleanedText); err != nil {
-			p.log.Error("Failed to inject text", "error", err)
-		}
-	}
+	consumer.OnResult(result)
 }

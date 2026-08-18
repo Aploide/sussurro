@@ -9,8 +9,10 @@ import (
 
 	"github.com/aploide/sussurro/internal/asr"
 	"github.com/aploide/sussurro/internal/audio"
+	"github.com/aploide/sussurro/internal/clipboard"
 	"github.com/aploide/sussurro/internal/config"
 	"github.com/aploide/sussurro/internal/context"
+	"github.com/aploide/sussurro/internal/delivery"
 	"github.com/aploide/sussurro/internal/hotkey"
 	"github.com/aploide/sussurro/internal/injection"
 	"github.com/aploide/sussurro/internal/llm"
@@ -130,7 +132,25 @@ func run() {
 	}
 
 	// Initialize and Start Pipeline
-	pipe := pipeline.NewPipeline(audioEngine, asrEngine, llmEngine, ctxProvider, injector, log, cfg.Audio.SampleRate, cfg.Audio.MaxDuration)
+	pipe := pipeline.NewPipeline(audioEngine, asrEngine, llmEngine, ctxProvider, log, cfg.Audio.SampleRate, cfg.Audio.MaxDuration)
+
+	// Immediate mode: deliver every recognition result as soon as it is
+	// published. Review mode will install a session controller here instead.
+	// A failed injector must stay out of the interface, or the typed nil would
+	// read as a usable backend and panic on the first paste.
+	var pasteBackend delivery.Injector
+	if injector != nil {
+		pasteBackend = injector
+	}
+	immediate := delivery.NewImmediate(clipboard.Write, pasteBackend, os.Stdout, log)
+	pipe.SetResultConsumer(pipeline.ResultConsumerFunc(func(result pipeline.Result) {
+		if result.Empty() {
+			return
+		}
+		if err := immediate.Deliver(result.Text); err != nil {
+			log.Error("Immediate delivery failed", "error", err)
+		}
+	}))
 
 	pipe.SetLowercaseOutput(cfg.App.LowercaseOutput)
 	pipe.SetSkipLLMCleanup(cfg.App.SkipLLMCleanup)
