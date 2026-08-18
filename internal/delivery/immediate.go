@@ -18,7 +18,14 @@ type Injector interface {
 type ClipboardWriter func(text string) error
 
 // Immediate reproduces upstream's immediate-mode behavior: echo the text to
-// stdout, stage it on the clipboard, then paste it into the focused window.
+// stdout, stage it on the clipboard, then paste it.
+//
+// It deliberately does not use ClipboardBackend. Review mode aborts when
+// staging fails, because pasting would then insert whatever the clipboard held
+// before. Immediate mode has no reviewed text to fall back to, so upstream
+// pastes regardless and treats a missing injector as success, leaving the text
+// on the clipboard for the user to paste. Changing that would regress
+// dictation on hosts where keystroke synthesis is unavailable.
 type Immediate struct {
 	clipboard ClipboardWriter
 	injector  Injector
