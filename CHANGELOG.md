@@ -4,7 +4,56 @@ All notable changes to Sussurro will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Opt-in review workflow** (`workflow.mode: review`): transcriptions are held
+  in a *Ready* state where they can be read, corrected by voice, cancelled, or
+  delivered explicitly, instead of being inserted as soon as they are ready.
+  Immediate mode is the default and is behaviourally unchanged; a config with
+  no `workflow` section behaves exactly as before.
+- **Live partial transcription** (`workflow.streaming.enabled`, default off):
+  re-transcribes the audio captured so far on a timer. At most one pass runs at
+  a time and ticks arriving during one coalesce, so slow inference lowers the
+  update rate rather than growing a queue. Stopping never waits for a partial
+  pass, and results from a cancelled recording are discarded by generation ID.
+- **Voice-directed editing**: holding the hotkey over reviewed text records a
+  spoken correction, applied by a separate LLM operation. Prompt fields are
+  delimited with fenced markers so dictated quotes cannot break out of a field.
+  The original text is preserved on inference failure, empty output, or output
+  that fails validation, and one revision back can be undone.
+- **Explicit delivery actions and optional backends**
+  (`workflow.delivery.backend`): `Deliver` inserts the exact text, and
+  `DeliverAndSubmit` follows it with Enter. `wtype` and `ydotool` join the
+  portable clipboard-paste default, chosen by capability check. Naming a
+  backend whose tool is missing is an error rather than a silent downgrade.
+- **Optional Linux `evdev` input** (`workflow.input.backend: evdev`) for
+  compositors that cannot deliver global press and release. Chords come from
+  configuration, either modifier side counts, order does not matter, autorepeat
+  cannot re-fire a gesture, and device discovery prefers stable
+  `/dev/input/by-id` paths. `auto` never opens `/dev/input`.
+- **Explicit Wayland trigger commands**: the socket now accepts `press`,
+  `release`, `cancel`, `deliver`, and `submit` alongside `toggle`, and
+  `scripts/trigger.sh` takes the command as an argument. Existing bindings that
+  send `toggle` — or nothing at all — keep working unchanged.
+- **Settings → Review workflow**: controls for every workflow setting, marking
+  options this host cannot use and explaining why (missing tool, Linux only,
+  or `input` group membership).
+
+### Changed
+- The pipeline now publishes a structured result before any delivery occurs,
+  rather than injecting text itself. Immediate mode installs a compatibility
+  consumer that reproduces the previous clipboard-and-paste behaviour exactly.
+- Input gestures from hotkeys, the trigger socket, and future adapters route
+  through a single dispatcher, so no call site branches on interaction mode.
+
 ### Fixed
+- **Data race in the Wayland trigger server**: recording state was read and
+  written from every connection goroutine without synchronisation. The server
+  no longer holds that state at all.
+- **Nil dereference on context failure**: the pipeline dereferenced the window
+  context after the provider returned an error.
+- **Failed injector treated as usable**: a `*injection.Injector` that failed to
+  initialise was passed on as a non-nil interface, which would panic on the
+  first paste.
 - **Settings window opened as an empty grey frame on NVIDIA + Wayland** (`internal/ui/webkit_linux.go`): WebKitGTK's DMABUF renderer takes the GDK connection down with `Error 71 (Protocol error)` as soon as the first frame is composited — the page has already loaded, so the window appears but never paints. Sussurro now sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` before the webview is created, unless the environment already specifies a value. Reproduced with a bare `webview_go` program and a trivial HTML page, so it affects any WebKitGTK app on that stack, not just the settings page.
 - **Windows: every first run died with `yaml: line 18: did not find expected hexdecimal number`** (`internal/setup`, `internal/config`): `EnsureSetup` wrote the generated `~/.sussurro/config.yaml` model paths as double-quoted YAML scalars, where a backslash opens an escape sequence — the `\U` of `C:\Users\…` is YAML's 32-bit unicode escape and demands eight hex digits. Line 18 is `models.asr.path`, so the config was rejected before the app could start (and therefore could never repair itself). Paths are now emitted as single-quoted scalars, which have no escape sequences at all. `LoadConfig` also re-quotes an unparseable path line in place and retries once, so installs already broken by an earlier version recover on the next launch instead of needing the file deleted by hand.
 - **Released Linux binaries failed to start with `libayatana-appindicator3.so.1: cannot open shared object file`** (`go.mod`, `internal/ui/tray.go`, `Makefile`, `.github/workflows/release.yml`): the tray moved from `github.com/getlantern/systray` to `fyne.io/systray`, whose Linux backend implements the DBus StatusNotifierItem protocol in pure Go. Release binaries no longer link `libappindicator3` or `libayatana-appindicator3`, so one artifact runs on distros shipping either variant — or neither. The release workflow previously tried to force the legacy backend with `apt-get install libappindicator3-dev || true`, which is a silent no-op on Ubuntu 24.04 (`libayatana-appindicator3-dev` declares both `Provides:` and `Conflicts:` on that name), so every release was linked against the Ayatana SONAME regardless. The `legacy_appindicator` build tag and its `pkg-config` probe are gone.

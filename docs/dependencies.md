@@ -79,6 +79,41 @@ sudo pacman -S wl-clipboard   # Arch (Wayland only)
 sudo apt install wl-clipboard  # Ubuntu/Debian (Wayland only)
 ```
 
+### Linux — Review Workflow (optional)
+
+The review workflow needs **no additional packages**. Everything below is
+optional and enabled only if you configure it; the defaults use the same
+clipboard-and-paste path as immediate mode.
+
+| Package | Enables | Needed when |
+|---------|---------|-------------|
+| `wtype` | `workflow.delivery.backend: wtype` | Wayland compositors implementing the virtual keyboard protocol |
+| `ydotool` | `workflow.delivery.backend: ydotool` | Direct typing under any compositor; also needs the `ydotoold` daemon running |
+| — | `workflow.input.backend: evdev` | No package; requires membership of the `input` group |
+
+```bash
+# Arch / Manjaro
+sudo pacman -S wtype ydotool
+
+# Ubuntu / Debian
+sudo apt install wtype ydotool
+
+# Fedora
+sudo dnf install wtype ydotool
+```
+
+**evdev input** reads Linux input devices directly, which requires group
+membership rather than a package:
+
+```bash
+sudo usermod -aG input $USER   # then log out and back in
+```
+
+`workflow.input.backend: auto` never opens `/dev/input`, so an ordinary host
+needs none of this. Selecting a backend whose tool is missing produces an
+error naming what to install rather than silently falling back — **Settings →
+Review workflow** shows the same information per option.
+
 ---
 
 ## Build Dependencies

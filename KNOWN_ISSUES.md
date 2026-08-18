@@ -22,3 +22,36 @@ Vulkan-accelerated Whisper). Remaining caveats:
   only; the go-llama.cpp binding has no Vulkan build and a second
   Vulkan-enabled ggml copy would collide at link time).
 - **`sussurro-transcribe` needs ffmpeg** on PATH (`winget install Gyan.FFmpeg`).
+
+## Review Workflow
+
+The review workflow is opt-in and off by default; immediate dictation is
+unaffected by everything here.
+
+- **No expanded transcript card yet**: review state is published to the overlay
+  as a view model, but the native overlays still render only the existing
+  capsule. Partial and reviewed text is visible in the logs (`app.debug: true`)
+  rather than on screen. The Linux overlay is a fixed-size Cairo pill with no
+  arbitrary-text drawing API; the expanded card is tracked separately.
+- **Review mode is unverified on macOS and Windows**: the workflow itself is
+  platform-neutral and covered by tests, but the gestures and delivery paths
+  have only been exercised on Linux X11.
+- **evdev requires the `input` group**: `workflow.input.backend: evdev` reads
+  Linux input devices directly and fails with an explanatory error without
+  membership. `auto` never opens `/dev/input`, so this affects only hosts that
+  explicitly select `evdev`. Device discovery and the permission diagnostic are
+  verified; live key reading is not, as it needs that membership.
+- **`wtype` and `ydotool` delivery are unverified**: neither tool is installed
+  on the development host. The command arguments are covered by tests, but the
+  backends have not been run against a real compositor. `auto` falls back to
+  clipboard paste, which is the tested path.
+- **Voice editing quality depends on the model**: the bundled
+  `qwen3-sussurro` fine-tune is trained for cleanup, not instruction-following.
+  Edits fall back to the original text when the model returns nothing usable,
+  so a poor edit is safe but may simply do nothing. A general instruct model
+  configured via `models.llm.path` handles instructions better.
+- **Live transcription costs CPU**: enabling `workflow.streaming.enabled`
+  re-runs Whisper on the audio captured so far. On CPU-only hosts the practical
+  update rate may be well below the configured interval. This is by design —
+  partial passes are skipped rather than queued — but it means streaming is of
+  limited use on slow machines.

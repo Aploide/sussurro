@@ -12,8 +12,9 @@ The data flow follows this sequence:
 2.  **Audio Capture**: Microphone input is recorded; RMS levels are streamed to the overlay for the waveform animation. The recording buffer is pre-allocated to the configured max-duration capacity at startup and reused across recordings (reset to `[:0]`) to avoid mid-session allocations.
 3.  **ASR (Automatic Speech Recognition)**: Raw audio is converted to text using **Whisper.cpp**.
 4.  **LLM Cleanup**: The raw transcription is processed by a Large Language Model (**Qwen 3 Sussurro**) to remove artifacts, filler words, and apply grammar corrections.
-5.  **Clipboard and Text Injection**: The cleaned text is written to the clipboard and pasted into the active application.
-6.  **UI Notification**: Each pipeline state change (idle → recording → transcribing → idle) is pushed to the overlay via the `StateNotifier` interface.
+5.  **Result Publication**: The pipeline publishes a structured result (raw text, delivered text, window context) rather than injecting directly. Delivery is the consumer's responsibility.
+6.  **Delivery**: In immediate mode a compatibility consumer writes the clipboard and pastes into the active application, exactly as before. In review mode the session controller holds the result instead.
+7.  **UI Notification**: Each state change is pushed to the overlay as an immutable view model.
 
 ---
 
@@ -57,6 +58,70 @@ The data flow follows this sequence:
 ### 6. Input Injector (`internal/injection`)
 - **Library**: `github.com/micmonay/keybd_event`.
 - **Role**: Triggers the paste shortcut to insert the final text.
+
+### 7. Review Workflow *(opt-in)*
+
+Review mode is layered onto the same pipeline rather than being a second
+application. Every part is off by default; see
+[configuration.md](configuration.md).
+
+#### Result boundary (`internal/pipeline`)
+- **Role**: `Pipeline` publishes a `Result` to an installed `ResultConsumer`
+  instead of injecting text itself. Immediate mode installs a consumer that
+  reproduces the original clipboard-and-paste behaviour.
+- **Why**: Review mode must be able to hold text before anything reaches the
+  focused window.
+
+#### Partial transcription (`internal/pipeline/streamer.go`)
+- **Role**: Re-transcribes the audio captured so far on a timer.
+- **Bounding**: At most one inference runs at a time, and ticks arriving while
+  one is running coalesce through a single-slot channel. Slow CPU inference
+  lowers the update rate instead of growing a queue.
+- **Staleness**: Each recording carries a generation counter. Stopping bumps
+  it and returns immediately without waiting for the in-flight pass, so a
+  partial inference can never delay final transcription; its result is
+  discarded when the generation no longer matches.
+
+#### Session controller (`internal/session/controller.go`)
+- **Role**: A platform-neutral state machine over Idle, Recording, Finalizing,
+  Ready, Editing, ApplyingEdit, and Delivering.
+- **Adapters**: Recognition, editing, delivery, and presentation all arrive
+  through interfaces, so the controller carries no platform assumptions.
+- **Cancellation**: Every asynchronous entry point is keyed by a monotonically
+  increasing session ID. Cancelling bumps it, so callbacks still in flight are
+  discarded rather than resurrecting an abandoned session.
+- **Recovery**: One previous revision is retained, and delivery failure returns
+  to Ready with the text intact.
+
+#### Voice editing (`internal/llm/edit.go`, `internal/review`)
+- **Role**: Applies a spoken instruction to reviewed text.
+- **Prompt safety**: Fields are delimited with fenced markers rather than
+  quotes, so dictated text containing a quote cannot end a field early and have
+  the remainder read as instructions.
+- **Fallback**: The original text is returned unchanged on inference failure,
+  empty output, or output that fails validation.
+
+#### Input adapters (`internal/input`, `internal/trigger`)
+- **Role**: Produce platform-neutral gestures. Native hotkeys and the trigger
+  socket remain the defaults.
+- **evdev**: An optional Linux backend with a pure chord detector separated
+  from device I/O. `auto` never opens `/dev/input`, so ordinary hosts need no
+  `input` group membership.
+- **Trigger socket**: Accepts explicit `press`, `release`, `cancel`, `deliver`,
+  and `submit` alongside the original `toggle`.
+
+#### Delivery backends (`internal/delivery`)
+- **Role**: Insert reviewed text through `Deliver` or `DeliverAndSubmit`.
+- **Backends**: Clipboard paste is the portable default; `wtype` and `ydotool`
+  are optional. Selection is capability-checked, and an explicitly named
+  backend that is missing is an error rather than a silent downgrade.
+- **Safety**: Delivery waits for input release before typing, inserts the text
+  exactly with no added space, and refuses empty text.
+
+#### Presentation (`internal/ui/viewmodel.go`)
+- **Role**: The Manager publishes immutable `ViewModel` values describing what
+  to show. Platforms that can render transcript text implement the optional
+  `Presenter` interface; the rest fall back to the existing capsule.
 
 ---
 

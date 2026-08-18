@@ -49,6 +49,7 @@ On first run Sussurro will guide you through downloading the AI models.
 - **GPU Acceleration**: Metal on macOS, Vulkan on Windows
 - **Transcription Language**: Choose the language Whisper listens for (or use Auto Detect) directly from Settings
 - **Headless Mode**: `--no-ui` flag for CLI/scripting use on any platform
+- **Review Mode** *(opt-in)*: Hold the transcription before it is delivered — read it, dictate a correction, or discard it, then insert it when you are ready. Off by default; see [Review workflow](#review-workflow)
 
 ---
 
@@ -62,6 +63,52 @@ On first run Sussurro will guide you through downloading the AI models.
 | Windows | `Ctrl+Shift+Space` | Push to Talk | System tray or right-click capsule |
 
 The hotkey mode can be changed at any time from **Settings → Global Hotkey → Mode**.
+
+---
+
+## Review workflow
+
+By default Sussurro delivers each transcription as soon as it is ready. That
+behaviour is unchanged, and nothing below is enabled unless you ask for it.
+
+**Review mode** holds the text instead, so you can check it first:
+
+```yaml
+workflow:
+  mode: "review"
+```
+
+or without editing the config at all:
+
+```bash
+SUSSURRO_WORKFLOW_MODE=review sussurro
+```
+
+In review mode a completed transcription waits in a *Ready* state where you can:
+
+- **Deliver** it into the focused window, optionally followed by Enter
+- **Dictate a correction** — hold the hotkey again and say what to change; one
+  revision back can be undone
+- **Cancel** it, discarding the text entirely
+
+A failed delivery leaves the text in *Ready* rather than losing it.
+
+**Live transcription** shows partial text while you are still speaking:
+
+```yaml
+workflow:
+  streaming:
+    enabled: true
+```
+
+It costs extra CPU. Partial passes never overlap and never delay the final
+transcription — on a slow machine the updates simply arrive less often.
+
+Input and delivery are pluggable for compositors the defaults cannot serve:
+`wtype` and `ydotool` for typing, and Linux `evdev` for true press-and-release
+gestures. All are optional, and the defaults need no extra packages. See
+[docs/configuration.md](docs/configuration.md) for every setting, or use
+**Settings → Review workflow**, which marks what this host cannot do and why.
 
 ---
 

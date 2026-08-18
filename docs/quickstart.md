@@ -131,6 +131,43 @@ From Settings you can:
 - Change the transcription language (Auto Detect, English, German, Spanish, French, Portuguese, Russian, Italian)
 - Change the global hotkey (X11 / macOS / Windows) — takes effect immediately, no restart needed
   - Hold up to 3 keys in the recorder, then release them all to save
+- Turn on the **review workflow** (see Step 8), including live transcription and
+  the delivery backend
+
+---
+
+## Step 8: Try Review Mode (optional)
+
+By default the transcription is inserted as soon as it is ready. Review mode
+holds it first, so you can check it, correct it by voice, or throw it away.
+
+Try it without changing any files:
+
+```bash
+SUSSURRO_WORKFLOW_MODE=review ./sussurro
+```
+
+Then dictate as usual. Instead of the text appearing straight away, the session
+waits in a *Ready* state, where you can:
+
+- **deliver** the text into the focused window
+- **hold the hotkey again** and say what to change — for example
+  "capitalise the first word" — to revise it
+- **cancel** to discard it
+
+To keep it on, add this to `~/.sussurro/config.yaml`:
+
+```yaml
+workflow:
+  mode: "review"
+```
+
+Or set it from **Settings → Review workflow**, which also offers live
+transcription and marks anything this machine cannot do, with the reason.
+
+> **Note:** review state is not yet drawn in the overlay capsule — run with
+> `app.debug: true` to follow it in the logs. See
+> [KNOWN_ISSUES.md](../KNOWN_ISSUES.md).
 
 ## Troubleshooting
 
@@ -170,3 +207,7 @@ echo toggle | nc -U /run/user/$(id -u)/sussurro.sock
 1. Launch from a terminal, then press hotkey once to start recording → speak → press again to stop → text appears
 
 To stop manually: right-click the capsule → **Quit**, or click Quit in the tray menu.
+
+**Review mode (any platform):** dictate as usual, then deliver, revise by
+voice, or cancel. On Wayland the review actions are also available from the
+trigger socket — see [wayland.md](wayland.md).

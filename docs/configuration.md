@@ -152,6 +152,97 @@ injection:
   method: "keyboard"
 ```
 
+### Review Workflow Settings
+
+```yaml
+workflow:
+  mode: "immediate"       # "immediate" or "review"
+  streaming:
+    enabled: false        # live partial transcription
+    interval: "750ms"     # 100ms-10s
+  input:
+    backend: "auto"       # auto, native, trigger, evdev
+    device: ""            # evdev only
+    chord: ""             # evdev only
+    cancel_chord: ""      # evdev only
+  delivery:
+    backend: "auto"       # auto, clipboard-paste, wtype, ydotool
+```
+
+Every default reproduces the original dictation behaviour, so **omitting this
+whole section changes nothing**. Existing configurations need no edits.
+
+#### `mode`
+
+| Value | Behaviour |
+|-------|-----------|
+| `immediate` | Transcribed text is delivered as soon as it is ready. The original behaviour, and the default. |
+| `review` | Text is held so you can read it, dictate a correction, or discard it, and is delivered only when you ask. |
+
+#### `streaming`
+
+**`enabled`** shows partial transcriptions while you are still speaking. It
+costs extra CPU, because the audio captured so far is re-transcribed
+periodically. Partial passes never run concurrently and never delay the final
+transcription: if inference is slower than the interval, updates simply arrive
+less often.
+
+**`interval`** is the minimum gap between partial passes, as a Go duration
+string (`750ms`, `1s`). Values outside 100ms–10s are rejected.
+
+#### `input`
+
+**`backend`** selects where recording gestures come from:
+
+| Value | Behaviour |
+|-------|-----------|
+| `auto` | Native hotkeys on X11, macOS, and Windows; the trigger socket on Wayland. Never opens `/dev/input`. The default. |
+| `native` | The in-process global hotkey listener. |
+| `trigger` | The Unix socket only — for compositors that own their own key bindings. See [wayland.md](wayland.md). |
+| `evdev` | Reads Linux input devices directly. Optional; see below. |
+
+The `evdev` backend gives true press and release gestures on compositors that
+cannot deliver them, at the cost of requiring membership of the `input` group:
+
+```bash
+sudo usermod -aG input $USER   # then log out and back in
+```
+
+**`device`** selects the keyboard by name substring or exact path. Empty picks
+the first stable `/dev/input/by-id` keyboard. A name matching several devices
+is an error rather than a silent choice of the wrong keyboard.
+
+**`chord`** is the recording combination in the same notation as
+`hotkey.trigger`. Empty follows `hotkey.trigger`. Either side of a modifier
+satisfies it, and the parts may be pressed in any order.
+
+**`cancel_chord`** abandons a review session and discards the held text. Empty
+disables it.
+
+These three keys apply to `evdev` only; other backends ignore them.
+
+#### `delivery`
+
+**`backend`** selects how reviewed text is inserted:
+
+| Value | Behaviour |
+|-------|-----------|
+| `auto` | Uses `ydotool` or `wtype` when installed, otherwise clipboard paste. The default. |
+| `clipboard-paste` | Stages the text on the clipboard and sends the paste keystroke. Works on X11, macOS, and Windows with no extra packages. |
+| `wtype` | Types through the Wayland virtual keyboard protocol. Requires `wtype`. |
+| `ydotool` | Types through the `ydotool` uinput daemon. Requires `ydotool` and its daemon. |
+
+Naming a backend whose tool is not installed is an error rather than a silent
+downgrade, so a misconfigured host is diagnosable. `auto` never fails this way.
+
+Delivery waits for the trigger keys to be released before typing, so text is
+not turned into keyboard shortcuts by a modifier that is still held. It inserts
+the text exactly, adding no trailing space, and refuses to deliver empty text
+so a stray Enter cannot reach a window you never dictated into.
+
+All of these settings are also available in **Settings → Review workflow**,
+which marks options this host cannot use and explains why.
+
 ### Environment Variables
 
 All configuration values can be overridden using environment variables prefixed with `SUSSURRO_`. Nested keys are separated by underscores.
@@ -161,4 +252,21 @@ Example:
 export SUSSURRO_APP_DEBUG=true
 export SUSSURRO_MODELS_LLM_THREADS=8
 ./sussurro
+```
+
+The review workflow keys follow the same rule:
+
+| Variable | Setting |
+|----------|---------|
+| `SUSSURRO_WORKFLOW_MODE` | `workflow.mode` |
+| `SUSSURRO_WORKFLOW_STREAMING_ENABLED` | `workflow.streaming.enabled` |
+| `SUSSURRO_WORKFLOW_STREAMING_INTERVAL` | `workflow.streaming.interval` |
+| `SUSSURRO_WORKFLOW_INPUT_BACKEND` | `workflow.input.backend` |
+| `SUSSURRO_WORKFLOW_INPUT_DEVICE` | `workflow.input.device` |
+| `SUSSURRO_WORKFLOW_INPUT_CHORD` | `workflow.input.chord` |
+| `SUSSURRO_WORKFLOW_INPUT_CANCEL_CHORD` | `workflow.input.cancel_chord` |
+| `SUSSURRO_WORKFLOW_DELIVERY_BACKEND` | `workflow.delivery.backend` |
+
+```bash
+SUSSURRO_WORKFLOW_MODE=review ./sussurro   # try review mode without editing the config
 ```

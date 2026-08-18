@@ -27,6 +27,52 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # The packages listed here are pure Go, so this job needs neither
+      # whisper.cpp nor GTK and stays fast enough to gate every release.
+      # internal/ui and the cmd packages are excluded: they pull in the
+      # WebKitGTK cgo dependency, which the race detector cannot build here.
+      - name: Vet and test
+        shell: bash
+        run: |
+          set -euo pipefail
+          packages="
+            ./internal/config/...
+            ./internal/delivery/...
+            ./internal/input/...
+            ./internal/llm/...
+            ./internal/pipeline/...
+            ./internal/review/...
+            ./internal/session/...
+            ./internal/setup/...
+            ./internal/trigger/...
+          "
+          go vet ${packages}
+          go test -race ${packages}
+
+      - name: Check formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Only the packages this workflow's tests cover; the rest of the tree
+          # has pre-existing formatting drift.
+          unformatted="$(gofmt -l internal/config internal/delivery internal/input \
+            internal/llm internal/pipeline internal/review internal/session \
+            internal/trigger cmd)"
+          if [[ -n "${unformatted}" ]]; then
+            echo "Refusing to release: these files are not gofmt-clean:" >&2
+            echo "${unformatted}" >&2
+            exit 1
+          fi
+
   resolve-version:
     runs-on: ubuntu-latest
     outputs:
@@ -69,7 +115,9 @@ jobs:
           echo "Releasing ${tag} (version ${version}, prerelease=${prerelease})"
 
   build-unix:
-    needs: resolve-version
+    needs:
+      - test
+      - resolve-version
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -153,6 +201,15 @@ jobs:
             exit 1
           fi
 
+          # The review workflow's optional backends must stay optional: wtype
+          # and ydotool are invoked as external commands, never linked, and
+          # evdev is read through plain file I/O. A library dependency here
+          # would make an opt-in feature a hard runtime requirement.
+          if grep -Eq 'libevdev|libwtype|libydotool|libinput\.so' <<< "${needed}"; then
+            echo "Refusing to release: sussurro links an optional input/delivery library." >&2
+            exit 1
+          fi
+
       - name: Verify stamped version
         shell: bash
         env:
@@ -175,7 +232,9 @@ jobs:
           if-no-files-found: error
 
   build-windows:
-    needs: resolve-version
+    needs:
+      - test
+      - resolve-version
     runs-on: windows-latest
     defaults:
       run:
