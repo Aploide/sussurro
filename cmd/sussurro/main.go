@@ -152,6 +152,21 @@ func run() {
 		}
 	}))
 
+	// Streaming stays off unless the config opts in. Partial text is logged
+	// for now; overlay presentation arrives with the review UI work.
+	if cfg.Workflow.Streaming.Enabled {
+		pipe.SetStreamer(pipeline.NewStreamer(
+			asrEngine,
+			pipe.SnapshotRecording,
+			func(generation uint64, text string) {
+				log.Debug("Partial transcription", "generation", generation, "text", text)
+			},
+			cfg.Workflow.StreamingInterval(),
+			log,
+		))
+		log.Info("Partial transcription enabled", "interval", cfg.Workflow.StreamingInterval())
+	}
+
 	pipe.SetLowercaseOutput(cfg.App.LowercaseOutput)
 	pipe.SetSkipLLMCleanup(cfg.App.SkipLLMCleanup)
 

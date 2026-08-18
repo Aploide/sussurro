@@ -1,0 +1,204 @@
+package pipeline
+
+import (
+	"log/slog"
+	"sync"
+	"sync/atomic"
+	"time"
+)
+
+// SnapshotFunc returns a copy of the audio captured so far in the current
+// recording. It returns false when no recording is in progress.
+type SnapshotFunc func() ([]float32, bool)
+
+// PartialFunc receives a partial transcription belonging to the generation it
+// is tagged with. Callers must ignore generations they no longer care about;
+// the streamer already drops results from stopped sessions.
+type PartialFunc func(generation uint64, text string)
+
+// Ticker abstracts time.Ticker so tests can drive the streamer deterministically.
+type Ticker interface {
+	// C returns the channel signalling that a partial pass is due.
+	C() <-chan time.Time
+	// Stop releases the ticker's resources.
+	Stop()
+}
+
+// realTicker adapts time.Ticker to Ticker.
+type realTicker struct{ t *time.Ticker }
+
+func (r realTicker) C() <-chan time.Time { return r.t.C }
+func (r realTicker) Stop()               { r.t.Stop() }
+
+// NewTicker returns a Ticker backed by the standard library.
+func NewTicker(interval time.Duration) Ticker {
+	return realTicker{t: time.NewTicker(interval)}
+}
+
+// Streamer produces bounded partial transcriptions of an in-progress
+// recording. It runs at most one inference at a time and coalesces every tick
+// that arrives while an inference is running, so slow CPU inference degrades
+// the partial update rate instead of growing an unbounded work queue.
+//
+// Behavioral reference: flt-james/master internal/asr/stream.go (7c9c12e),
+// which transcribes on the ticker goroutine and has no generation tagging, so
+// a slow pass delays Stop and can publish text after the session ends.
+type Streamer struct {
+	transcribe transcriber
+	snapshot   SnapshotFunc
+	onPartial  PartialFunc
+	newTicker  func() Ticker
+	log        *slog.Logger
+
+	// generation identifies the active recording session. Bumping it
+	// invalidates every in-flight and queued partial result.
+	generation atomic.Uint64
+
+	mu      sync.Mutex
+	running bool
+	// wake signals the worker that a pass is due. Capacity 1 is what
+	// coalesces ticks: a pending wake absorbs any number of further ticks.
+	wake chan struct{}
+	stop chan struct{}
+	wg   sync.WaitGroup
+}
+
+// NewStreamer builds a partial transcription worker. The transcriber is called
+// only from the worker goroutine, so a single-threaded ASR engine is safe.
+func NewStreamer(
+	transcribe transcriber,
+	snapshot SnapshotFunc,
+	onPartial PartialFunc,
+	interval time.Duration,
+	log *slog.Logger,
+) *Streamer {
+	return &Streamer{
+		transcribe: transcribe,
+		snapshot:   snapshot,
+		onPartial:  onPartial,
+		newTicker:  func() Ticker { return NewTicker(interval) },
+		log:        log,
+	}
+}
+
+// Generation returns the currently active session generation.
+func (s *Streamer) Generation() uint64 { return s.generation.Load() }
+
+// Start begins a new partial transcription session and returns its generation.
+// Results from earlier sessions are discarded from this point on. Starting an
+// already-running streamer is a no-op that returns the current generation.
+func (s *Streamer) Start() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.running {
+		return s.generation.Load()
+	}
+
+	generation := s.generation.Add(1)
+	s.running = true
+	s.wake = make(chan struct{}, 1)
+	s.stop = make(chan struct{})
+
+	s.wg.Add(2)
+	go s.tickLoop(s.stop, s.wake)
+	go s.worker(generation, s.stop, s.wake)
+
+	return generation
+}
+
+// Stop ends the current session. It returns immediately without waiting for an
+// in-flight inference, so final transcription is never delayed by a partial
+// pass; the abandoned result is discarded by its generation check.
+func (s *Streamer) Stop() {
+	s.mu.Lock()
+	if !s.running {
+		s.mu.Unlock()
+		return
+	}
+	s.running = false
+	// Bumping the generation invalidates any result still being computed.
+	s.generation.Add(1)
+	close(s.stop)
+	s.mu.Unlock()
+}
+
+// Wait blocks until the goroutines of every stopped session have exited. It is
+// intended for tests and shutdown, not for the recording hot path.
+func (s *Streamer) Wait() { s.wg.Wait() }
+
+// tickLoop converts ticks into at most one pending wake-up.
+func (s *Streamer) tickLoop(stop <-chan struct{}, wake chan<- struct{}) {
+	defer s.wg.Done()
+
+	ticker := s.newTicker()
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C():
+			// A full channel already holds a pending pass, so dropping this
+			// tick is exactly the intended coalescing.
+			select {
+			case wake <- struct{}{}:
+			default:
+			}
+		}
+	}
+}
+
+// worker runs partial inferences one at a time for a single generation.
+func (s *Streamer) worker(generation uint64, stop <-chan struct{}, wake <-chan struct{}) {
+	defer s.wg.Done()
+
+	for {
+		select {
+		case <-stop:
+			return
+		case <-wake:
+			// Re-check: the session may have ended while this wake was queued.
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			s.runPass(generation)
+		}
+	}
+}
+
+// runPass performs one partial transcription and publishes it if the session
+// is still current.
+func (s *Streamer) runPass(generation uint64) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.log.Error("Recovered from panic in partial transcription", "error", r)
+		}
+	}()
+
+	samples, ok := s.snapshot()
+	if !ok || len(samples) == 0 {
+		return
+	}
+
+	text, err := s.transcribe.Transcribe(samples)
+	if err != nil {
+		s.log.Debug("Partial transcription failed", "error", err)
+		return
+	}
+	if text == "" {
+		return
+	}
+
+	// Inference is slow, so the session may have ended meanwhile. Publishing
+	// now would resurrect text the user already cancelled.
+	if s.generation.Load() != generation {
+		s.log.Debug("Discarding stale partial transcription", "generation", generation)
+		return
+	}
+	if s.onPartial != nil {
+		s.onPartial(generation, text)
+	}
+}

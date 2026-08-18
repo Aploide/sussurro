@@ -257,3 +257,35 @@ func TestResultEmpty(t *testing.T) {
 		})
 	}
 }
+
+func TestSnapshotRecordingReportsNoRecordingWhenIdle(t *testing.T) {
+	p := newTestPipeline(t, &stubTranscriber{}, &stubCleaner{}, stubContext{})
+
+	if _, recording := p.SnapshotRecording(); recording {
+		t.Error("SnapshotRecording() reported a recording while idle")
+	}
+}
+
+func TestSnapshotRecordingCopiesBuffer(t *testing.T) {
+	p := newTestPipeline(t, &stubTranscriber{}, &stubCleaner{}, stubContext{})
+	p.isRecording = true
+	p.audioBuffer = []float32{0.1, 0.2, 0.3}
+
+	snapshot, recording := p.SnapshotRecording()
+	if !recording {
+		t.Fatal("SnapshotRecording() reported no recording while recording")
+	}
+	if len(snapshot) != 3 {
+		t.Fatalf("snapshot length = %d, want 3", len(snapshot))
+	}
+
+	// Mutating the snapshot must not disturb the live buffer, and vice versa.
+	snapshot[0] = 9
+	if p.audioBuffer[0] != 0.1 {
+		t.Error("snapshot aliases the live audio buffer")
+	}
+	p.audioBuffer = append(p.audioBuffer, 0.4)
+	if len(snapshot) != 3 {
+		t.Error("appending to the live buffer changed an earlier snapshot")
+	}
+}

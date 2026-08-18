@@ -47,6 +47,7 @@ type Pipeline struct {
 	onCompletion   func()         // Callback for when processing finishes
 	uiNotifier     StateNotifier  // optional; nil means no UI
 	resultConsumer ResultConsumer // optional; nil discards results
+	streamer       *Streamer      // optional; nil disables partial transcription
 
 	// Channels for data flow
 	audioChan chan []float32
@@ -118,6 +119,28 @@ func (p *Pipeline) SetResultConsumer(consumer ResultConsumer) {
 	p.resultConsumer = consumer
 }
 
+// SetStreamer installs a partial transcription worker, enabling streaming.
+// Must be called before Start(). A nil streamer leaves streaming disabled,
+// which is the default.
+func (p *Pipeline) SetStreamer(streamer *Streamer) {
+	p.streamer = streamer
+}
+
+// SnapshotRecording returns a copy of the audio captured so far, and whether a
+// recording is currently in progress. The copy lets partial transcription run
+// without holding the pipeline lock across a slow inference.
+func (p *Pipeline) SnapshotRecording() ([]float32, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if !p.isRecording {
+		return nil, false
+	}
+	snapshot := make([]float32, len(p.audioBuffer))
+	copy(snapshot, p.audioBuffer)
+	return snapshot, true
+}
+
 // SetUINotifier installs a StateNotifier for UI state updates.
 // Must be called before Start().
 func (p *Pipeline) SetUINotifier(n StateNotifier) {
@@ -153,11 +176,23 @@ func (p *Pipeline) Start() error {
 	return nil
 }
 
+// stopStreaming ends the current partial transcription session, if any.
+// Safe to call when streaming is disabled or already stopped.
+func (p *Pipeline) stopStreaming() {
+	if p.streamer != nil {
+		p.streamer.Stop()
+	}
+}
+
 // Stop gracefully shuts down the pipeline
 func (p *Pipeline) Stop() {
 	p.log.Debug("Stopping pipeline")
+	p.stopStreaming()
 	close(p.stopChan)
 	p.wg.Wait()
+	if p.streamer != nil {
+		p.streamer.Wait()
+	}
 	p.log.Debug("Pipeline stopped")
 }
 
@@ -186,6 +221,10 @@ func (p *Pipeline) StartRecording() {
 	}
 	p.log.Debug("Recording started")
 	p.notifyState(session.StateRecording)
+
+	if p.streamer != nil {
+		p.streamer.Start()
+	}
 }
 
 // StopRecording stops accumulating and triggers processing
@@ -202,6 +241,10 @@ func (p *Pipeline) StopRecording() bool {
 	p.isTranscribing = true
 	p.log.Debug("Recording stopped", "buffer_size", len(p.audioBuffer))
 	p.notifyState(session.StateTranscribing)
+
+	// Stop streaming before the final pass so partial inference cannot delay
+	// it or publish text belonging to the session just ended.
+	p.stopStreaming()
 
 	// Process the captured audio in a separate goroutine to not block
 	// Make a copy of the buffer
@@ -257,6 +300,7 @@ func (p *Pipeline) captureLoop() {
 					p.isRecording = false
 					p.isTranscribing = true
 					p.notifyState(session.StateTranscribing)
+					p.stopStreaming()
 
 					// Copy and process immediately
 					bufferCopy := make([]float32, len(p.audioBuffer))
