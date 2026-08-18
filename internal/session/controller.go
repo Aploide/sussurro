@@ -1,6 +1,7 @@
 package session
 
 import (
+	"errors"
 	"log/slog"
 	"sync"
 )
@@ -387,16 +388,22 @@ func (c *Controller) UndoEdit() bool {
 	return true
 }
 
+// ErrNothingToDeliver reports that delivery was requested outside Ready, so
+// there was no reviewed text to insert. It is not a failure: callers use it to
+// avoid reporting a delivery that never happened.
+var ErrNothingToDeliver = errors.New("no reviewed text to deliver")
+
 // Deliver inserts the reviewed text. When submit is true the delivery backend
-// also sends Enter. Delivery is only valid from Ready; on failure the text is
-// kept in Ready so it is never lost.
+// also sends Enter. Delivery is only valid from Ready; outside it the call is
+// a no-op reporting ErrNothingToDeliver. On backend failure the text is kept
+// in Ready so it is never lost.
 func (c *Controller) Deliver(submit bool) error {
 	c.mu.Lock()
 	if c.state != ReviewReady {
 		state := c.state
 		c.mu.Unlock()
 		c.log.Debug("Ignoring deliver", "state", state)
-		return nil
+		return ErrNothingToDeliver
 	}
 
 	notify := c.setState(ReviewDelivering)

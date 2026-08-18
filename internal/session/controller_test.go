@@ -283,8 +283,8 @@ func TestDeliverIgnoredOutsideReady(t *testing.T) {
 			h := newHarness(t)
 			tt.setup(h)
 
-			if err := h.controller.Deliver(false); err != nil {
-				t.Fatalf("Deliver() error = %v, want nil", err)
+			if err := h.controller.Deliver(false); !errors.Is(err, ErrNothingToDeliver) {
+				t.Fatalf("Deliver() error = %v, want ErrNothingToDeliver", err)
 			}
 			if got := h.controller.State(); got != tt.want {
 				t.Errorf("state = %s, want %s", got, tt.want)

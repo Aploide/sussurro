@@ -2,6 +2,7 @@ package trigger
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -154,11 +155,18 @@ func (s *Server) Execute(raw string) string {
 		s.handler.Cancel()
 		return "CANCELLED"
 	case CommandDeliver, CommandSubmit:
-		if err := s.handler.Deliver(command == CommandSubmit); err != nil {
+		err := s.handler.Deliver(command == CommandSubmit)
+		switch {
+		case errors.Is(err, session.ErrNothingToDeliver):
+			// Reporting DELIVERED here would tell a script the text went out
+			// when nothing was ready.
+			return "IDLE"
+		case err != nil:
 			s.log.Error("Trigger delivery failed", "command", command, "error", err)
 			return "ERROR " + err.Error()
+		default:
+			return "DELIVERED"
 		}
-		return "DELIVERED"
 	default:
 		// Unreachable: every command is either a gesture or handled above.
 		return fmt.Sprintf("ERROR unhandled command %s", command)

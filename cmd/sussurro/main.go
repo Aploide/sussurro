@@ -9,7 +9,6 @@ import (
 
 	"github.com/aploide/sussurro/internal/asr"
 	"github.com/aploide/sussurro/internal/audio"
-	"github.com/aploide/sussurro/internal/clipboard"
 	"github.com/aploide/sussurro/internal/config"
 	"github.com/aploide/sussurro/internal/context"
 	"github.com/aploide/sussurro/internal/delivery"
@@ -134,47 +133,48 @@ func run() {
 	// Initialize and Start Pipeline
 	pipe := pipeline.NewPipeline(audioEngine, asrEngine, llmEngine, ctxProvider, log, cfg.Audio.SampleRate, cfg.Audio.MaxDuration)
 
-	// Immediate mode: deliver every recognition result as soon as it is
-	// published. Review mode will install a session controller here instead.
 	// A failed injector must stay out of the interface, or the typed nil would
 	// read as a usable backend and panic on the first paste.
 	var pasteBackend delivery.Injector
 	if injector != nil {
 		pasteBackend = injector
 	}
-	immediate := delivery.NewImmediate(clipboard.Write, pasteBackend, os.Stdout, log)
-	pipe.SetResultConsumer(pipeline.ResultConsumerFunc(func(result pipeline.Result) {
-		if result.Empty() {
-			return
-		}
-		if err := immediate.Deliver(result.Text); err != nil {
-			log.Error("Immediate delivery failed", "error", err)
-		}
-	}))
 
-	// Streaming stays off unless the config opts in. Partial text is logged
-	// for now; overlay presentation arrives with the review UI work.
+	// The presentation sink is replaced with the UI manager below when one is
+	// running; headless review sessions log their state instead.
+	presentModel := func(model ui.ViewModel) {
+		log.Debug("Review state", "state", model.Review, "text", model.Transcript)
+	}
+	presentToUI := &presentSink{present: presentModel}
+
+	// Wire the configured interaction mode. Immediate mode keeps upstream's
+	// deliver-on-completion path; review mode installs the session controller
+	// as both the result consumer and the input dispatcher.
+	flow := buildWorkflow(cfg, pipe, llmEngine, pasteBackend, presentToUI.Present, log)
+	input := flow.dispatch
+
+	// Streaming stays off unless the config opts in. Partial text reaches the
+	// review controller when one is running, and the log otherwise.
 	if cfg.Workflow.Streaming.Enabled {
-		pipe.SetStreamer(pipeline.NewStreamer(
-			asrEngine,
-			pipe.SnapshotRecording,
-			func(generation uint64, text string) {
+		onPartial := flow.partial
+		if onPartial == nil {
+			onPartial = func(generation uint64, text string) {
 				log.Debug("Partial transcription", "generation", generation, "text", text)
-			},
-			cfg.Workflow.StreamingInterval(),
-			log,
+			}
+		}
+		pipe.SetStreamer(pipeline.NewStreamer(
+			asrEngine, pipe.SnapshotRecording, onPartial, cfg.Workflow.StreamingInterval(), log,
 		))
 		log.Info("Partial transcription enabled", "interval", cfg.Workflow.StreamingInterval())
 	}
 
-	// One dispatcher for every input source, so hotkeys, the trigger socket,
-	// and future adapters need no knowledge of the interaction mode.
-	// Review mode is wired in a later bead; immediate mode is unchanged.
-	input := session.NewImmediateDispatcher(pipe)
-
 	// Optional evdev input, when explicitly configured. Falls back silently
 	// to the default backend so a permission problem never breaks dictation.
-	if stopEvdev := startEvdevInput(cfg, input, nil, log); stopEvdev != nil {
+	onCancel := func() {}
+	if flow.controller != nil {
+		onCancel = flow.controller.Cancel
+	}
+	if stopEvdev := startEvdevInput(cfg, input, onCancel, log); stopEvdev != nil {
 		defer stopEvdev()
 	}
 
@@ -200,6 +200,8 @@ func run() {
 		}
 
 		pipe.SetUINotifier(uiMgr)
+		// Route review presentation to the overlay now that a UI exists.
+		presentToUI.Set(uiMgr.Present)
 		uiMgr.SetLowercaseOutputCallback(func(v bool) { pipe.SetLowercaseOutput(v) })
 		uiMgr.SetSkipLLMCleanupCallback(func(v bool) { pipe.SetSkipLLMCleanup(v) })
 
@@ -229,6 +231,9 @@ func run() {
 				os.Exit(1)
 			}
 			defer triggerServer.Stop()
+			if flow.controller != nil {
+				triggerServer.SetHandler(flow.controller)
+			}
 			if err := triggerServer.Start(input); err != nil {
 				log.Error("Failed to start trigger server", "error", err)
 				os.Exit(1)
@@ -258,6 +263,9 @@ func run() {
 		}
 		defer triggerServer.Stop()
 
+		if flow.controller != nil {
+			triggerServer.SetHandler(flow.controller)
+		}
 		if err := triggerServer.Start(input); err != nil {
 			log.Error("Failed to start trigger server", "error", err)
 			os.Exit(1)

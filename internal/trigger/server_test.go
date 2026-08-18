@@ -56,6 +56,10 @@ func (h *fakeHandler) Deliver(submit bool) error {
 	return h.err
 }
 
+// nothingReady reports the controller's no-op result, as when deliver arrives
+// with no reviewed text waiting.
+func nothingReady() error { return session.ErrNothingToDeliver }
+
 func (h *fakeHandler) stats() (cancels int, delivers []bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -382,4 +386,30 @@ func sendCommand(t *testing.T, socket, command string) string {
 		t.Fatalf("reading reply: %v", err)
 	}
 	return strings.TrimSpace(reply)
+}
+
+func TestDeliverWithNothingReadyReportsIdle(t *testing.T) {
+	for _, command := range []string{"deliver", "submit"} {
+		t.Run(command, func(t *testing.T) {
+			handler := &fakeHandler{err: nothingReady()}
+			server := newTestServer(&fakeDispatcher{}, handler)
+
+			// Reporting DELIVERED here would tell a script the text went out
+			// when nothing was ready.
+			if reply := server.Execute(command); reply != "IDLE" {
+				t.Errorf("reply = %q, want IDLE", reply)
+			}
+		})
+	}
+}
+
+func TestDeliverWithNothingReadyIsNotAnError(t *testing.T) {
+	handler := &fakeHandler{err: nothingReady()}
+	server := newTestServer(&fakeDispatcher{}, handler)
+
+	// A script binding deliver to a key must not see a failure just because
+	// there was nothing to send.
+	if reply := server.Execute("deliver"); strings.HasPrefix(reply, "ERROR") {
+		t.Errorf("reply = %q, want a non-error status", reply)
+	}
 }

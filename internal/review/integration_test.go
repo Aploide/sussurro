@@ -123,9 +123,10 @@ func TestIdleControllerNeverDeliversBareEnter(t *testing.T) {
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
 
-	// Delivery from Idle must reach neither the backend nor the host.
-	if err := controller.Deliver(true); err != nil {
-		t.Fatalf("Deliver() error = %v, want a silent no-op", err)
+	// Delivery from Idle must reach neither the backend nor the host, and
+	// must say so rather than reporting a delivery that never happened.
+	if err := controller.Deliver(true); !errors.Is(err, session.ErrNothingToDeliver) {
+		t.Fatalf("Deliver() error = %v, want ErrNothingToDeliver", err)
 	}
 	if len(backend.typed) != 0 || backend.submits != 0 {
 		t.Errorf("backend touched from idle (typed=%v submits=%d), want nothing",
@@ -138,8 +139,8 @@ func TestCancelledSessionDeliversNothing(t *testing.T) {
 	controller := readyController(t, backend, "text")
 
 	controller.Cancel()
-	if err := controller.Deliver(false); err != nil {
-		t.Fatalf("Deliver() error = %v", err)
+	if err := controller.Deliver(false); !errors.Is(err, session.ErrNothingToDeliver) {
+		t.Fatalf("Deliver() error = %v, want ErrNothingToDeliver", err)
 	}
 	if len(backend.typed) != 0 {
 		t.Errorf("typed %v after cancel, want nothing", backend.typed)
