@@ -632,3 +632,153 @@ func TestConcurrentCallbacksAndCancels(t *testing.T) {
 		t.Errorf("state = %v, want a defined state after concurrent use", got)
 	}
 }
+
+// applyEdit drives a Ready controller through one edit, returning to Ready.
+func (h *harness) applyEdit(t *testing.T, instruction string) {
+	t.Helper()
+	h.controller.Handle(InputPress)
+	h.controller.Handle(InputRelease)
+	h.controller.OnResult(h.controller.SessionID(), instruction)
+	if got := h.controller.State(); got != ReviewReady {
+		t.Fatalf("state = %s after the edit, want ready", got)
+	}
+}
+
+func TestEditNeverAutoDelivers(t *testing.T) {
+	h := newHarness(t)
+	h.editor.autoBack = h.controller
+	h.editor.reply = "revised text"
+	h.reachReady(t, "original text")
+
+	h.applyEdit(t, "revise it")
+
+	// An edit returns to Ready for another look; it must not insert anything.
+	if got := h.deliverer.delivered(); len(got) != 0 {
+		t.Fatalf("delivered %v after an edit, want nothing until asked", got)
+	}
+	if got := h.controller.Text(); got != "revised text" {
+		t.Errorf("Text() = %q, want the revised text held for review", got)
+	}
+}
+
+func TestUndoRestoresTextFromBeforeTheEdit(t *testing.T) {
+	h := newHarness(t)
+	h.editor.autoBack = h.controller
+	h.editor.reply = "an unwanted revision"
+	h.reachReady(t, "the original text")
+
+	if h.controller.CanUndoEdit() {
+		t.Error("CanUndoEdit() = true before any edit, want false")
+	}
+
+	h.applyEdit(t, "revise it")
+	if !h.controller.CanUndoEdit() {
+		t.Fatal("CanUndoEdit() = false after an edit, want true")
+	}
+
+	if !h.controller.UndoEdit() {
+		t.Fatal("UndoEdit() = false, want the revision undone")
+	}
+	if got := h.controller.Text(); got != "the original text" {
+		t.Errorf("Text() = %q, want the pre-edit text restored", got)
+	}
+	// Only one revision is kept.
+	if h.controller.CanUndoEdit() {
+		t.Error("CanUndoEdit() = true after undoing, want false")
+	}
+	if h.controller.UndoEdit() {
+		t.Error("UndoEdit() = true on a second attempt, want false")
+	}
+}
+
+func TestUndoPresentsTheRestoredText(t *testing.T) {
+	h := newHarness(t)
+	h.editor.autoBack = h.controller
+	h.editor.reply = "revised"
+	h.reachReady(t, "original")
+	h.applyEdit(t, "revise it")
+
+	h.controller.UndoEdit()
+
+	_, reviewed, _ := h.presenter.snapshot()
+	if len(reviewed) == 0 || reviewed[len(reviewed)-1] != "original" {
+		t.Errorf("presented %v, want the restored text shown last", reviewed)
+	}
+}
+
+func TestUndoRejectedOutsideReady(t *testing.T) {
+	h := newHarness(t)
+	h.editor.autoBack = h.controller
+	h.editor.reply = "revised"
+	h.reachReady(t, "original")
+	h.applyEdit(t, "revise it")
+
+	// Recording again leaves Ready, so undo no longer applies.
+	h.controller.Handle(InputPress)
+	if h.controller.CanUndoEdit() {
+		t.Error("CanUndoEdit() = true outside ready, want false")
+	}
+	if h.controller.UndoEdit() {
+		t.Error("UndoEdit() = true outside ready, want false")
+	}
+}
+
+func TestRevisionHistoryClearedByNewDictation(t *testing.T) {
+	h := newHarness(t)
+	h.editor.autoBack = h.controller
+	h.editor.reply = "revised"
+	h.reachReady(t, "original")
+	h.applyEdit(t, "revise it")
+
+	// Delivering ends the session, so the next dictation starts clean.
+	if err := h.controller.Deliver(false); err != nil {
+		t.Fatalf("Deliver() error = %v", err)
+	}
+	h.reachReady(t, "a new dictation")
+
+	if h.controller.CanUndoEdit() {
+		t.Error("CanUndoEdit() = true for a fresh dictation, want false")
+	}
+}
+
+func TestRevisionHistoryClearedByCancel(t *testing.T) {
+	h := newHarness(t)
+	h.editor.autoBack = h.controller
+	h.editor.reply = "revised"
+	h.reachReady(t, "original")
+	h.applyEdit(t, "revise it")
+
+	h.controller.Cancel()
+	h.reachReady(t, "a new dictation")
+
+	if h.controller.CanUndoEdit() {
+		t.Error("CanUndoEdit() = true after a cancel, want false")
+	}
+	if got := h.controller.Text(); got != "a new dictation" {
+		t.Errorf("Text() = %q, want the new dictation", got)
+	}
+}
+
+func TestSecondEditReplacesTheRetainedRevision(t *testing.T) {
+	h := newHarness(t)
+	h.editor.autoBack = h.controller
+	h.reachReady(t, "first")
+
+	h.editor.mu.Lock()
+	h.editor.reply = "second"
+	h.editor.mu.Unlock()
+	h.applyEdit(t, "revise it")
+
+	h.editor.mu.Lock()
+	h.editor.reply = "third"
+	h.editor.mu.Unlock()
+	h.applyEdit(t, "revise it again")
+
+	// Only one revision back is kept, so undo lands on the second text.
+	if !h.controller.UndoEdit() {
+		t.Fatal("UndoEdit() = false, want the last revision undone")
+	}
+	if got := h.controller.Text(); got != "second" {
+		t.Errorf("Text() = %q, want the immediately preceding text", got)
+	}
+}

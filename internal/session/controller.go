@@ -110,6 +110,12 @@ type Controller struct {
 	current SessionID
 	// text is the reviewed text held in Ready and beyond.
 	text string
+	// previous is the text as it stood before the most recent edit, kept so
+	// an unwanted revision can be undone without re-dictating.
+	previous string
+	// hasPrevious distinguishes "no edit yet" from "the previous text was
+	// legitimately empty".
+	hasPrevious bool
 	// instruction is the spoken edit captured in Editing.
 	instruction string
 }
@@ -189,6 +195,8 @@ func (c *Controller) press() ReviewState {
 	case ReviewIdle:
 		c.current++
 		c.text = ""
+		c.previous = ""
+		c.hasPrevious = false
 		c.instruction = ""
 		notify = c.setState(ReviewRecording)
 		id := c.current
@@ -337,6 +345,9 @@ func (c *Controller) finishEdit(id SessionID, text string) {
 		return
 	}
 
+	// Keep the pre-edit text so an unwanted revision can be undone.
+	c.previous = c.text
+	c.hasPrevious = true
 	c.text = text
 	notify := c.setState(ReviewReady)
 	reviewed := c.text
@@ -346,6 +357,34 @@ func (c *Controller) finishEdit(id SessionID, text string) {
 	if c.presenter != nil {
 		c.presenter.OnReviewText(reviewed)
 	}
+}
+
+// CanUndoEdit reports whether a revision is available to undo.
+func (c *Controller) CanUndoEdit() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.hasPrevious && c.state == ReviewReady
+}
+
+// UndoEdit restores the text as it stood before the most recent edit. Only one
+// revision is kept, so a second undo does nothing. Valid only in Ready.
+func (c *Controller) UndoEdit() bool {
+	c.mu.Lock()
+	if c.state != ReviewReady || !c.hasPrevious {
+		c.mu.Unlock()
+		return false
+	}
+
+	c.text = c.previous
+	c.previous = ""
+	c.hasPrevious = false
+	restored := c.text
+	c.mu.Unlock()
+
+	if c.presenter != nil {
+		c.presenter.OnReviewText(restored)
+	}
+	return true
 }
 
 // Deliver inserts the reviewed text. When submit is true the delivery backend
@@ -388,6 +427,8 @@ func (c *Controller) Deliver(submit bool) error {
 	}
 
 	c.text = ""
+	c.previous = ""
+	c.hasPrevious = false
 	c.instruction = ""
 	notify = c.setState(ReviewIdle)
 	c.mu.Unlock()
@@ -408,6 +449,8 @@ func (c *Controller) Cancel() {
 	id := c.current
 	c.current++
 	c.text = ""
+	c.previous = ""
+	c.hasPrevious = false
 	c.instruction = ""
 	notify := c.setState(ReviewIdle)
 	c.mu.Unlock()

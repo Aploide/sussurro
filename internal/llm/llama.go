@@ -391,32 +391,7 @@ func (e *Engine) cleanupOnce(rawText string) (string, bool, error) {
 		return "", false, fmt.Errorf("prediction failed: %w", err)
 	}
 
-	// Post-processing cleanup
-
-	// Remove <think>...</think> blocks (including multiline)
-	// Also handle unclosed <think> tags by removing everything from <think> onwards
-	cleaned = reThinkBlock.ReplaceAllString(cleaned, "")
-
-	// Handle unclosed <think> tags (remove from <think> to end of string)
-	if strings.Contains(cleaned, "<think>") {
-		idx := strings.Index(cleaned, "<think>")
-		cleaned = cleaned[:idx]
-	}
-
-	cleaned = strings.TrimSpace(cleaned)
-
-	// Cut off at common hallucination markers if stop strings didn't catch them
-	if idx := strings.Index(cleaned, "Input:"); idx != -1 {
-		cleaned = cleaned[:idx]
-	}
-	if idx := strings.Index(cleaned, "Example:"); idx != -1 {
-		cleaned = cleaned[:idx]
-	}
-	if idx := strings.Index(cleaned, "<|user|>"); idx != -1 {
-		cleaned = cleaned[:idx]
-	}
-
-	cleaned = strings.TrimSpace(cleaned)
+	cleaned = stripModelArtifacts(cleaned)
 
 	slog.Debug("LLM raw output (pre-validation)", "output", cleaned)
 
@@ -433,6 +408,33 @@ func (e *Engine) cleanupOnce(rawText string) (string, bool, error) {
 	}
 
 	return cleaned, true, nil
+}
+
+// hallucinationMarkers are prompt-shaped strings the model sometimes emits
+// when it starts a new turn instead of stopping. Everything from the first
+// marker onwards is discarded.
+var hallucinationMarkers = []string{"Input:", "Example:", "Original:", "Instruction:", "<|user|>"}
+
+// stripModelArtifacts removes reasoning blocks and any continuation the model
+// appended past its answer. Shared by cleanup and editing so both benefit from
+// the same safeguards.
+func stripModelArtifacts(out string) string {
+	// Remove <think>...</think> blocks (including multiline), then handle an
+	// unclosed <think> by dropping everything from it onwards.
+	out = reThinkBlock.ReplaceAllString(out, "")
+	if idx := strings.Index(out, "<think>"); idx != -1 {
+		out = out[:idx]
+	}
+	out = strings.TrimSpace(out)
+
+	// Cut off at common hallucination markers if stop strings didn't catch them.
+	for _, marker := range hallucinationMarkers {
+		if idx := strings.Index(out, marker); idx != -1 {
+			out = out[:idx]
+		}
+	}
+
+	return strings.TrimSpace(out)
 }
 
 func cleanupPredictOptions(threads int) []llama.PredictOption {

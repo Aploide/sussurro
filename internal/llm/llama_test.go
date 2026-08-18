@@ -8,13 +8,19 @@ import (
 
 type fakePredictor struct {
 	output  string
+	err     error
+	prompt  string
 	options llama.PredictOptions
 	calls   int
 }
 
-func (f *fakePredictor) Predict(_ string, opts ...llama.PredictOption) (string, error) {
+func (f *fakePredictor) Predict(prompt string, opts ...llama.PredictOption) (string, error) {
 	f.calls++
+	f.prompt = prompt
 	f.options = llama.NewPredictOptions(opts...)
+	if f.err != nil {
+		return "", f.err
+	}
 	return f.output, nil
 }
 
