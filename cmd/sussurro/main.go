@@ -172,6 +172,12 @@ func run() {
 	// Review mode is wired in a later bead; immediate mode is unchanged.
 	input := session.NewImmediateDispatcher(pipe)
 
+	// Optional evdev input, when explicitly configured. Falls back silently
+	// to the default backend so a permission problem never breaks dictation.
+	if stopEvdev := startEvdevInput(cfg, input, nil, log); stopEvdev != nil {
+		defer stopEvdev()
+	}
+
 	pipe.SetLowercaseOutput(cfg.App.LowercaseOutput)
 	pipe.SetSkipLLMCleanup(cfg.App.SkipLLMCleanup)
 

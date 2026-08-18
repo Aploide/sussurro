@@ -55,7 +55,15 @@ workflow:
   input:
     # auto, native (in-process hotkey), trigger (compositor socket),
     # or evdev (Linux input devices; needs input group membership).
+    # auto never opens /dev/input: it uses native hotkeys where they work.
     backend: "auto"
+    # evdev only. Device name substring or exact path; empty picks the first
+    # stable /dev/input/by-id keyboard. An ambiguous name is an error.
+    device: ""
+    # evdev only. Recording chord; empty follows hotkey.trigger above.
+    chord: ""
+    # evdev only. Chord that abandons a review session; empty disables it.
+    cancel_chord: ""
   delivery:
     # auto, clipboard-paste, wtype (Wayland), or ydotool (uinput daemon).
     backend: "auto"

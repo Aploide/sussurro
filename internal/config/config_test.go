@@ -301,3 +301,76 @@ func TestStreamingIntervalFallsBackWhenUnparseable(t *testing.T) {
 		t.Errorf("StreamingInterval() = %s, want fallback %s", got, DefaultStreamingInterval)
 	}
 }
+
+func TestEvdevInputOptionsLoad(t *testing.T) {
+	cfg, err := loadTestConfig(t, legacyConfig+`workflow:
+  input:
+    backend: "evdev"
+    device: "Kinesis"
+    chord: "ctrl+shift+space"
+    cancel_chord: "ctrl+shift+alt"
+`)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+
+	if cfg.Workflow.Input.Device != "Kinesis" {
+		t.Errorf("Device = %q, want Kinesis", cfg.Workflow.Input.Device)
+	}
+	if cfg.Workflow.Input.Chord != "ctrl+shift+space" {
+		t.Errorf("Chord = %q, want ctrl+shift+space", cfg.Workflow.Input.Chord)
+	}
+	if cfg.Workflow.Input.CancelChord != "ctrl+shift+alt" {
+		t.Errorf("CancelChord = %q, want ctrl+shift+alt", cfg.Workflow.Input.CancelChord)
+	}
+}
+
+func TestEvdevInputOptionsDefaultToEmpty(t *testing.T) {
+	cfg, err := loadTestConfig(t, legacyConfig)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+
+	// Empty means "first stable keyboard" and "follow hotkey.trigger", so a
+	// legacy config needs no new keys.
+	if cfg.Workflow.Input.Device != "" || cfg.Workflow.Input.Chord != "" ||
+		cfg.Workflow.Input.CancelChord != "" {
+		t.Errorf("evdev options = %+v, want all empty by default", cfg.Workflow.Input)
+	}
+}
+
+func TestMalformedChordRejected(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "empty component",
+			body: "workflow:\n  input:\n    chord: \"ctrl++space\"\n",
+			want: "empty component",
+		},
+		{
+			name: "duplicate component",
+			body: "workflow:\n  input:\n    chord: \"ctrl+ctrl+space\"\n",
+			want: "more than once",
+		},
+		{
+			name: "malformed cancel chord",
+			body: "workflow:\n  input:\n    cancel_chord: \"alt++esc\"\n",
+			want: "empty component",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := loadTestConfig(t, legacyConfig+tt.body)
+			if err == nil {
+				t.Fatal("LoadConfig() error = nil, want a validation error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error %q does not explain %q", err, tt.want)
+			}
+		})
+	}
+}

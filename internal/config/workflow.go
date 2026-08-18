@@ -93,6 +93,14 @@ type StreamingConfig struct {
 // InputConfig selects the recording gesture source.
 type InputConfig struct {
 	Backend InputBackend `mapstructure:"backend"`
+	// Device selects the evdev input device by name substring or exact path.
+	// Empty picks the first stable keyboard. Ignored by other backends.
+	Device string `mapstructure:"device"`
+	// Chord is the key combination that drives recording, in the same
+	// notation as hotkey.trigger. Empty follows hotkey.trigger.
+	Chord string `mapstructure:"chord"`
+	// CancelChord abandons the session in review mode. Empty disables it.
+	CancelChord string `mapstructure:"cancel_chord"`
 }
 
 // DeliveryConfig selects the text insertion backend.
@@ -145,6 +153,13 @@ func (w WorkflowConfig) Validate() error {
 		return enumError("workflow.delivery.backend", string(w.Delivery.Backend), deliveryBackends)
 	}
 
+	if err := validateChordSpec("workflow.input.chord", w.Input.Chord); err != nil {
+		return err
+	}
+	if err := validateChordSpec("workflow.input.cancel_chord", w.Input.CancelChord); err != nil {
+		return err
+	}
+
 	interval, err := time.ParseDuration(w.Streaming.Interval)
 	if err != nil {
 		return fmt.Errorf("workflow.streaming.interval: %q is not a duration; use a value like %q",
@@ -189,6 +204,9 @@ var workflowEnvKeys = map[string]string{
 	"workflow.streaming.enabled":  "SUSSURRO_WORKFLOW_STREAMING_ENABLED",
 	"workflow.streaming.interval": "SUSSURRO_WORKFLOW_STREAMING_INTERVAL",
 	"workflow.input.backend":      "SUSSURRO_WORKFLOW_INPUT_BACKEND",
+	"workflow.input.device":       "SUSSURRO_WORKFLOW_INPUT_DEVICE",
+	"workflow.input.chord":        "SUSSURRO_WORKFLOW_INPUT_CHORD",
+	"workflow.input.cancel_chord": "SUSSURRO_WORKFLOW_INPUT_CANCEL_CHORD",
 	"workflow.delivery.backend":   "SUSSURRO_WORKFLOW_DELIVERY_BACKEND",
 }
 
@@ -207,6 +225,30 @@ func bindWorkflowEnv(v *viper.Viper) error {
 		if err := v.BindEnv(key, env); err != nil {
 			return fmt.Errorf("binding %s: %w", env, err)
 		}
+	}
+	return nil
+}
+
+// validateChordSpec checks a chord string is syntactically usable. The key
+// names themselves are resolved by the input backend, which owns the keymap;
+// this catches the malformed shapes early, at load time. An empty value is
+// valid and means "follow hotkey.trigger".
+func validateChordSpec(key, spec string) error {
+	if strings.TrimSpace(spec) == "" {
+		return nil
+	}
+
+	parts := strings.Split(spec, "+")
+	seen := make(map[string]bool, len(parts))
+	for _, part := range parts {
+		name := strings.ToLower(strings.TrimSpace(part))
+		if name == "" {
+			return fmt.Errorf("%s: %q has an empty component; use a form like \"ctrl+shift+space\"", key, spec)
+		}
+		if seen[name] {
+			return fmt.Errorf("%s: %q names %q more than once", key, spec, name)
+		}
+		seen[name] = true
 	}
 	return nil
 }
