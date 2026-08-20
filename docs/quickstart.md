@@ -176,7 +176,12 @@ Check that GTK3 is installed (`pkg-config --exists gtk+-3.0 && echo ok`).
 On Wayland without `gtk-layer-shell`, the overlay appears as a floating window — check your compositor's window rules if it hides under other windows.
 
 ### Settings window doesn't open
-Right-click the capsule at the bottom of your screen and choose **Open Settings**. If the tray icon is missing (some DEs need `snixembed` or a compatible bar), the right-click menu is the fallback.
+Click the Sussurro tray icon and choose **Open Settings**.
+
+The capsule is hidden while Sussurro is idle, so there is usually nothing to
+right-click. If the tray icon is missing (some DEs need `snixembed` or a
+compatible bar), the capsule stays on screen instead and its right-click menu
+is the fallback — so you always have one route or the other.
 
 ### "clipboard failed" error
 Wayland: install `wl-clipboard` (see Step 2).

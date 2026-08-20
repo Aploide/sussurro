@@ -332,11 +332,10 @@ void* overlay_create_macos(void)
     g_view = [[SussurroView alloc] initWithFrame:viewRect];
     [blurView addSubview:g_view];
     [g_panel setContentView:blurView];
-    /* Defer the initial show until [NSApp run] is active.
-       Use orderFrontRegardless so the panel appears without stealing key focus. */
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [g_panel orderFrontRegardless];
-    });
+
+    /* Deliberately not shown here. The panel is ordered front only while
+       something is happening (see overlay_show_macos), so an idle Sussurro
+       leaves nothing on screen. */
 
     return (__bridge void *)g_panel;
 }

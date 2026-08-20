@@ -183,7 +183,7 @@ func (o *presentingOverlay) presented() []ViewModel {
 func TestPresentFallsBackToSetStateWithoutPresenter(t *testing.T) {
 	overlay := &capturingOverlay{}
 	// A platform that cannot render text must still get the capsule state.
-	present(overlay, ReviewModel(session.ReviewRecording, "partial text", true))
+	present(overlay, ReviewModel(session.ReviewRecording, "partial text", true), true)
 
 	states := overlay.recorded()
 	if len(states) != 1 || states[0] != session.StateRecording {
@@ -193,7 +193,7 @@ func TestPresentFallsBackToSetStateWithoutPresenter(t *testing.T) {
 
 func TestPresentUsesPresenterWhenAvailable(t *testing.T) {
 	overlay := &presentingOverlay{}
-	present(overlay, ReviewModel(session.ReviewReady, "final text", false))
+	present(overlay, ReviewModel(session.ReviewReady, "final text", false), true)
 
 	models := overlay.presented()
 	if len(models) != 1 || models[0].Transcript != "final text" {
@@ -330,7 +330,7 @@ func TestManagerPublishesModelsToOverlay(t *testing.T) {
 
 	// Drain synchronously rather than racing the real processUpdates loop.
 	for len(manager.stateChangeCh) > 0 {
-		present(manager.overlay, <-manager.stateChangeCh)
+		present(manager.overlay, <-manager.stateChangeCh, true)
 	}
 
 	models := overlay.presented()

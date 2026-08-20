@@ -46,6 +46,16 @@ All notable changes to Sussurro will be documented in this file.
   through a single dispatcher, so no call site branches on interaction mode.
 
 ### Fixed
+- **The overlay capsule was always on screen**: the window was mapped
+  unconditionally at creation and the `Show`/`Hide` methods, though
+  implemented on all three platforms, were never called by anything. An idle
+  Sussurro left the pill visible, animating its dots ~60 times a second for
+  no reason. Visibility now follows state — hidden when idle, shown while
+  recording, transcribing, or holding reviewed text — and the animation timer
+  stops while hidden. The capsule stays up when no system tray is available,
+  since its right-click menu is then the only route to Settings and Quit.
+  Show and hide are also marshalled onto the GTK main thread, which the
+  never-called implementations had not been doing.
 - **Data race in the Wayland trigger server**: recording state was read and
   written from every connection goroutine without synchronisation. The server
   no longer holds that state at all.

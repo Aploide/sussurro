@@ -24,6 +24,10 @@ struct OverlayData {
     /* Shimmer phase for transcribing text */
     double       shimmer_phase;
 
+    /* Animation timer source id, 0 when stopped. The timer only runs while
+       the overlay is mapped: a hidden capsule must cost nothing. */
+    guint        anim_source;
+
     /* X11 hotkey */
     HotkeyDownCB down_cb;
     HotkeyUpCB   up_cb;
@@ -206,6 +210,23 @@ static gboolean animation_tick(gpointer data)
     return G_SOURCE_CONTINUE;
 }
 
+/* Starts the animation timer if it is not already running. */
+static void overlay_start_animation(OverlayData *od)
+{
+    if (od->anim_source == 0) {
+        od->anim_source = g_timeout_add(16, animation_tick, od);
+    }
+}
+
+/* Stops the animation timer. Idle redraws are pure waste while hidden. */
+static void overlay_stop_animation(OverlayData *od)
+{
+    if (od->anim_source != 0) {
+        g_source_remove(od->anim_source);
+        od->anim_source = 0;
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* X11 global hotkey via GDK event filter                              */
 /* ------------------------------------------------------------------ */
@@ -374,10 +395,16 @@ GtkWidget *overlay_create(void)
     }
 #endif
 
-    gtk_widget_show_all(win);
+    /* Deliberately not shown here. The capsule is mapped only while
+       something is happening (see overlay_show), so an idle Sussurro leaves
+       nothing on screen. gtk_widget_show_all on the child keeps the drawing
+       area realized so the first map paints immediately, without mapping the
+       toplevel itself.
 
-    /* Start animation timer */
-    g_timeout_add(16, animation_tick, od);
+       On X11 the realize/override-redirect ordering above still holds: the
+       window is realized but unmapped, which is exactly what
+       override-redirect needs. */
+    gtk_widget_show_all(da);
 
     return win;
 }
@@ -531,12 +558,42 @@ void overlay_install_context_menu(GtkWidget *win,
                      G_CALLBACK(on_button_press), NULL);
 }
 
+/* Show and hide are called from the pipeline goroutine and from the systray
+   goroutine, never the GTK main thread, so they marshal like the state and RMS
+   updates above. Touching GTK directly from another thread is undefined
+   behaviour that happens to work until it does not. */
+static gboolean idle_set_visible(gpointer data)
+{
+    IdleStateArg *arg = (IdleStateArg *)data;
+    OverlayData  *od  = (OverlayData *)g_object_get_data(G_OBJECT(arg->win), "overlay-data");
+
+    if (arg->state) {
+        if (od) overlay_start_animation(od);
+        gtk_widget_show_all(arg->win);
+    } else {
+        if (od) overlay_stop_animation(od);
+        gtk_widget_hide(arg->win);
+    }
+
+    g_free(arg);
+    return G_SOURCE_REMOVE;
+}
+
+/* Queues a visibility change on the GTK main thread. */
+static void overlay_set_visible_async(GtkWidget *win, gboolean visible)
+{
+    IdleStateArg *arg = g_new(IdleStateArg, 1);
+    arg->win   = win;
+    arg->state = visible ? 1 : 0;
+    gdk_threads_add_idle(idle_set_visible, arg);
+}
+
 void overlay_show(GtkWidget *win)
 {
-    gtk_widget_show_all(win);
+    overlay_set_visible_async(win, TRUE);
 }
 
 void overlay_hide(GtkWidget *win)
 {
-    gtk_widget_hide(win);
+    overlay_set_visible_async(win, FALSE);
 }

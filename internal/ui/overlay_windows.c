@@ -387,20 +387,25 @@ void *overlay_create(void)
     SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)od);
 
     render_frame(od); /* first frame before showing, to avoid a blank flash */
-    ShowWindow(hwnd, SW_SHOWNOACTIVATE);
 
-    SetTimer(hwnd, 1, 16, NULL); /* ~60 fps, same cadence as g_timeout_add(16) */
+    /* Deliberately not shown here, and no timer started. The overlay is
+       mapped only while something is happening (see overlay_show), so an idle
+       Sussurro leaves nothing on screen and burns no redraws. */
 
     return (void *)hwnd;
 }
 
 void overlay_show(void *hwnd)
 {
+    /* ~60 fps, same cadence as g_timeout_add(16). Started on show and killed
+       on hide so a hidden overlay costs nothing. */
+    SetTimer((HWND)hwnd, 1, 16, NULL);
     ShowWindow((HWND)hwnd, SW_SHOWNOACTIVATE);
 }
 
 void overlay_hide(void *hwnd)
 {
+    KillTimer((HWND)hwnd, 1);
     ShowWindow((HWND)hwnd, SW_HIDE);
 }
 

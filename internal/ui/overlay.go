@@ -21,10 +21,24 @@ type Presenter interface {
 
 // present renders model on overlay, using the review-aware path when the
 // platform provides one and falling back to the capsule state otherwise.
-func present(overlay Overlay, model ViewModel) {
+//
+// Visibility is driven here rather than by the platform overlays, so all three
+// share one policy. The state is set before showing so the first painted frame
+// is already correct.
+//
+// trayReady releases the overlay to hide when idle. Until the tray appears,
+// the capsule's right-click menu is the only documented route to Settings and
+// Quit, so it stays on screen regardless of state.
+func present(overlay Overlay, model ViewModel, trayReady bool) {
 	if presenter, ok := overlay.(Presenter); ok {
 		presenter.Present(model)
+	} else {
+		overlay.SetState(model.State)
+	}
+
+	if model.Visible() || !trayReady {
+		overlay.Show()
 		return
 	}
-	overlay.SetState(model.State)
+	overlay.Hide()
 }

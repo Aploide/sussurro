@@ -54,6 +54,24 @@ type ViewModel struct {
 	Mode ViewMode
 }
 
+// Visible reports whether the overlay should be on screen for this model.
+//
+// An idle Sussurro shows nothing: the capsule is feedback about work in
+// progress, not a permanent fixture. Review mode is the one exception — text
+// held in Ready is waiting on the user, so hiding it would strand a session
+// with no indication it exists.
+func (model ViewModel) Visible() bool {
+	if model.Reviewing {
+		switch model.Review {
+		case session.ReviewIdle:
+			return false
+		default:
+			return true
+		}
+	}
+	return model.State != session.StateIdle
+}
+
 // CompactModel builds the immediate-mode view for a lifecycle state. This is
 // what upstream already showed, expressed as a model.
 func CompactModel(state AppState) ViewModel {

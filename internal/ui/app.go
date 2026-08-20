@@ -2,9 +2,11 @@ package ui
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aploide/sussurro/internal/config"
+	"github.com/aploide/sussurro/internal/session"
 )
 
 // Manager is the top-level UI controller.
@@ -34,6 +36,12 @@ type Manager struct {
 
 	// Called when the user toggles LLM cleanup bypass in Settings.
 	onSkipLLMCleanup func(bool)
+
+	// trayReady reports whether the system tray has appeared. Until it does,
+	// the overlay stays visible even when idle: its right-click menu is the
+	// documented fallback route to Settings and Quit, and some desktops never
+	// host an SNI item at all. Hiding it there would leave no way in.
+	trayReady atomic.Bool
 }
 
 // NewManager constructs the Manager.  Call Run() to start the event loop.
@@ -61,14 +69,36 @@ func (m *Manager) Run() {
 		func() { m.Quit() },
 	)
 
-	// 4. System tray (runs its own goroutine internally on Linux via DBus).
+	// 4. The overlay is created unmapped. Show it until the tray confirms
+	//    itself, so a desktop that never hosts an SNI item still has the
+	//    right-click menu as a way into Settings and Quit.
+	m.render(CompactModel(session.StateIdle))
+
+	// 5. System tray (runs its own goroutine internally on Linux via DBus).
 	go m.runTray()
 
-	// 5. Goroutine that forwards state/RMS from pipeline to the overlay.
+	// 6. Goroutine that forwards state/RMS from pipeline to the overlay.
 	go m.processUpdates()
 
-	// 6. Block in the webview / GTK / NSApp main loop.
+	// 7. Block in the webview / GTK / NSApp main loop.
 	m.settings.Run()
+}
+
+// render draws a model, keeping the overlay on screen while the tray has not
+// appeared so its context menu stays reachable.
+func (m *Manager) render(model ViewModel) {
+	present(m.overlay, model, m.trayReady.Load())
+}
+
+// markTrayReady records that the tray is hosting Sussurro, which releases the
+// overlay to hide when idle.
+func (m *Manager) markTrayReady() {
+	if m.trayReady.Swap(true) {
+		return
+	}
+	// The overlay is showing only as a fallback, so take it down now rather
+	// than waiting for the next state change.
+	m.render(CompactModel(session.StateIdle))
 }
 
 // Quit terminates the application. Safe to call from any goroutine or
@@ -128,7 +158,7 @@ func (m *Manager) processUpdates() {
 	for {
 		select {
 		case model := <-m.stateChangeCh:
-			present(m.overlay, model)
+			m.render(model)
 			m.updateTrayIcon(model.State)
 
 		case rms := <-m.rmsCh:

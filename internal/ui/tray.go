@@ -21,6 +21,10 @@ func (m *Manager) runTray() {
 }
 
 func (m *Manager) onTrayReady() {
+	// The tray is now a working route to Settings and Quit, so the overlay no
+	// longer has to stay up as the fallback.
+	m.markTrayReady()
+
 	systray.SetIcon(trayIcon)
 	systray.SetTooltip("Sussurro")
 

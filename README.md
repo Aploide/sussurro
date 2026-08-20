@@ -151,7 +151,7 @@ When Sussurro runs (Linux, macOS, or Windows), a sleek pill-shaped capsule appea
 | Method | How |
 |--------|-----|
 | System tray | Click the Sussurro icon → **Open Settings** |
-| Right-click overlay | Right-click the capsule → **Open Settings** |
+| Right-click overlay | Right-click the capsule → **Open Settings** (the capsule is hidden when idle; it stays visible if no tray is available) |
 
 The settings window lets you switch Whisper models, download models with a live progress bar, select the transcription language, change the global hotkey, and choose the hotkey mode. All changes take effect immediately — no restart required.
 
