@@ -331,47 +331,43 @@ kbd {
 
 /* ---- Review workflow controls ---- */
 
-.setting-select,
-.setting-input {
-  height: 30px;
-  padding: 0 8px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--surface2);
-  color: var(--text);
-  font-size: 14px;
-  font-family: var(--font);
-  /* Left-aligned, matching the option list. Right-aligning the closed value
-     needed direction: rtl, which flipped the options too and had to be undone
-     on them, so the control and its own list disagreed. The alignment was
-     compensating for slack between a short value and min-width; the widths
-     below remove that slack instead. */
-  text-align: left;
-}
-
-/* Selects size to their content: the widest option varies with the host,
-   since an unavailable backend carries a reason ("wtype is not installed").
-   Bounded so one long option cannot crowd out the label beside it, and
-   flex-basis auto so the row does not shrink it back and crop the text. */
-/* Sized to the widest option so no value is cropped and no slack is left for
-   a short one to float in. The minimum only guards a control whose options
-   are all very short, which would otherwise be an awkwardly small hit area. */
+/* .setting-select adds sizing to the base select rule and must not restate
+   its appearance. An earlier version set `background`, whose shorthand reset
+   background-image and erased the chevron the base rule paints; combined with
+   appearance: none that left three controls looking like inert boxes, with no
+   affordance that they open at all. Any override here uses longhand so it
+   cannot silently reset a sibling property. */
 .setting-select {
+  /* Sized to the widest option so no value is cropped and no slack is left
+     for a short one to float in. The minimum only guards a control whose
+     options are all very short, which would otherwise be an awkwardly small
+     hit area; the maximum stops one long option, such as a backend carrying
+     the reason it is unavailable, crowding out the label beside it. */
   width: fit-content;
   min-width: 96px;
   max-width: 300px;
   flex: 0 1 auto;
 }
 
-/* Text inputs take a fixed, shared width. Their content is user-entered and
-   variable, so sizing to it would make the column jitter as you type. */
+/* Text inputs are not selects, so they carry the full treatment. They match
+   the select rule deliberately: same height, border, radius, and type size,
+   so the two families read as one widget set down the column. */
 .setting-input {
+  /* No explicit height: the base select rule derives its own from padding and
+     line box, so pinning one here made inputs a pixel taller than the selects
+     beside them. Matching the padding matches the height. */
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background-color: var(--surface2);
+  color: var(--text);
+  font-size: 15px;
+  font-family: var(--font);
+  text-align: left;
+  /* Fixed, shared width: the content is user-entered and variable, so sizing
+     to it would make the column jitter as you type. */
   width: 200px;
   flex: 0 0 200px;
-}
-
-.setting-select {
-  cursor: pointer;
 }
 
 .setting-select:focus-visible,
