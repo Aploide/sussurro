@@ -11,8 +11,13 @@
 
   <!-- Scrollable content -->
   <div class="content">
-
-    <!-- Speech Recognition -->
+    <div class="tabs" role="tablist">
+      <button class="tab" role="tab" data-tab="models" aria-selected="true" type="button">Models</button>
+      <button class="tab" role="tab" data-tab="workflow" aria-selected="false" type="button">Dictation</button>
+      <button class="tab" role="tab" data-tab="output" aria-selected="false" type="button">Output</button>
+      <button class="tab" role="tab" data-tab="input" aria-selected="false" type="button">Hotkey</button>
+    </div>
+    <div class="tab-panel" data-tab-panel="models">
     <div class="section foldable" data-section-id="speech">
       <button class="section-header" type="button" data-section-toggle aria-expanded="true">
         <span class="section-label">Speech Recognition (Whisper)</span>
@@ -52,35 +57,8 @@
     </div>
 
     <!-- Output -->
-    <div class="section foldable" data-section-id="output">
-      <button class="section-header" type="button" data-section-toggle aria-expanded="true">
-        <span class="section-label">Output</span>
-        <span class="section-caret" aria-hidden="true">⌄</span>
-      </button>
-      <div class="section-body">
-        <div class="setting-row">
-          <div>
-            <div class="toggle-label">Raw output</div>
-            <div class="toggle-desc">Skip LLM cleanup and use Whisper text as-is</div>
-          </div>
-          <label class="toggle-switch">
-            <input type="checkbox" id="raw-output-toggle">
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
-        <div class="setting-row">
-          <div>
-            <div class="toggle-label">Lowercase output</div>
-            <div class="toggle-desc">Force all transcribed text to lowercase</div>
-          </div>
-          <label class="toggle-switch">
-            <input type="checkbox" id="lowercase-toggle">
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
-      </div>
     </div>
-
+    <div class="tab-panel" data-tab-panel="workflow" hidden>
     <div class="section foldable" data-section-id="workflow">
       <button class="section-header" type="button" data-section-toggle aria-expanded="true">
         <span class="section-label">Review workflow</span>
@@ -181,6 +159,38 @@
     </div>
 
     <!-- Global Hotkey -->
+    </div>
+    <div class="tab-panel" data-tab-panel="output" hidden>
+    <div class="section foldable" data-section-id="output">
+      <button class="section-header" type="button" data-section-toggle aria-expanded="true">
+        <span class="section-label">Output</span>
+        <span class="section-caret" aria-hidden="true">⌄</span>
+      </button>
+      <div class="section-body">
+        <div class="setting-row">
+          <div>
+            <div class="toggle-label">Raw output</div>
+            <div class="toggle-desc">Skip LLM cleanup and use Whisper text as-is</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="raw-output-toggle">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div class="setting-row">
+          <div>
+            <div class="toggle-label">Lowercase output</div>
+            <div class="toggle-desc">Force all transcribed text to lowercase</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="lowercase-toggle">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+    </div>
+    </div>
+    <div class="tab-panel" data-tab-panel="input" hidden>
     <div class="section foldable" data-section-id="hotkey">
       <button class="section-header" type="button" data-section-toggle aria-expanded="true">
         <span class="section-label">Global Hotkey</span>
@@ -217,7 +227,7 @@
         </div>
       </div>
     </div>
-
+    </div>
   </div><!-- /content -->
 
   <!-- Restart banner (shown after a model is changed, hidden until needed) -->

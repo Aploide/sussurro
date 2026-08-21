@@ -133,3 +133,85 @@ func TestStyleSheetDefinesTheControlClasses(t *testing.T) {
 		}
 	}
 }
+
+// panelOfSection walks the document tracking the current tab panel, which is
+// more reliable than matching nested divs with a regex.
+func panelOfSection(html string) map[string]string {
+	panels := map[string]string{}
+	current := ""
+	panelPattern := regexp.MustCompile(`data-tab-panel="([^"]+)"`)
+	sectionPattern := regexp.MustCompile(`data-section-id="([^"]+)"`)
+
+	for _, line := range strings.Split(html, "\n") {
+		if m := panelPattern.FindStringSubmatch(line); m != nil {
+			current = m[1]
+		}
+		if m := sectionPattern.FindStringSubmatch(line); m != nil {
+			panels[m[1]] = current
+		}
+	}
+	return panels
+}
+
+func TestEverySectionLivesInATab(t *testing.T) {
+	html := readAsset(t, "index.html")
+
+	// A section outside a tab panel is unreachable once tabs hide the others,
+	// which is exactly the failure a restructure invites.
+	sections := panelOfSection(html)
+	if len(sections) == 0 {
+		t.Fatal("no sections found in index.html")
+	}
+	for section, panel := range sections {
+		if panel == "" {
+			t.Errorf("section %q is not inside any tab panel", section)
+		}
+	}
+}
+
+func TestEveryTabHasAPanel(t *testing.T) {
+	html := readAsset(t, "index.html")
+
+	tabs := regexp.MustCompile(`data-tab="([^"]+)"`).FindAllStringSubmatch(html, -1)
+	if len(tabs) == 0 {
+		t.Fatal("no tabs found in index.html")
+	}
+
+	for _, tab := range tabs {
+		if !strings.Contains(html, `data-tab-panel="`+tab[1]+`"`) {
+			t.Errorf("tab %q has no matching panel", tab[1])
+		}
+	}
+}
+
+func TestEverySectionsPanelIsATab(t *testing.T) {
+	html := readAsset(t, "index.html")
+
+	// The converse: a panel holding sections but with no tab to select it
+	// hides those settings permanently.
+	for section, panel := range panelOfSection(html) {
+		if panel != "" && !strings.Contains(html, `data-tab="`+panel+`"`) {
+			t.Errorf("section %q is in panel %q, which no tab selects", section, panel)
+		}
+	}
+}
+
+func TestExactlyOneTabStartsSelected(t *testing.T) {
+	html := readAsset(t, "index.html")
+
+	if selected := strings.Count(html, `aria-selected="true"`); selected != 1 {
+		t.Errorf("%d tabs start selected, want exactly 1", selected)
+	}
+
+	// Count panels that are not marked hidden on their own opening tag.
+	panelLine := regexp.MustCompile(`<div class="tab-panel" data-tab-panel="[^"]+"( hidden)?>`)
+	visible := 0
+	for _, m := range panelLine.FindAllStringSubmatch(html, -1) {
+		if m[1] == "" {
+			visible++
+		}
+	}
+	if visible != 1 {
+		t.Errorf("%d panels start visible, want exactly 1", visible)
+	}
+}

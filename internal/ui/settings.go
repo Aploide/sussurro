@@ -37,7 +37,10 @@ type settingsWindow struct {
 func newSettingsWindow(mgr *Manager) *settingsWindow {
 	w := webview.New(false)
 	w.SetTitle("Sussurro Settings")
-	w.SetSize(580, 720, webview.HintNone)
+	// Sized in device pixels: on a 1.33-scaled display 580 became only 435
+	// CSS px, narrower than the layout is built for. Wider keeps the content
+	// comfortable once the webview applies display scaling.
+	w.SetSize(820, 780, webview.HintNone)
 
 	sw := &settingsWindow{w: w, mgr: mgr}
 

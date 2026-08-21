@@ -2,6 +2,7 @@
 
 // ---- Bootstrap ----
 document.addEventListener('DOMContentLoaded', async () => {
+  initTabs();
   initFoldableSections();
   await reloadSettings();
 });
@@ -40,6 +41,32 @@ function render(data) {
   renderLowercaseOutput(data.lowercaseOutput);
   renderSkipLLMCleanup(data.skipLLMCleanup);
   renderWorkflow(data.workflow);
+}
+
+// ---- Tabs ----
+// The page grew past comfortable scrolling as settings were added, so
+// related sections are grouped and only one group is shown at a time.
+function initTabs() {
+  const tabs = Array.from(document.querySelectorAll('[data-tab]'));
+  const panels = Array.from(document.querySelectorAll('[data-tab-panel]'));
+  if (!tabs.length) return;
+
+  const select = name => {
+    tabs.forEach(tab => {
+      tab.setAttribute('aria-selected', tab.dataset.tab === name ? 'true' : 'false');
+    });
+    panels.forEach(panel => {
+      panel.hidden = panel.dataset.tabPanel !== name;
+    });
+    // Scrolling is per-panel, so a new tab starts at its top rather than
+    // inheriting the previous panel's scroll position.
+    const content = document.querySelector('.content');
+    if (content) content.scrollTop = 0;
+  };
+
+  tabs.forEach(tab => {
+    tab.onclick = () => select(tab.dataset.tab);
+  });
 }
 
 // ---- Foldable sections ----
