@@ -61,6 +61,10 @@ type Pipeline struct {
 
 	// State
 	//
+	// minDuration is the shortest recording sent to recognition, guarding
+	// against Whisper inventing stock phrases from near-silence.
+	minDuration atomic.Int64
+
 	// isRecording is atomic because the realtime audio callback reads it on
 	// every chunk. Reading it under mu made the audio thread wait on whatever
 	// else held the lock, and a blocked realtime callback overruns the device
@@ -130,6 +134,40 @@ func NewPipeline(
 		stopChan:       make(chan struct{}),
 		maxDuration:    maxDuration,
 	}
+}
+
+// defaultMinDuration is the fallback shortest recording sent to recognition.
+//
+// It has to clear an accidental keypress without discarding a real one-word
+// dictation. The previous hardcoded 2s silently dropped ordinary short
+// phrases, which is sussurro-xvj.52.
+const defaultMinDuration = 300 * time.Millisecond
+
+// SetMinDuration sets the shortest recording sent to recognition. An unparseable
+// or non-positive value leaves the default in place. Safe to call from any
+// goroutine; must be called before Start() to affect the first recording.
+func (p *Pipeline) SetMinDuration(d string) {
+	if d == "" {
+		return
+	}
+	parsed, err := time.ParseDuration(d)
+	if err != nil {
+		p.log.Warn("Invalid min_duration, using default", "value", d, "default", defaultMinDuration, "error", err)
+		return
+	}
+	if parsed <= 0 {
+		p.log.Warn("Non-positive min_duration, using default", "value", d, "default", defaultMinDuration)
+		return
+	}
+	p.minDuration.Store(int64(parsed))
+}
+
+// minRecordingDuration returns the configured minimum, or the default.
+func (p *Pipeline) minRecordingDuration() time.Duration {
+	if d := p.minDuration.Load(); d > 0 {
+		return time.Duration(d)
+	}
+	return defaultMinDuration
 }
 
 // SetLowercaseOutput controls whether all transcribed text is forced to lowercase.
@@ -430,6 +468,18 @@ func (p *Pipeline) notifyFinished(text string) {
 	p.uiNotifier.OnStateChange(session.StateIdle)
 }
 
+// tooShortMessage is shown when a recording is discarded for being below the
+// recognition floor. The acceptance criterion for sussurro-xvj.52 is that a
+// genuine lower bound is reported rather than the dictation vanishing.
+const tooShortMessage = "Too short to transcribe"
+
+// notifyTooShort tells the user their dictation was discarded as too short,
+// reusing the finished-text path so the message appears where the transcript
+// would have been rather than the overlay simply closing.
+func (p *Pipeline) notifyTooShort() {
+	p.notifyFinished(tooShortMessage)
+}
+
 // reusableTailSamples is how much unseen audio a partial may have missed and
 // still be reused. Speech shorter than this cannot carry a word, so nothing
 // is lost by not transcribing it; anything longer might.
@@ -544,8 +594,14 @@ func (p *Pipeline) processSegment(samples []float32) {
 	durationSeconds := float64(len(samples)) / float64(p.vadParams.SampleRate)
 	p.log.Debug("Processing segment", "samples", len(samples), "rate", p.vadParams.SampleRate, "duration", durationSeconds)
 
-	if durationSeconds < 2.0 {
-		p.log.Debug("Recording too short (< 2s), skipping transcription", "duration", durationSeconds)
+	if min := p.minRecordingDuration(); durationSeconds < min.Seconds() {
+		// Below this, recognition reports invented phrases rather than
+		// silence. Warn rather than debug: the user pressed the key meaning
+		// to dictate, so a dropped attempt must not be invisible.
+		p.log.Warn("Recording too short for recognition, discarding",
+			"duration", time.Duration(durationSeconds*float64(time.Second)).Round(time.Millisecond),
+			"minimum", min)
+		p.notifyTooShort()
 		return
 	}
 
@@ -600,15 +656,11 @@ func (p *Pipeline) completeFromPartial(text string) {
 // ends to a stage rather than reporting one opaque total.
 func (p *Pipeline) finishSegment(text string, start time.Time, asrDuration time.Duration) {
 
-	// Check word count
-	// If detected less than 4 words, avoid transcribing completely (treat as false positive)
-	// We do this after transcription as we need the text to count words
-	words := strings.Fields(text)
-	if len(words) < 4 {
-		p.log.Debug("Transcription too short (< 4 words), ignoring", "text", text, "word_count", len(words))
-		return
-	}
-
+	// A word-count floor used to sit here, discarding anything under four
+	// words as a false positive. That silently lost ordinary short dictations
+	// such as "something very short" (sussurro-xvj.52). Hallucinated output is
+	// now addressed at its source — the duration floor above, and the
+	// non-speech marker filter — rather than by throwing away short speech.
 	if strings.TrimSpace(text) == "" {
 		p.log.Debug("No speech detected")
 		return

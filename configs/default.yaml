@@ -21,6 +21,12 @@ audio:
   # sentence, so it is set well beyond normal dictation; the overlay shows
   # the buffer filling as it approaches.
   max_duration: "10m"
+  # Shortest recording sent to recognition. Below this whisper reports stock
+  # phrases invented from near-silence rather than saying it heard nothing, so
+  # the floor exists to catch an accidental keypress — not to judge whether a
+  # dictation was worth making. A discarded recording is reported in the
+  # overlay rather than dropped silently.
+  min_duration: "300ms"
 
 models:
   asr:

@@ -177,10 +177,12 @@ func TestProcessSegmentSuppressesNonResults(t *testing.T) {
 		samples []float32
 	}{
 		{name: "empty buffer", asr: &stubTranscriber{text: "the quick brown fox"}, samples: nil},
-		{name: "too short", asr: &stubTranscriber{text: "the quick brown fox"}, samples: samplesFor(1)},
+		// Below the recognition floor, where whisper invents stock phrases.
+		{name: "too short", asr: &stubTranscriber{text: "the quick brown fox"}, samples: samplesFor(0.1)},
 		{name: "asr error", asr: &stubTranscriber{err: errors.New("asr failed")}, samples: samplesFor(3)},
-		{name: "too few words", asr: &stubTranscriber{text: "hello there"}, samples: samplesFor(3)},
 		{name: "no speech", asr: &stubTranscriber{text: "   "}, samples: samplesFor(3)},
+		// Nothing but a non-speech marker is no transcription at all.
+		{name: "marker only", asr: &stubTranscriber{text: "[BLANK_AUDIO]"}, samples: samplesFor(3)},
 	}
 
 	for _, tt := range tests {
@@ -422,10 +424,49 @@ func TestCompletionCarriesTheFinalText(t *testing.T) {
 	}
 }
 
+// The defect in sussurro-xvj.52: a short phrase was discarded by a four-word
+// floor and never reached the clipboard.
+func TestShortDictationIsDelivered(t *testing.T) {
+	for _, text := range []string{"something very short", "yes", "no thanks"} {
+		t.Run(text, func(t *testing.T) {
+			llm := &stubCleaner{text: text}
+			consumer := &recordingConsumer{}
+			p := newTestPipeline(t, &stubTranscriber{text: text}, llm,
+				stubContext{info: &ctxProvider.ContextInfo{}})
+			p.SetResultConsumer(consumer)
+
+			run(p, samplesFor(1))
+
+			if len(consumer.results) != 1 {
+				t.Fatalf("got %d results, want the dictation delivered", len(consumer.results))
+			}
+			if got := consumer.results[0].Text; got != text {
+				t.Errorf("Text = %q, want %q", got, text)
+			}
+		})
+	}
+}
+
+// A recording below the floor must say so rather than vanish.
+func TestTooShortRecordingIsReported(t *testing.T) {
+	notifier := &finishNotifier{}
+	p := newTestPipeline(t, &stubTranscriber{text: "the quick brown fox"},
+		&stubCleaner{text: "cleaned"}, stubContext{info: &ctxProvider.ContextInfo{}})
+	p.SetResultConsumer(&recordingConsumer{})
+	p.uiNotifier = notifier
+
+	run(p, samplesFor(0.1))
+
+	if len(notifier.finished) != 1 || notifier.finished[0] != tooShortMessage {
+		t.Errorf("OnFinished = %q, want the too-short message reported", notifier.finished)
+	}
+}
+
 func TestCompletionWithNoResultCarriesNoText(t *testing.T) {
 	// A recording that produced nothing must not display the previous one's
-	// text on the way out.
-	asr := &stubTranscriber{text: "too short"}
+	// text on the way out. The rejection here is empty recogniser output; a
+	// short-but-real transcription is no longer rejected (sussurro-xvj.52).
+	asr := &stubTranscriber{text: "   "}
 	llm := &stubCleaner{text: "unused"}
 	notifier := &finishNotifier{}
 

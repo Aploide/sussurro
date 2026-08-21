@@ -37,6 +37,11 @@ type AudioConfig struct {
 	BitDepth    int    `mapstructure:"bit_depth"`
 	BufferSize  int    `mapstructure:"buffer_size"`
 	MaxDuration string `mapstructure:"max_duration"`
+
+	// MinDuration is the shortest recording sent to recognition. It guards
+	// against Whisper inventing stock phrases from near-silence, so it should
+	// stay above an accidental keypress and below a real one-word dictation.
+	MinDuration string `mapstructure:"min_duration"`
 }
 
 type ModelsConfig struct {

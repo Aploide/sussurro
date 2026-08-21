@@ -137,6 +137,7 @@ func run() {
 
 	// Initialize and Start Pipeline
 	pipe := pipeline.NewPipeline(audioEngine, asrEngine, llmEngine, ctxProvider, log, cfg.Audio.SampleRate, cfg.Audio.MaxDuration)
+	pipe.SetMinDuration(cfg.Audio.MinDuration)
 
 	// A failed injector must stay out of the interface, or the typed nil would
 	// read as a usable backend and panic on the first paste.
