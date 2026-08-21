@@ -186,25 +186,23 @@
         <span class="section-caret" aria-hidden="true">⌄</span>
       </button>
       <div class="section-body">
-        <!-- X11 row -->
+        <!-- Independent bindings: either may be left unset -->
         <div id="hotkey-x11" class="hotkey-row" hidden>
           <div>
-            <div class="toggle-label">Hotkey</div>
+            <div class="toggle-label">Push to talk</div>
+            <div class="toggle-desc">Hold to record, release to transcribe</div>
             <div id="hotkey-display" class="hotkey-display" style="margin-top:6px"></div>
           </div>
           <button class="hotkey-edit-btn" id="hotkey-edit-btn">Change</button>
         </div>
 
-        <!-- Mode row (X11 / macOS only) -->
-        <div id="hotkey-mode-row" class="setting-row" hidden>
+        <div id="hotkey-toggle-row" class="hotkey-row" hidden>
           <div>
-            <div class="toggle-label">Mode</div>
-            <div class="toggle-desc">Push to Talk: hold to record &middot; Toggle: press once to start/stop</div>
+            <div class="toggle-label">Toggle recording</div>
+            <div class="toggle-desc">Press once to start, again to stop</div>
+            <div id="hotkey-toggle-display" class="hotkey-display" style="margin-top:6px"></div>
           </div>
-          <select id="hotkey-mode-select">
-            <option value="push-to-talk">Push to Talk</option>
-            <option value="toggle">Toggle</option>
-          </select>
+          <button class="hotkey-edit-btn" id="hotkey-toggle-edit-btn">Change</button>
         </div>
 
         <!-- Wayland note -->

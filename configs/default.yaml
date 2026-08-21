@@ -35,8 +35,11 @@ models:
     extended_prompt: false
 
 hotkey:
-  trigger: "ctrl+shift+space"
-  mode: "push-to-talk" # push-to-talk or toggle
+  # Two independent bindings; either may be left empty.
+  # push_to_talk records while held and transcribes on release.
+  # toggle starts recording on one press and stops on the next.
+  push_to_talk: "ctrl+shift+space"
+  toggle: ""
 
 injection:
   method: "keyboard"

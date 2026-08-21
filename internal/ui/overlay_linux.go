@@ -10,6 +10,7 @@ package ui
 
 // Forward-declare the Go-exported trampolines so C can call them.
 extern void goHotkeyDown(void);
+extern void goHotkeyToggle(void);
 extern void goHotkeyUp(void);
 extern void goOpenSettings(void);
 extern void goQuit(void);
@@ -17,6 +18,7 @@ extern void goQuit(void);
 // Static helpers return function pointers for the trampolines.
 static HotkeyDownCB      hotkeyDownCB(void)      { return (HotkeyDownCB)goHotkeyDown;           }
 static HotkeyUpCB        hotkeyUpCB(void)        { return (HotkeyUpCB)goHotkeyUp;               }
+static HotkeyDownCB      hotkeyToggleCB(void)    { return (HotkeyDownCB)goHotkeyToggle;         }
 static MenuOpenSettingsCB menuOpenSettingsCB(void) { return (MenuOpenSettingsCB)goOpenSettings;   }
 static MenuQuitCB         menuQuitCB(void)         { return (MenuQuitCB)goQuit;                   }
 */
@@ -35,6 +37,7 @@ type linuxOverlay struct {
 var (
 	globalDownCB         func()
 	globalUpCB           func()
+	globalToggleCB       func()
 	globalOpenSettingsCB func()
 	globalQuitCB         func()
 )
@@ -43,6 +46,13 @@ var (
 func goHotkeyDown() {
 	if globalDownCB != nil {
 		globalDownCB()
+	}
+}
+
+//export goHotkeyToggle
+func goHotkeyToggle() {
+	if globalToggleCB != nil {
+		globalToggleCB()
 	}
 }
 
@@ -83,17 +93,25 @@ func newOverlay() Overlay {
 	return &linuxOverlay{win: unsafe.Pointer(win)}
 }
 
-// installHotkey registers an X11 global hotkey (no-op on Wayland).
-func (o *linuxOverlay) installHotkey(trigger string, onDown, onUp func()) {
-	globalDownCB = onDown
-	globalUpCB = onUp
-	ctrig := C.CString(trigger)
-	defer C.free(unsafe.Pointer(ctrig))
+// installHotkey registers the X11 global bindings (no-op on Wayland). Either
+// binding may be empty, so a user can have push-to-talk, toggle, or both.
+func (o *linuxOverlay) installHotkey(bindings HotkeyBindings) {
+	globalDownCB = bindings.OnPress
+	globalUpCB = bindings.OnRelease
+	globalToggleCB = bindings.OnToggle
+
+	cptt := C.CString(bindings.PushToTalk)
+	defer C.free(unsafe.Pointer(cptt))
+	ctoggle := C.CString(bindings.Toggle)
+	defer C.free(unsafe.Pointer(ctoggle))
+
 	C.overlay_install_hotkey(
 		(*C.GtkWidget)(o.win),
-		ctrig,
+		cptt,
+		ctoggle,
 		C.hotkeyDownCB(),
 		C.hotkeyUpCB(),
+		C.hotkeyToggleCB(),
 	)
 }
 

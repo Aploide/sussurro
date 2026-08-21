@@ -64,7 +64,7 @@ var (
 // parameter is ignored (as on macOS): the hotkey lives on its own locked OS
 // thread and is independent of the overlay window, which does not exist yet
 // when Manager.InstallHotkey runs.
-func installOverlayHotkey(_ Overlay, trigger string, onDown, onUp func()) {
+func installOneHotkey(_ Overlay, trigger string, onDown, onUp func()) {
 	mods, key, err := ihk.ParseTrigger(trigger)
 	if err != nil {
 		slog.Error("invalid hotkey trigger", "trigger", trigger, "error", err)
@@ -138,7 +138,7 @@ func installOverlayHotkey(_ Overlay, trigger string, onDown, onUp func()) {
 
 // reinstallOverlayHotkey stops the current hotkey loop and registers a new one
 // with the given trigger, reusing the same onDown/onUp callbacks.
-func reinstallOverlayHotkey(_ Overlay, trigger string, onDown, onUp func()) {
+func reinstallOneHotkey(_ Overlay, trigger string, onDown, onUp func()) {
 	activeHKMu.Lock()
 	old := activeHK
 	activeHK = nil
@@ -160,4 +160,22 @@ func installOverlayContextMenu(overlay Overlay, openSettings, quit func()) {
 	if wo, ok := overlay.(*windowsOverlay); ok {
 		wo.installContextMenu(openSettings, quit)
 	}
+}
+
+// installOverlayHotkey registers each configured binding. Push-to-talk and
+// toggle are independent and either may be unset, so a user can hold one key
+// and tap another — the previous single-trigger design allowed only one.
+func installOverlayHotkey(overlay Overlay, bindings HotkeyBindings) {
+	if bindings.PushToTalk != "" {
+		installOneHotkey(overlay, bindings.PushToTalk, bindings.OnPress, bindings.OnRelease)
+	}
+	if bindings.Toggle != "" {
+		// A toggle acts on press; the release carries no meaning.
+		installOneHotkey(overlay, bindings.Toggle, bindings.OnToggle, func() {})
+	}
+}
+
+// reinstallOverlayHotkey re-registers both bindings with new triggers.
+func reinstallOverlayHotkey(overlay Overlay, bindings HotkeyBindings) {
+	installOverlayHotkey(overlay, bindings)
 }

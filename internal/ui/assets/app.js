@@ -32,7 +32,7 @@ function render(data) {
   renderModelList('llm-list',     llmItems,     'llm');
 
   // Hotkey
-  renderHotkey(data.hotkey, data.hotkeyMode, data.isWayland);
+  renderHotkey(data.pushToTalkHotkey, data.toggleHotkey, data.isWayland);
 
   // Language
   renderLanguage(data.language);
@@ -398,43 +398,55 @@ function bindTextSetting(field, initial, key) {
 }
 
 // ---- Hotkey ----
-function renderHotkey(trigger, mode, isWayland) {
-  const x11Row     = document.getElementById('hotkey-x11');
-  const modeRow    = document.getElementById('hotkey-mode-row');
+// Push-to-talk and toggle are independent bindings, either of which may be
+// unset. There is no mode: each key does what it is bound to do.
+function renderHotkey(pushToTalk, toggle, isWayland) {
+  const pttRow     = document.getElementById('hotkey-x11');
+  const toggleRow  = document.getElementById('hotkey-toggle-row');
   const waylandRow = document.getElementById('hotkey-wayland');
 
   if (isWayland) {
-    if (x11Row)     x11Row.hidden     = true;
-    if (modeRow)    modeRow.hidden    = true;
+    if (pttRow)     pttRow.hidden    = true;
+    if (toggleRow)  toggleRow.hidden = true;
     if (waylandRow) waylandRow.hidden = false;
     return;
   }
 
   if (waylandRow) waylandRow.hidden = true;
-  if (!x11Row) return;
-  x11Row.hidden = false;
 
-  updateHotkeyDisplay(trigger);
+  bindHotkeyRow(pttRow, 'hotkey-display', 'hotkey-edit-btn',
+                pushToTalk, window.savePushToTalkHotkey);
+  bindHotkeyRow(toggleRow, 'hotkey-toggle-display', 'hotkey-toggle-edit-btn',
+                toggle, window.saveToggleHotkey);
+}
 
-  const editBtn = document.getElementById('hotkey-edit-btn');
-  if (editBtn) editBtn.onclick = () => showRecordModal(trigger);
+function bindHotkeyRow(row, displayId, buttonId, trigger, save) {
+  if (!row) return;
+  row.hidden = false;
 
-  // Mode selector
-  if (modeRow) {
-    modeRow.hidden = false;
-    const sel = document.getElementById('hotkey-mode-select');
-    if (sel) {
-      sel.value = mode || 'push-to-talk';
-      sel.onchange = async () => {
-        await window.saveHotkeyMode(sel.value);
-      };
-    }
+  updateHotkeyDisplay(displayId, trigger);
+
+  const btn = document.getElementById(buttonId);
+  if (btn) {
+    btn.onclick = () => showRecordModal(trigger, function (combo) {
+      return save(combo).then(function (res) {
+        if (typeof res !== 'string' || !res.startsWith('error')) {
+          updateHotkeyDisplay(displayId, combo);
+        }
+        return res;
+      });
+    });
   }
 }
 
-function updateHotkeyDisplay(trigger) {
-  const display = document.getElementById('hotkey-display');
+function updateHotkeyDisplay(displayId, trigger) {
+  const display = document.getElementById(displayId);
   if (!display) return;
+  if (!trigger) {
+    // An unset binding says so rather than rendering an empty row.
+    display.innerHTML = '<span style="color:var(--muted);font-size:13px">Not set</span>';
+    return;
+  }
   display.innerHTML = trigger.split('+')
     .map(k => `<kbd>${k}</kbd>`)
     .join('<span style="color:var(--muted);font-size:11px;padding:0 2px">+</span>');
@@ -463,7 +475,7 @@ function buildTriggerFromSet(keys) {
   return [...mods, ...main].join('+');
 }
 
-function showRecordModal(currentTrigger) {
+function showRecordModal(currentTrigger, save) {
   const modal   = document.getElementById('hotkey-modal');
   const preview = document.getElementById('hotkey-modal-preview');
   if (!modal) return;
@@ -519,9 +531,9 @@ function showRecordModal(currentTrigger) {
       }
       finalized = true;
       cleanup();
-      const res = await window.saveHotkey(lastCombo);
+      const res = await save(lastCombo);
       modal.classList.remove('visible');
-      if (!res.startsWith('error')) updateHotkeyDisplay(lastCombo);
+
     }
   }
 

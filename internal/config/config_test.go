@@ -68,11 +68,9 @@ func TestLegacyConfigKeepsImmediateDefaults(t *testing.T) {
 	}
 
 	// Existing settings must survive untouched.
-	if cfg.Hotkey.Trigger != "ctrl+shift+space" {
-		t.Errorf("Hotkey.Trigger = %q, want unchanged", cfg.Hotkey.Trigger)
-	}
-	if cfg.Hotkey.Mode != "push-to-talk" {
-		t.Errorf("Hotkey.Mode = %q, want push-to-talk default", cfg.Hotkey.Mode)
+	// The legacy trigger migrates to push-to-talk rather than being lost.
+	if cfg.Hotkey.PushToTalk != "ctrl+shift+space" {
+		t.Errorf("Hotkey.PushToTalk = %q, want the legacy trigger migrated", cfg.Hotkey.PushToTalk)
 	}
 }
 
@@ -452,5 +450,136 @@ func TestClipboardOnlyFromEnvironment(t *testing.T) {
 	}
 	if !cfg.Workflow.ClipboardOnlyDelivery() {
 		t.Error("ClipboardOnlyDelivery() = false, want true from the environment")
+	}
+}
+
+func TestIndependentHotkeyBindings(t *testing.T) {
+	cfg, err := loadTestConfig(t, minimalModels+`hotkey:
+  push_to_talk: "super+7"
+  toggle: "super+8"
+`)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	// Both at once is the point: the old design made this impossible.
+	if cfg.Hotkey.PushToTalk != "super+7" {
+		t.Errorf("PushToTalk = %q, want super+7", cfg.Hotkey.PushToTalk)
+	}
+	if cfg.Hotkey.Toggle != "super+8" {
+		t.Errorf("Toggle = %q, want super+8", cfg.Hotkey.Toggle)
+	}
+}
+
+func TestEitherHotkeyBindingMayBeUnset(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		pushToTalk string
+		toggle     string
+	}{
+		{
+			name:       "toggle only",
+			body:       "hotkey:\n  toggle: \"super+8\"\n",
+			pushToTalk: "",
+			toggle:     "super+8",
+		},
+		{
+			name:       "push to talk only",
+			body:       "hotkey:\n  push_to_talk: \"super+7\"\n",
+			pushToTalk: "super+7",
+			toggle:     "",
+		},
+		{
+			name:       "neither",
+			body:       "hotkey:\n  push_to_talk: \"\"\n",
+			pushToTalk: "",
+			toggle:     "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := loadTestConfig(t, minimalModels+tt.body)
+			if err != nil {
+				t.Fatalf("LoadConfig() error = %v", err)
+			}
+			if cfg.Hotkey.PushToTalk != tt.pushToTalk {
+				t.Errorf("PushToTalk = %q, want %q", cfg.Hotkey.PushToTalk, tt.pushToTalk)
+			}
+			if cfg.Hotkey.Toggle != tt.toggle {
+				t.Errorf("Toggle = %q, want %q", cfg.Hotkey.Toggle, tt.toggle)
+			}
+		})
+	}
+}
+
+func TestLegacyHotkeyTriggerMigrates(t *testing.T) {
+	// An existing config must keep its hotkey rather than silently losing it.
+	tests := []struct {
+		name       string
+		body       string
+		pushToTalk string
+		toggle     string
+	}{
+		{
+			name:       "push-to-talk mode",
+			body:       "hotkey:\n  trigger: \"super+7\"\n  mode: \"push-to-talk\"\n",
+			pushToTalk: "super+7",
+		},
+		{
+			name:   "toggle mode",
+			body:   "hotkey:\n  trigger: \"super+8\"\n  mode: \"toggle\"\n",
+			toggle: "super+8",
+		},
+		{
+			name:       "no mode defaults to push-to-talk",
+			body:       "hotkey:\n  trigger: \"super+9\"\n",
+			pushToTalk: "super+9",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := loadTestConfig(t, minimalModels+tt.body)
+			if err != nil {
+				t.Fatalf("LoadConfig() error = %v", err)
+			}
+			if cfg.Hotkey.PushToTalk != tt.pushToTalk {
+				t.Errorf("PushToTalk = %q, want %q", cfg.Hotkey.PushToTalk, tt.pushToTalk)
+			}
+			if cfg.Hotkey.Toggle != tt.toggle {
+				t.Errorf("Toggle = %q, want %q", cfg.Hotkey.Toggle, tt.toggle)
+			}
+		})
+	}
+}
+
+func TestExplicitBindingWinsOverLegacyTrigger(t *testing.T) {
+	cfg, err := loadTestConfig(t, minimalModels+`hotkey:
+  push_to_talk: "super+7"
+  trigger: "ctrl+shift+space"
+  mode: "toggle"
+`)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	// A stale trigger must not override a deliberate choice.
+	if cfg.Hotkey.PushToTalk != "super+7" {
+		t.Errorf("PushToTalk = %q, want the explicit binding preserved", cfg.Hotkey.PushToTalk)
+	}
+	if cfg.Hotkey.Toggle != "" {
+		t.Errorf("Toggle = %q, want the legacy trigger ignored", cfg.Hotkey.Toggle)
+	}
+}
+
+func TestHotkeyConfigured(t *testing.T) {
+	if (HotkeyConfig{}).Configured() {
+		t.Error("Configured() = true with no bindings")
+	}
+	if !(HotkeyConfig{PushToTalk: "super+7"}).Configured() {
+		t.Error("Configured() = false with a push-to-talk binding")
+	}
+	if !(HotkeyConfig{Toggle: "super+8"}).Configured() {
+		t.Error("Configured() = false with a toggle binding")
 	}
 }

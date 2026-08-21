@@ -24,7 +24,7 @@ func startEvdevInput(cfg *config.Config, dispatch session.InputDispatcher, onCan
 	chord := cfg.Workflow.Input.Chord
 	if chord == "" {
 		// Follow the configured hotkey so one setting drives both backends.
-		chord = cfg.Hotkey.Trigger
+		chord = cfg.Hotkey.PushToTalk
 	}
 
 	backend, err := inputpkg.StartEvdev(inputpkg.Options{

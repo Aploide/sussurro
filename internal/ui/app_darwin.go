@@ -22,7 +22,7 @@ var (
 // golang.design/x/hotkey on darwin drives its own CFRunLoop thread, so it can
 // be called from a regular goroutine once [NSApp run] is live.  We wait
 // briefly to guarantee NSApp has started before registering the CGEventTap.
-func installOverlayHotkey(overlay Overlay, trigger string, onDown, onUp func()) {
+func installOneHotkey(overlay Overlay, trigger string, onDown, onUp func()) {
 	mods, key, err := ihk.ParseTrigger(trigger)
 	if err != nil {
 		return
@@ -59,7 +59,7 @@ func installOverlayHotkey(overlay Overlay, trigger string, onDown, onUp func()) 
 
 // reinstallOverlayHotkey unregisters the current hotkey and registers a new
 // one with the given trigger, reusing the same onDown/onUp callbacks.
-func reinstallOverlayHotkey(_ Overlay, trigger string, onDown, onUp func()) {
+func reinstallOneHotkey(_ Overlay, trigger string, onDown, onUp func()) {
 	// Grab and clear the existing handle under the lock.
 	activeHKMu.Lock()
 	old := activeHK
@@ -112,4 +112,22 @@ func reinstallOverlayHotkey(_ Overlay, trigger string, onDown, onUp func()) {
 // installOverlayContextMenu wires right-click callbacks into the NSPanel overlay.
 func installOverlayContextMenu(overlay Overlay, openSettings, quit func()) {
 	overlaySetContextMenuCallbacks(openSettings, quit)
+}
+
+// installOverlayHotkey registers each configured binding. Push-to-talk and
+// toggle are independent and either may be unset, so a user can hold one key
+// and tap another — the previous single-trigger design allowed only one.
+func installOverlayHotkey(overlay Overlay, bindings HotkeyBindings) {
+	if bindings.PushToTalk != "" {
+		installOneHotkey(overlay, bindings.PushToTalk, bindings.OnPress, bindings.OnRelease)
+	}
+	if bindings.Toggle != "" {
+		// A toggle acts on press; the release carries no meaning.
+		installOneHotkey(overlay, bindings.Toggle, bindings.OnToggle, func() {})
+	}
+}
+
+// reinstallOverlayHotkey re-registers both bindings with new triggers.
+func reinstallOverlayHotkey(overlay Overlay, bindings HotkeyBindings) {
+	installOverlayHotkey(overlay, bindings)
 }

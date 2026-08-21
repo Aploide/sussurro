@@ -26,15 +26,15 @@ type modelInfo struct {
 
 // initialData is returned by getInitialData().
 type initialData struct {
-	Platform        string      `json:"platform"`
-	Version         string      `json:"version"`
-	Models          []modelInfo `json:"models"`
-	Hotkey          string      `json:"hotkey"`
-	HotkeyMode      string      `json:"hotkeyMode"`
-	IsWayland       bool        `json:"isWayland"`
-	Language        string      `json:"language"`
-	LowercaseOutput bool        `json:"lowercaseOutput"`
-	SkipLLMCleanup  bool        `json:"skipLLMCleanup"`
+	Platform         string      `json:"platform"`
+	Version          string      `json:"version"`
+	Models           []modelInfo `json:"models"`
+	PushToTalkHotkey string      `json:"pushToTalkHotkey"`
+	ToggleHotkey     string      `json:"toggleHotkey"`
+	IsWayland        bool        `json:"isWayland"`
+	Language         string      `json:"language"`
+	LowercaseOutput  bool        `json:"lowercaseOutput"`
+	SkipLLMCleanup   bool        `json:"skipLLMCleanup"`
 	// Workflow carries the review controls and this host's capabilities.
 	Workflow workflowSettings `json:"workflow"`
 }
@@ -70,40 +70,33 @@ func bindBridge(sw *settingsWindow) {
 		return "ok"
 	})
 
-	sw.w.Bind("saveHotkey", func(trigger string) (result string) {
-		defer func() {
-			if r := recover(); r != nil {
-				slog.Error("panic in saveHotkey", "error", r)
-				result = fmt.Sprintf("error: panic: %v", r)
+	// One binding per call, named by which it is. The previous design had a
+	// single trigger plus a mode, which made the behaviour a property of the
+	// binding and so allowed only one at a time.
+	saveBinding := func(name string, apply func(string)) func(string) string {
+		return func(trigger string) (result string) {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("panic saving hotkey", "binding", name, "error", r)
+					result = fmt.Sprintf("error: panic: %v", r)
+				}
+			}()
+			if err := config.SaveHotkeyBinding(name, trigger); err != nil {
+				return fmt.Sprintf("error: %v", err)
 			}
-		}()
-		if err := config.SaveHotkey(mgr.cfg, trigger); err != nil {
-			return fmt.Sprintf("error: %v", err)
+			apply(trigger)
+			// Re-register immediately so the change needs no restart.
+			go mgr.UpdateHotkeyBindings(mgr.cfg.Hotkey.PushToTalk, mgr.cfg.Hotkey.Toggle)
+			return "ok"
 		}
-		mgr.cfg.Hotkey.Trigger = trigger
-		// Re-register the OS-level hotkey with the new trigger so it takes
-		// effect immediately without requiring a restart.
-		go mgr.reinstallHotkey(trigger)
-		return "ok"
-	})
+	}
 
-	sw.w.Bind("saveHotkeyMode", func(mode string) (result string) {
-		defer func() {
-			if r := recover(); r != nil {
-				slog.Error("panic in saveHotkeyMode", "error", r)
-				result = fmt.Sprintf("error: panic: %v", r)
-			}
-		}()
-		if mode != "push-to-talk" && mode != "toggle" {
-			return "error: invalid mode"
-		}
-		if err := config.SaveHotkeyMode(mgr.cfg, mode); err != nil {
-			return fmt.Sprintf("error: %v", err)
-		}
-		mgr.cfg.Hotkey.Mode = mode
-		go mgr.UpdateHotkeyMode(mode)
-		return "ok"
-	})
+	sw.w.Bind("savePushToTalkHotkey", saveBinding("push_to_talk", func(t string) {
+		mgr.cfg.Hotkey.PushToTalk = t
+	}))
+	sw.w.Bind("saveToggleHotkey", saveBinding("toggle", func(t string) {
+		mgr.cfg.Hotkey.Toggle = t
+	}))
 
 	sw.w.Bind("saveLanguage", func(lang string) (result string) {
 		defer func() {
@@ -280,16 +273,16 @@ func buildInitialData(mgr *Manager) initialData {
 	}
 
 	return initialData{
-		Platform:        platform,
-		Version:         version.Version,
-		Models:          models,
-		Hotkey:          mgr.cfg.Hotkey.Trigger,
-		HotkeyMode:      mgr.cfg.Hotkey.Mode,
-		IsWayland:       isWayland,
-		Language:        mgr.cfg.Models.ASR.Language,
-		LowercaseOutput: mgr.cfg.App.LowercaseOutput,
-		SkipLLMCleanup:  mgr.cfg.App.SkipLLMCleanup,
-		Workflow:        buildWorkflowSettings(mgr.cfg, hostCapabilities()),
+		Platform:         platform,
+		Version:          version.Version,
+		Models:           models,
+		PushToTalkHotkey: mgr.cfg.Hotkey.PushToTalk,
+		ToggleHotkey:     mgr.cfg.Hotkey.Toggle,
+		IsWayland:        isWayland,
+		Language:         mgr.cfg.Models.ASR.Language,
+		LowercaseOutput:  mgr.cfg.App.LowercaseOutput,
+		SkipLLMCleanup:   mgr.cfg.App.SkipLLMCleanup,
+		Workflow:         buildWorkflowSettings(mgr.cfg, hostCapabilities()),
 	}
 }
 

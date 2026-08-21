@@ -36,12 +36,18 @@ struct OverlayData {
        the overlay is mapped: a hidden capsule must cost nothing. */
     guint        anim_source;
 
-    /* X11 hotkey */
+    /* X11 hotkeys. Push-to-talk and toggle are separate bindings, either of
+       which may be unset (keycode 0), so a user can hold one key and tap
+       another. */
     HotkeyDownCB down_cb;
     HotkeyUpCB   up_cb;
+    HotkeyDownCB toggle_cb;
     int          hk_keycode;
     unsigned int hk_mods;
     gboolean     hk_pressed;
+    int          tg_keycode;
+    unsigned int tg_mods;
+    gboolean     tg_pressed;
 };
 
 /* ------------------------------------------------------------------ */
@@ -389,7 +395,7 @@ static GdkFilterReturn x11_event_filter(GdkXEvent *xevent, GdkEvent *event, gpoi
     }
 
     if (xe->type == KeyPress) {
-        if ((int)xe->xkey.keycode == od->hk_keycode &&
+        if (od->hk_keycode && (int)xe->xkey.keycode == od->hk_keycode &&
             (xe->xkey.state & od->hk_mods) == od->hk_mods) {
             if (!od->hk_pressed) {
                 od->hk_pressed = TRUE;
@@ -397,8 +403,23 @@ static GdkFilterReturn x11_event_filter(GdkXEvent *xevent, GdkEvent *event, gpoi
             }
             return GDK_FILTER_REMOVE;
         }
+        /* The toggle binding acts on press and ignores release entirely. */
+        if (od->tg_keycode && (int)xe->xkey.keycode == od->tg_keycode &&
+            (xe->xkey.state & od->tg_mods) == od->tg_mods) {
+            if (!od->tg_pressed) {
+                od->tg_pressed = TRUE;
+                if (od->toggle_cb) od->toggle_cb();
+            }
+            return GDK_FILTER_REMOVE;
+        }
     } else if (xe->type == KeyRelease) {
-        if ((int)xe->xkey.keycode == od->hk_keycode) {
+        /* Clear the toggle's held flag so the next press counts, without
+           firing anything: toggling happens on press only. */
+        if (od->tg_keycode && (int)xe->xkey.keycode == od->tg_keycode) {
+            od->tg_pressed = FALSE;
+            return GDK_FILTER_REMOVE;
+        }
+        if (od->hk_keycode && (int)xe->xkey.keycode == od->hk_keycode) {
             if (od->hk_pressed) {
                 od->hk_pressed = FALSE;
                 if (od->up_cb) od->up_cb();
@@ -579,14 +600,16 @@ GtkWidget *overlay_create(void)
     return win;
 }
 
-void overlay_install_hotkey(GtkWidget *win, const char *trigger,
-                            HotkeyDownCB down_cb, HotkeyUpCB up_cb)
+void overlay_install_hotkey(GtkWidget *win, const char *push_to_talk,
+                            const char *toggle, HotkeyDownCB down_cb,
+                            HotkeyUpCB up_cb, HotkeyDownCB toggle_cb)
 {
     OverlayData *od = (OverlayData *)g_object_get_data(G_OBJECT(win), "overlay-data");
     if (!od) return;
 
-    od->down_cb = down_cb;
-    od->up_cb   = up_cb;
+    od->down_cb   = down_cb;
+    od->up_cb     = up_cb;
+    od->toggle_cb = toggle_cb;
 
 #ifndef WAYLAND_ONLY
     GdkDisplay *display = gdk_display_get_default();
@@ -611,18 +634,29 @@ void overlay_install_hotkey(GtkWidget *win, const char *trigger,
                   "push-to-talk release may be missed while a key repeats");
     }
 
-    unsigned int mods    = parse_x11_mods(trigger);
-    KeySym       keysym  = parse_x11_keysym(trigger);
-    int          keycode = XKeysymToKeycode(xdpy, keysym);
-
-    od->hk_keycode = keycode;
-    od->hk_mods    = mods;
-
-    /* Grab with all lock-key combinations */
+    /* Lock-key combinations each need their own grab, or the hotkey stops
+       working with Caps or Num Lock on. */
     unsigned int lock_combos[] = {0, LockMask, Mod2Mask, LockMask | Mod2Mask};
-    for (int i = 0; i < 4; i++) {
-        XGrabKey(xdpy, keycode, mods | lock_combos[i],
-                 xroot, True, GrabModeAsync, GrabModeAsync);
+
+    od->hk_keycode = 0;
+    od->tg_keycode = 0;
+
+    if (push_to_talk && push_to_talk[0]) {
+        od->hk_mods    = parse_x11_mods(push_to_talk);
+        od->hk_keycode = XKeysymToKeycode(xdpy, parse_x11_keysym(push_to_talk));
+        for (int i = 0; i < 4; i++) {
+            XGrabKey(xdpy, od->hk_keycode, od->hk_mods | lock_combos[i],
+                     xroot, True, GrabModeAsync, GrabModeAsync);
+        }
+    }
+
+    if (toggle && toggle[0]) {
+        od->tg_mods    = parse_x11_mods(toggle);
+        od->tg_keycode = XKeysymToKeycode(xdpy, parse_x11_keysym(toggle));
+        for (int i = 0; i < 4; i++) {
+            XGrabKey(xdpy, od->tg_keycode, od->tg_mods | lock_combos[i],
+                     xroot, True, GrabModeAsync, GrabModeAsync);
+        }
     }
 
     /* Install GDK event filter on root window */

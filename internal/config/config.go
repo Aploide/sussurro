@@ -64,84 +64,47 @@ type LLMConfig struct {
 	ExtendedPrompt bool `mapstructure:"extended_prompt"`
 }
 
+// HotkeyConfig holds the keyboard bindings that start and stop recording.
+//
+// PushToTalk and Toggle are independent and each optional. The previous design
+// had one trigger with a mode applied to it, which made the behaviour a
+// property of the binding and so allowed only one at a time; a user wanting a
+// held key and a tapped key could not have both.
 type HotkeyConfig struct {
+	// PushToTalk records while held and transcribes on release.
+	PushToTalk string `mapstructure:"push_to_talk"`
+	// Toggle starts recording on one press and stops on the next.
+	Toggle string `mapstructure:"toggle"`
+
+	// Trigger and Mode are the superseded single-binding form. Still read so
+	// existing configs keep their hotkey; Normalize folds them into whichever
+	// binding the mode named.
 	Trigger string `mapstructure:"trigger"`
 	Mode    string `mapstructure:"mode"` // "push-to-talk" or "toggle"
 }
 
+// Normalize folds a legacy trigger/mode pair into the binding it described.
+// It only speaks when neither new binding was set, so an explicit choice is
+// never overridden by a stale key.
+func (h *HotkeyConfig) Normalize() {
+	if h.PushToTalk != "" || h.Toggle != "" || h.Trigger == "" {
+		return
+	}
+	if h.Mode == "toggle" {
+		h.Toggle = h.Trigger
+		return
+	}
+	h.PushToTalk = h.Trigger
+}
+
+// Configured reports whether any keyboard binding is set. None is valid: on
+// Wayland the trigger socket is used instead.
+func (h HotkeyConfig) Configured() bool {
+	return h.PushToTalk != "" || h.Toggle != ""
+}
+
 type InjectionConfig struct {
 	Method string `mapstructure:"method"`
-}
-
-// SaveHotkey rewrites only the hotkey.trigger field in the YAML config file.
-func SaveHotkey(cfg *Config, trigger string) error {
-	configFile, err := userConfigPath()
-	if err != nil {
-		return err
-	}
-
-	data, err := os.ReadFile(configFile)
-	if err != nil {
-		return fmt.Errorf("cannot read config file: %w", err)
-	}
-
-	// Simple line-by-line replacement of the trigger value.
-	lines := strings.Split(string(data), "\n")
-	replaced := false
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "trigger:") {
-			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
-			lines[i] = indent + "trigger: \"" + trigger + "\""
-			replaced = true
-			break
-		}
-	}
-	if !replaced {
-		return fmt.Errorf("trigger key not found in config file")
-	}
-
-	return os.WriteFile(configFile, []byte(strings.Join(lines, "\n")), 0644)
-}
-
-// SaveHotkeyMode rewrites only the hotkey.mode field in the YAML config file.
-// If the key does not exist (old config), it inserts it after the trigger: line.
-func SaveHotkeyMode(cfg *Config, mode string) error {
-	configFile, err := userConfigPath()
-	if err != nil {
-		return err
-	}
-
-	data, err := os.ReadFile(configFile)
-	if err != nil {
-		return fmt.Errorf("cannot read config file: %w", err)
-	}
-
-	lines := strings.Split(string(data), "\n")
-
-	// First pass: replace existing mode: key.
-	for i, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), "mode:") {
-			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
-			lines[i] = indent + `mode: "` + mode + `"`
-			return os.WriteFile(configFile, []byte(strings.Join(lines, "\n")), 0644)
-		}
-	}
-
-	// Key missing: insert after trigger: line.
-	for i, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), "trigger:") {
-			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
-			newLine := indent + `mode: "` + mode + `"`
-			newLines := make([]string, 0, len(lines)+1)
-			newLines = append(newLines, lines[:i+1]...)
-			newLines = append(newLines, newLine)
-			newLines = append(newLines, lines[i+1:]...)
-			return os.WriteFile(configFile, []byte(strings.Join(newLines, "\n")), 0644)
-		}
-	}
-
-	return fmt.Errorf("trigger key not found in config file; cannot insert mode")
 }
 
 // SaveLanguage rewrites only the models.asr.language field in the YAML config file.
@@ -369,10 +332,18 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 
+	cfg.Hotkey.Normalize()
 	cfg.Workflow.Normalize()
 	if err := cfg.Workflow.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 
 	return &cfg, nil
+}
+
+// SaveHotkeyBinding writes one hotkey binding to the user's config file.
+// name is the YAML key under hotkey: "push_to_talk" or "toggle". An empty
+// trigger clears the binding, which is valid — either may be unset.
+func SaveHotkeyBinding(name, trigger string) error {
+	return SaveWorkflowValue("hotkey."+name, YAMLString(trigger))
 }

@@ -221,22 +221,21 @@ func run() {
 		uiMgr.SetLowercaseOutputCallback(func(v bool) { pipe.SetLowercaseOutput(v) })
 		uiMgr.SetSkipLLMCleanupCallback(func(v bool) { pipe.SetSkipLLMCleanup(v) })
 
-		// buildHotkeyCallbacks returns the right onDown/onUp pair for the given mode.
-		buildHotkeyCallbacks := func(mode string) (onDown func(), onUp func()) {
-			if mode == "toggle" {
-				return func() {
-					if input.Dispatch(session.InputToggle) {
-						log.Info("Transcribing...")
-					} else {
-						log.Info("Listening...")
-					}
-				}, func() {}
-			}
-			// Default: push-to-talk
-			return func() { log.Info("Listening..."); input.Dispatch(session.InputPress) },
-				func() { log.Info("Transcribing..."); input.Dispatch(session.InputRelease) }
+		// Push-to-talk and toggle are independent bindings, so their callbacks
+		// no longer depend on a mode: each key does what it is bound to do.
+		bindings := ui.HotkeyBindings{
+			PushToTalk: cfg.Hotkey.PushToTalk,
+			Toggle:     cfg.Hotkey.Toggle,
+			OnPress:    func() { log.Info("Listening..."); input.Dispatch(session.InputPress) },
+			OnRelease:  func() { log.Info("Transcribing..."); input.Dispatch(session.InputRelease) },
+			OnToggle: func() {
+				if input.Dispatch(session.InputToggle) {
+					log.Info("Transcribing...")
+				} else {
+					log.Info("Listening...")
+				}
+			},
 		}
-		uiMgr.SetHotkeyCallbackFactory(buildHotkeyCallbacks)
 
 		// Set up input handler before entering the UI main loop.
 		if hotkey.IsWayland() {
@@ -256,9 +255,13 @@ func run() {
 			}
 			log.Warn("Wayland: configure keyboard shortcut (see docs/wayland.md)")
 		} else {
-			log.Info("Using overlay hotkey")
-			onDown, onUp := buildHotkeyCallbacks(cfg.Hotkey.Mode)
-			uiMgr.InstallHotkey(cfg.Hotkey.Trigger, onDown, onUp)
+			if !cfg.Hotkey.Configured() {
+				log.Warn("No hotkey configured; set hotkey.push_to_talk or hotkey.toggle")
+			} else {
+				log.Info("Using overlay hotkeys",
+					"push_to_talk", cfg.Hotkey.PushToTalk, "toggle", cfg.Hotkey.Toggle)
+			}
+			uiMgr.InstallHotkey(bindings)
 		}
 
 		log.Info("Sussurro UI running")
@@ -290,27 +293,46 @@ func run() {
 	} else {
 		log.Info("Using global hotkeys (X11 / macOS)")
 
-		var onDown, onUp func()
-		if cfg.Hotkey.Mode == "toggle" {
-			onDown = func() {
-				if input.Dispatch(session.InputToggle) {
-					log.Info("Transcribing...")
-				} else {
-					log.Info("Listening...")
-				}
+		// Headless registers each configured binding separately. Both are
+		// optional; with neither set there is simply no keyboard trigger.
+		if cfg.Hotkey.PushToTalk != "" {
+			ptt, err := hotkey.NewHandler(cfg.Hotkey.PushToTalk, log)
+			if err != nil {
+				log.Error("Failed to register the push-to-talk hotkey", "error", err)
+				os.Exit(1)
 			}
-			onUp = func() {}
-		} else {
-			onDown = func() { log.Info("Listening..."); input.Dispatch(session.InputPress) }
-			onUp = func() { log.Info("Transcribing..."); input.Dispatch(session.InputRelease) }
+			defer ptt.Unregister()
+			if err := ptt.Register(
+				func() { log.Info("Listening..."); input.Dispatch(session.InputPress) },
+				func() { log.Info("Transcribing..."); input.Dispatch(session.InputRelease) },
+			); err != nil {
+				log.Error("Failed to register the push-to-talk hotkey", "error", err)
+				os.Exit(1)
+			}
 		}
 
-		hkHandler, err := hotkey.NewHandler(cfg.Hotkey.Trigger, log)
+		if cfg.Hotkey.Toggle == "" {
+			if cfg.Hotkey.PushToTalk == "" {
+				log.Warn("No hotkey configured; set hotkey.push_to_talk or hotkey.toggle")
+			}
+			select {}
+		}
+
+		hkHandler, err := hotkey.NewHandler(cfg.Hotkey.Toggle, log)
 		if err != nil {
-			log.Error("Failed to initialize hotkey handler", "error", err)
+			log.Error("Failed to register the toggle hotkey", "error", err)
 			os.Exit(1)
 		}
 		defer hkHandler.Unregister()
+
+		onDown := func() {
+			if input.Dispatch(session.InputToggle) {
+				log.Info("Transcribing...")
+			} else {
+				log.Info("Listening...")
+			}
+		}
+		onUp := func() {}
 
 		if err := hkHandler.Register(onDown, onUp); err != nil {
 			log.Error("Failed to register hotkey", "error", err)

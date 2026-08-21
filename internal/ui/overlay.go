@@ -42,3 +42,18 @@ func present(overlay Overlay, model ViewModel, trayReady bool) {
 	}
 	overlay.Hide()
 }
+
+// HotkeyBindings describes the keyboard bindings that start and stop
+// recording. Each binding is optional: a user may have push-to-talk, toggle,
+// or both, which the previous single-trigger-plus-mode design could not
+// express.
+type HotkeyBindings struct {
+	PushToTalk string
+	Toggle     string
+
+	// OnPress and OnRelease drive the push-to-talk binding; OnToggle fires
+	// once per press of the toggle binding.
+	OnPress   func()
+	OnRelease func()
+	OnToggle  func()
+}

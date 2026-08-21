@@ -79,8 +79,12 @@ typedef struct {
 GtkWidget *overlay_create(void);
 
 /* Install X11 global hotkey bound to the overlay (no-op on Wayland) */
-void overlay_install_hotkey(GtkWidget *win, const char *trigger,
-                            HotkeyDownCB down_cb, HotkeyUpCB up_cb);
+/* Installs the recording bindings. Either may be NULL or empty: push-to-talk
+   fires down/up as the key is held and released, toggle fires once per press.
+   Independent, so a user can hold one key and tap another. */
+void overlay_install_hotkey(GtkWidget *win, const char *push_to_talk,
+                            const char *toggle, HotkeyDownCB down_cb,
+                            HotkeyUpCB up_cb, HotkeyDownCB toggle_cb);
 
 /* Thread-safe async state/RMS updates via gdk_threads_add_idle */
 void overlay_set_state_async(GtkWidget *win, int state);

@@ -23,13 +23,8 @@ type Manager struct {
 	quitOnce      sync.Once
 
 	// Stored hotkey callbacks so the hotkey can be re-registered at runtime.
-	hotkeyOnDown func()
-	hotkeyOnUp   func()
-
-	// Factory that builds the right callbacks for a given mode
-	// ("push-to-talk" or "toggle"). Set once by the caller via
-	// SetHotkeyCallbackFactory before InstallHotkey is called.
-	hotkeyCallbackFactory func(mode string) (onDown func(), onUp func())
+	// bindings holds the configured hotkeys and their callbacks.
+	bindings HotkeyBindings
 
 	// Called when the user toggles lowercase output in Settings.
 	onLowercaseOutput func(bool)
@@ -73,8 +68,8 @@ func (m *Manager) Run() {
 	// blocks in the GTK main loop — so at that point m.overlay is still nil
 	// and the X11 grab silently did nothing. Callers only stored the
 	// callbacks; this is where they take effect.
-	if m.hotkeyOnDown != nil && m.hotkeyOnUp != nil {
-		installOverlayHotkey(m.overlay, m.cfg.Hotkey.Trigger, m.hotkeyOnDown, m.hotkeyOnUp)
+	if m.bindings.PushToTalk != "" || m.bindings.Toggle != "" {
+		installOverlayHotkey(m.overlay, m.bindings)
 	}
 
 	// 4. Right-click context menu on the overlay (fallback when tray isn't visible).
@@ -250,36 +245,24 @@ func (m *Manager) processUpdates() {
 	}
 }
 
-// SetHotkeyCallbackFactory stores a function that builds onDown/onUp callbacks
-// for a given mode string ("push-to-talk" or "toggle"). Must be called before
-// InstallHotkey.
-func (m *Manager) SetHotkeyCallbackFactory(fn func(mode string) (func(), func())) {
-	m.hotkeyCallbackFactory = fn
+// UpdateHotkeyBindings changes the bindings live, without a restart, keeping
+// the callbacks already registered.
+func (m *Manager) UpdateHotkeyBindings(pushToTalk, toggle string) {
+	m.bindings.PushToTalk = pushToTalk
+	m.bindings.Toggle = toggle
+	m.cfg.Hotkey.PushToTalk = pushToTalk
+	m.cfg.Hotkey.Toggle = toggle
+	reinstallOverlayHotkey(m.overlay, m.bindings)
 }
 
-// UpdateHotkeyMode switches the active recording mode live, without requiring
-// a restart. It rebuilds the callbacks via the factory and reinstalls the hotkey.
-func (m *Manager) UpdateHotkeyMode(mode string) {
-	if m.hotkeyCallbackFactory == nil {
-		return
-	}
-	onDown, onUp := m.hotkeyCallbackFactory(mode)
-	m.hotkeyOnDown = onDown
-	m.hotkeyOnUp = onUp
-	reinstallOverlayHotkey(m.overlay, m.cfg.Hotkey.Trigger, onDown, onUp)
-}
-
-// InstallHotkey registers a platform hotkey tied to the overlay.
-// Implemented in app_linux.go / app_darwin.go.
-// InstallHotkey records the hotkey callbacks. The grab itself happens in
-// Run(), once the platform overlay exists: this is routinely called before
-// Run(), which is what silently broke the hotkey when it tried to grab
-// against a nil overlay.
-func (m *Manager) InstallHotkey(trigger string, onDown, onUp func()) {
-	m.hotkeyOnDown = onDown
-	m.hotkeyOnUp = onUp
+// InstallHotkey records the bindings and their callbacks. The grab itself
+// happens in Run(), once the platform overlay exists: this is routinely
+// called before Run(), which is what silently broke the hotkey when it tried
+// to grab against a nil overlay.
+func (m *Manager) InstallHotkey(bindings HotkeyBindings) {
+	m.bindings = bindings
 	if m.overlay != nil {
-		installOverlayHotkey(m.overlay, trigger, onDown, onUp)
+		installOverlayHotkey(m.overlay, bindings)
 	}
 }
 
@@ -309,11 +292,10 @@ func (m *Manager) applySkipLLMCleanup(v bool) {
 	}
 }
 
-// reinstallHotkey unregisters the current hotkey and registers a new one with
-// the given trigger string, reusing the original onDown/onUp callbacks.
-func (m *Manager) reinstallHotkey(trigger string) {
-	if m.hotkeyOnDown == nil || m.hotkeyOnUp == nil {
+// reinstallHotkey re-registers the current bindings.
+func (m *Manager) reinstallHotkey() {
+	if m.bindings.PushToTalk == "" && m.bindings.Toggle == "" {
 		return
 	}
-	reinstallOverlayHotkey(m.overlay, trigger, m.hotkeyOnDown, m.hotkeyOnUp)
+	reinstallOverlayHotkey(m.overlay, m.bindings)
 }
