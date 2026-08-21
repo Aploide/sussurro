@@ -63,24 +63,34 @@ func (m *Manager) Run() {
 	// 2. Create the webview settings window (hidden).
 	m.settings = newSettingsWindow(m)
 
-	// 3. Right-click context menu on the overlay (fallback when tray isn't visible).
+	// 3. Apply the hotkey now that the overlay exists.
+	//
+	// InstallHotkey is called before Run() — it has to be, because Run()
+	// blocks in the GTK main loop — so at that point m.overlay is still nil
+	// and the X11 grab silently did nothing. Callers only stored the
+	// callbacks; this is where they take effect.
+	if m.hotkeyOnDown != nil && m.hotkeyOnUp != nil {
+		installOverlayHotkey(m.overlay, m.cfg.Hotkey.Trigger, m.hotkeyOnDown, m.hotkeyOnUp)
+	}
+
+	// 4. Right-click context menu on the overlay (fallback when tray isn't visible).
 	installOverlayContextMenu(m.overlay,
 		func() { m.settings.Show() },
 		func() { m.Quit() },
 	)
 
-	// 4. The overlay is created unmapped. Show it until the tray confirms
+	// 5. The overlay is created unmapped. Show it until the tray confirms
 	//    itself, so a desktop that never hosts an SNI item still has the
 	//    right-click menu as a way into Settings and Quit.
 	m.render(CompactModel(session.StateIdle))
 
-	// 5. System tray (runs its own goroutine internally on Linux via DBus).
+	// 6. System tray (runs its own goroutine internally on Linux via DBus).
 	go m.runTray()
 
-	// 6. Goroutine that forwards state/RMS from pipeline to the overlay.
+	// 7. Goroutine that forwards state/RMS from pipeline to the overlay.
 	go m.processUpdates()
 
-	// 7. Block in the webview / GTK / NSApp main loop.
+	// 8. Block in the webview / GTK / NSApp main loop.
 	m.settings.Run()
 }
 
@@ -191,10 +201,16 @@ func (m *Manager) UpdateHotkeyMode(mode string) {
 
 // InstallHotkey registers a platform hotkey tied to the overlay.
 // Implemented in app_linux.go / app_darwin.go.
+// InstallHotkey records the hotkey callbacks. The grab itself happens in
+// Run(), once the platform overlay exists: this is routinely called before
+// Run(), which is what silently broke the hotkey when it tried to grab
+// against a nil overlay.
 func (m *Manager) InstallHotkey(trigger string, onDown, onUp func()) {
 	m.hotkeyOnDown = onDown
 	m.hotkeyOnUp = onUp
-	installOverlayHotkey(m.overlay, trigger, onDown, onUp)
+	if m.overlay != nil {
+		installOverlayHotkey(m.overlay, trigger, onDown, onUp)
+	}
 }
 
 // SetLowercaseOutputCallback stores a function that is called whenever the user
