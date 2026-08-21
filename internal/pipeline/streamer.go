@@ -243,6 +243,9 @@ func (s *Streamer) runPass(generation uint64) {
 		s.log.Debug("Partial transcription failed", "error", err)
 		return
 	}
+	// Strip before publishing: a partial that is nothing but a marker has no
+	// text in it, and showing one in the overlay is the reported defect.
+	text = StripNonSpeechMarkers(text)
 	if text == "" {
 		return
 	}

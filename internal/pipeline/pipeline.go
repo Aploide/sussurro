@@ -560,6 +560,10 @@ func (p *Pipeline) processSegment(samples []float32) {
 
 	asrDuration := time.Since(start)
 
+	// Whisper's non-speech annotations are not dictated text, so they are
+	// dropped before anything downstream can show or deliver them.
+	text = StripNonSpeechMarkers(text)
+
 	// Recognition is done; what follows is cleanup and delivery. Announce the
 	// change so the overlay stops claiming to transcribe.
 	p.notifyPhase(session.StateCleaningUp, text)
