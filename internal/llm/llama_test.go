@@ -88,9 +88,9 @@ func TestCleanupRemovesFillers(t *testing.T) {
 		in   string
 		want string
 	}{
-		{name: "leading filler", in: "Um, the build is broken.", want: "the build is broken."},
+		{name: "leading filler", in: "Um, the build is broken.", want: "The build is broken."},
 		{name: "mid-sentence", in: "The build is uh broken.", want: "The build is broken."},
-		{name: "several", in: "Um, er, the tests, ah, pass.", want: "the tests, pass."},
+		{name: "several", in: "Um, er, the tests, ah, pass.", want: "The tests, pass."},
 		{name: "none present", in: "The build is broken.", want: "The build is broken."},
 	}
 
@@ -192,4 +192,59 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func TestCleanupRecapitalizesAfterDeletingAnOpener(t *testing.T) {
+	// Removing the capitalised opener used to strand a lowercase word:
+	// "Hello? Ah, no, that's looking better." became "Hello? no, ...".
+	engine := &Engine{}
+
+	got, err := engine.CleanupText("Hello? Ah, no, that's looking better.")
+	if err != nil {
+		t.Fatalf("CleanupText() error = %v", err)
+	}
+	if !strings.Contains(got, "No,") {
+		t.Errorf("CleanupText() = %q, want the exposed word recapitalised", got)
+	}
+}
+
+func TestCleanupLeavesDeliberateCasingAlone(t *testing.T) {
+	// Case is only ever raised on an all-lowercase word, so names and
+	// acronyms the user dictated are untouched.
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "acronym", in: "Um, gRPC is fine.", want: "gRPC is fine."},
+		{name: "product name", in: "Uh, iPhone works.", want: "iPhone works."},
+	}
+
+	engine := &Engine{}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := engine.CleanupText(tt.in)
+			if err != nil {
+				t.Fatalf("CleanupText() error = %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("CleanupText() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRecapitalizeChangesOnlyCase(t *testing.T) {
+	// The contract permits deletion and dictionary substitution; case is a
+	// rendering change, not a different word. Assert nothing else moved.
+	for _, in := range []string{
+		"hello there. how are you?",
+		"one. two. three.",
+		"a sentence! another one? and a third.",
+	} {
+		got := recapitalize(in)
+		if !strings.EqualFold(got, in) {
+			t.Errorf("recapitalize(%q) = %q, which differs by more than case", in, got)
+		}
+	}
 }

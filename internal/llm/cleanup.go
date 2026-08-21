@@ -58,7 +58,56 @@ func removeFillers(text string) string {
 		out = append(out, word)
 	}
 
-	return repairSpacing(strings.Join(out, " "))
+	return recapitalize(repairSpacing(strings.Join(out, " ")))
+}
+
+// recapitalize restores a capital letter where deleting a filler exposed a
+// lowercase word at a sentence start: "Hello? Ah, no, ..." loses its
+// capitalised opener and leaves "Hello? no, ...".
+//
+// This changes case only, never which word was said, so it stays inside the
+// no-rewording contract. A word that is not all-lowercase is left alone, so
+// deliberate capitalisation and acronyms survive untouched.
+func recapitalize(text string) string {
+	runes := []rune(text)
+	atSentenceStart := true
+
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+
+		if atSentenceStart && unicode.IsLetter(r) {
+			if unicode.IsLower(r) && wordIsLower(runes, i) {
+				runes[i] = unicode.ToUpper(r)
+			}
+			atSentenceStart = false
+			continue
+		}
+
+		// A terminator opens the next sentence, once past any closing quote
+		// or bracket that belongs to the one just ended.
+		if r == '.' || r == '?' || r == '!' {
+			atSentenceStart = true
+		} else if !unicode.IsSpace(r) && r != '"' && r != '\'' && r != ')' && r != ']' {
+			atSentenceStart = false
+		}
+	}
+
+	return string(runes)
+}
+
+// wordIsLower reports whether the word starting at i is entirely lowercase.
+// Capitalising the first letter of "iPhone" or "gRPC" would be a change the
+// user did not make.
+func wordIsLower(runes []rune, i int) bool {
+	for ; i < len(runes); i++ {
+		if unicode.IsSpace(runes[i]) {
+			break
+		}
+		if unicode.IsUpper(runes[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // isFiller reports whether a word is pure hesitation. A word carrying
