@@ -67,8 +67,7 @@ workflow:
     # evdev only. Chord that abandons a review session; empty disables it.
     cancel_chord: ""
   delivery:
-    # auto, clipboard-paste, wtype (Wayland), or ydotool (uinput daemon).
+    # auto, clipboard-paste, wtype (Wayland), ydotool (uinput daemon), or
+    # clipboard-only to copy the text without pasting it, leaving you to
+    # place it yourself.
     backend: "auto"
-    # Copy the text without pasting it, leaving you to place it yourself.
-    # Useful when the focused window is not where the text should go.
-    clipboard_only: false

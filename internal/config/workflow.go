@@ -49,6 +49,9 @@ const (
 	DeliveryWtype DeliveryBackend = "wtype"
 	// DeliveryYdotool types text through the ydotool uinput daemon.
 	DeliveryYdotool DeliveryBackend = "ydotool"
+	// DeliveryClipboardOnly copies the text and pastes nothing, leaving the
+	// user to place it themselves.
+	DeliveryClipboardOnly DeliveryBackend = "clipboard-only"
 )
 
 // Defaults for the streaming review workflow. Every default reproduces
@@ -71,7 +74,7 @@ const (
 var (
 	interactionModes = []InteractionMode{ModeImmediate, ModeReview}
 	inputBackends    = []InputBackend{InputAuto, InputNative, InputTrigger, InputEvdev}
-	deliveryBackends = []DeliveryBackend{DeliveryAuto, DeliveryClipboardPaste, DeliveryWtype, DeliveryYdotool}
+	deliveryBackends = []DeliveryBackend{DeliveryAuto, DeliveryClipboardPaste, DeliveryWtype, DeliveryYdotool, DeliveryClipboardOnly}
 )
 
 // WorkflowConfig holds the opt-in streaming review settings. An absent
@@ -108,9 +111,11 @@ type InputConfig struct {
 // DeliveryConfig selects the text insertion backend.
 type DeliveryConfig struct {
 	Backend DeliveryBackend `mapstructure:"backend"`
-	// ClipboardOnly stages the text on the clipboard without pressing paste,
-	// leaving the user to place it themselves. Orthogonal to Backend, which
-	// says how to insert rather than whether to.
+	// ClipboardOnly is the superseded boolean form of
+	// Backend: clipboard-only. Splitting "whether to insert" from "how to
+	// insert" produced a dropdown that did nothing whenever the box was
+	// ticked, so the choice is now a single control. Still read so existing
+	// configs keep working; Normalize folds it into Backend.
 	ClipboardOnly bool `mapstructure:"clipboard_only"`
 }
 
@@ -142,6 +147,12 @@ func (w *WorkflowConfig) Normalize() {
 	}
 	if w.Delivery.Backend == "" {
 		w.Delivery.Backend = DefaultDeliveryBackend
+	}
+	// An existing config's clipboard_only: true must keep behaving the same.
+	// It only speaks when the backend was left at its default, so an explicit
+	// backend choice is never silently overridden.
+	if w.Delivery.ClipboardOnly && w.Delivery.Backend == DefaultDeliveryBackend {
+		w.Delivery.Backend = DeliveryClipboardOnly
 	}
 }
 
@@ -259,4 +270,10 @@ func validateChordSpec(key, spec string) error {
 		seen[name] = true
 	}
 	return nil
+}
+
+// ClipboardOnlyDelivery reports whether delivery should stage text without
+// pasting it.
+func (w WorkflowConfig) ClipboardOnlyDelivery() bool {
+	return w.Delivery.Backend == DeliveryClipboardOnly
 }

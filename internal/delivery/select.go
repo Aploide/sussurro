@@ -15,6 +15,9 @@ type Capabilities struct {
 	// Clipboard is the portable fallback, used when no direct-typing tool is
 	// available. Nil means the host cannot paste either.
 	Clipboard Backend
+	// ClipboardWrite stages text without pasting, for the clipboard-only
+	// backend. Nil falls back to the Clipboard backend's own staging.
+	ClipboardWrite ClipboardWriter
 }
 
 // resolve fills in the real implementations for unset fields.
@@ -54,6 +57,12 @@ func SelectBackend(name BackendName, capabilities Capabilities) (Backend, error)
 			return nil, fmt.Errorf("delivery backend %q requires ydotool on PATH", name)
 		}
 		return newYdotoolBackend(capabilities.Run), nil
+
+	case BackendClipboardOnly:
+		if capabilities.Clipboard == nil {
+			return nil, fmt.Errorf("delivery backend %q is unavailable on this host", name)
+		}
+		return NewClipboardOnlyBackend(capabilities.ClipboardWrite, string(BackendClipboardPaste)), nil
 
 	case BackendAuto, "":
 		// ydotool works under any compositor including Wayland sessions that

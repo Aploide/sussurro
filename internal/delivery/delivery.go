@@ -21,6 +21,8 @@ const (
 	BackendWtype BackendName = "wtype"
 	// BackendYdotool types through the ydotool uinput daemon.
 	BackendYdotool BackendName = "ydotool"
+	// BackendClipboardOnly copies text without pasting it.
+	BackendClipboardOnly BackendName = "clipboard-only"
 )
 
 // Action is an explicit delivery request from the review workflow.

@@ -166,8 +166,7 @@ workflow:
     chord: ""             # evdev only
     cancel_chord: ""      # evdev only
   delivery:
-    backend: "auto"        # auto, clipboard-paste, wtype, ydotool
-    clipboard_only: false  # copy without pasting
+    backend: "auto"        # auto, clipboard-paste, wtype, ydotool, clipboard-only
 ```
 
 Every default reproduces the original dictation behaviour, so **omitting this
@@ -236,11 +235,13 @@ These three keys apply to `evdev` only; other backends ignore them.
 Naming a backend whose tool is not installed is an error rather than a silent
 downgrade, so a misconfigured host is diagnosable. `auto` never fails this way.
 
-**`clipboard_only`** copies the text without pasting it, leaving you to place
-it yourself. `backend` still decides *how* text would be inserted; this
-decides *whether* to insert it at all. Useful when the focused window is not
-where the text belongs, or when you want to look before committing. Off by
-default, so dictation pastes as it always has.
+`clipboard-only` is useful when the focused window is not where the text
+belongs, or when you want to look before committing. It is one of the backend
+values rather than a separate switch: "how to insert" has no meaning when
+nothing is inserted, and offering both produced a setting that did nothing.
+
+The superseded `clipboard_only: true` boolean is still honoured for existing
+configs, and is equivalent to `backend: "clipboard-only"`.
 
 Delivery waits for the trigger keys to be released before typing, so text is
 not turned into keyboard shortcuts by a modifier that is still held. It inserts

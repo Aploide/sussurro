@@ -387,18 +387,32 @@ func readShippedDefaults(t *testing.T) string {
 	return string(body)
 }
 
-func TestClipboardOnlyDefaultsToPasting(t *testing.T) {
+func TestDeliveryDefaultsToPasting(t *testing.T) {
 	cfg, err := loadTestConfig(t, legacyConfig)
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
-	// Auto-paste is the existing behaviour and must stay the default.
-	if cfg.Workflow.Delivery.ClipboardOnly {
-		t.Error("ClipboardOnly = true by default, want false")
+	if cfg.Workflow.ClipboardOnlyDelivery() {
+		t.Error("ClipboardOnlyDelivery() = true by default, want pasting")
 	}
 }
 
-func TestClipboardOnlyLoadsFromConfig(t *testing.T) {
+func TestClipboardOnlyBackendLoads(t *testing.T) {
+	cfg, err := loadTestConfig(t, legacyConfig+`workflow:
+  delivery:
+    backend: "clipboard-only"
+`)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if !cfg.Workflow.ClipboardOnlyDelivery() {
+		t.Error("ClipboardOnlyDelivery() = false, want true")
+	}
+}
+
+func TestLegacyClipboardOnlyBooleanStillWorks(t *testing.T) {
+	// Configs written before the two controls were merged must keep behaving
+	// the same, or the change silently starts pasting into people's windows.
 	cfg, err := loadTestConfig(t, legacyConfig+`workflow:
   delivery:
     clipboard_only: true
@@ -406,19 +420,37 @@ func TestClipboardOnlyLoadsFromConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
-	if !cfg.Workflow.Delivery.ClipboardOnly {
-		t.Error("ClipboardOnly = false, want true")
+	if !cfg.Workflow.ClipboardOnlyDelivery() {
+		t.Error("ClipboardOnlyDelivery() = false for a legacy clipboard_only config")
+	}
+	if cfg.Workflow.Delivery.Backend != DeliveryClipboardOnly {
+		t.Errorf("Backend = %q, want it folded to clipboard-only", cfg.Workflow.Delivery.Backend)
+	}
+}
+
+func TestExplicitBackendWinsOverLegacyBoolean(t *testing.T) {
+	// An explicit backend choice must not be overridden by a stale boolean.
+	cfg, err := loadTestConfig(t, legacyConfig+`workflow:
+  delivery:
+    backend: "wtype"
+    clipboard_only: true
+`)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if cfg.Workflow.Delivery.Backend != DeliveryWtype {
+		t.Errorf("Backend = %q, want the explicit choice preserved", cfg.Workflow.Delivery.Backend)
 	}
 }
 
 func TestClipboardOnlyFromEnvironment(t *testing.T) {
-	t.Setenv("SUSSURRO_WORKFLOW_DELIVERY_CLIPBOARD_ONLY", "true")
+	t.Setenv("SUSSURRO_WORKFLOW_DELIVERY_BACKEND", "clipboard-only")
 
 	cfg, err := loadTestConfig(t, legacyConfig)
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
-	if !cfg.Workflow.Delivery.ClipboardOnly {
-		t.Error("ClipboardOnly = false, want true from the environment")
+	if !cfg.Workflow.ClipboardOnlyDelivery() {
+		t.Error("ClipboardOnlyDelivery() = false, want true from the environment")
 	}
 }

@@ -34,7 +34,6 @@ type workflowSettings struct {
 	InputCancelChord  string   `json:"inputCancelChord"`
 	DeliveryBackend   string   `json:"deliveryBackend"`
 	DeliveryBackends  []choice `json:"deliveryBackends"`
-	ClipboardOnly     bool     `json:"clipboardOnly"`
 	// VoiceEditing reports whether review mode's voice editing is reachable.
 	// It has no separate switch: it is available exactly when review mode is.
 	VoiceEditing bool `json:"voiceEditing"`
@@ -68,7 +67,6 @@ func buildWorkflowSettings(cfg *config.Config, probe capabilityProbe) workflowSe
 		InputCancelChord:  workflow.Input.CancelChord,
 		DeliveryBackend:   string(workflow.Delivery.Backend),
 		DeliveryBackends:  deliveryBackendChoices(probe),
-		ClipboardOnly:     workflow.Delivery.ClipboardOnly,
 		VoiceEditing:      workflow.ReviewEnabled(),
 	}
 }
@@ -124,6 +122,14 @@ func deliveryBackendChoices(probe capabilityProbe) []choice {
 		{Value: string(config.DeliveryClipboardPaste), Label: "Clipboard paste", Available: true},
 		toolChoice(config.DeliveryWtype, "wtype (Wayland)", "wtype"),
 		toolChoice(config.DeliveryYdotool, "ydotool", "ydotool"),
+		// Not a way of inserting text but a decision not to, which is why it
+		// belongs in this list: offering it separately produced a dropdown
+		// that did nothing whenever the separate control was set.
+		{
+			Value:     string(config.DeliveryClipboardOnly),
+			Label:     "Copy to clipboard, don't paste",
+			Available: true,
+		},
 	}
 }
 
@@ -176,8 +182,6 @@ func applyWorkflowField(workflow *config.WorkflowConfig, key, value string) erro
 		workflow.Input.CancelChord = value
 	case "workflow.delivery.backend":
 		workflow.Delivery.Backend = config.DeliveryBackend(value)
-	case "workflow.delivery.clipboard_only":
-		workflow.Delivery.ClipboardOnly = value == "true"
 	default:
 		return fmt.Errorf("unknown setting %q", key)
 	}
@@ -187,7 +191,7 @@ func applyWorkflowField(workflow *config.WorkflowConfig, key, value string) erro
 // yamlScalar renders a value for the config file, quoting everything except
 // the one boolean setting.
 func yamlScalar(key, value string) string {
-	if key == "workflow.streaming.enabled" || key == "workflow.delivery.clipboard_only" {
+	if key == "workflow.streaming.enabled" {
 		return config.YAMLBool(value == "true")
 	}
 	return config.YAMLString(value)
