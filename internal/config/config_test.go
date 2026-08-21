@@ -558,7 +558,7 @@ func TestExplicitBindingWinsOverLegacyTrigger(t *testing.T) {
 	cfg, err := loadTestConfig(t, minimalModels+`hotkey:
   push_to_talk: "super+7"
   trigger: "ctrl+shift+space"
-  mode: "toggle"
+  mode: "push-to-talk"
 `)
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v", err)
@@ -567,8 +567,42 @@ func TestExplicitBindingWinsOverLegacyTrigger(t *testing.T) {
 	if cfg.Hotkey.PushToTalk != "super+7" {
 		t.Errorf("PushToTalk = %q, want the explicit binding preserved", cfg.Hotkey.PushToTalk)
 	}
-	if cfg.Hotkey.Toggle != "" {
-		t.Errorf("Toggle = %q, want the legacy trigger ignored", cfg.Hotkey.Toggle)
+}
+
+func TestHalfMigratedConfigKeepsBothBindings(t *testing.T) {
+	// Adding one new binding to a file that still has trigger/mode must not
+	// discard the trigger: the user gets a toggle and silently loses
+	// push-to-talk, with nothing to indicate why.
+	cfg, err := loadTestConfig(t, minimalModels+`hotkey:
+  trigger: "super+8"
+  mode: "push-to-talk"
+  toggle: "super+9"
+`)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if cfg.Hotkey.PushToTalk != "super+8" {
+		t.Errorf("PushToTalk = %q, want the legacy trigger migrated alongside the new toggle",
+			cfg.Hotkey.PushToTalk)
+	}
+	if cfg.Hotkey.Toggle != "super+9" {
+		t.Errorf("Toggle = %q, want the explicit binding kept", cfg.Hotkey.Toggle)
+	}
+}
+
+func TestLegacyTriggerDoesNotOverwriteItsOwnBinding(t *testing.T) {
+	// mode names toggle, and toggle is already set explicitly: the trigger
+	// has nowhere to go and must not clobber it.
+	cfg, err := loadTestConfig(t, minimalModels+`hotkey:
+  trigger: "ctrl+shift+space"
+  mode: "toggle"
+  toggle: "super+9"
+`)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if cfg.Hotkey.Toggle != "super+9" {
+		t.Errorf("Toggle = %q, want the explicit binding preserved", cfg.Hotkey.Toggle)
 	}
 }
 

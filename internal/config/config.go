@@ -83,18 +83,26 @@ type HotkeyConfig struct {
 	Mode    string `mapstructure:"mode"` // "push-to-talk" or "toggle"
 }
 
-// Normalize folds a legacy trigger/mode pair into the binding it described.
-// It only speaks when neither new binding was set, so an explicit choice is
-// never overridden by a stale key.
+// Normalize folds a legacy trigger/mode pair into the binding its mode
+// described, but only into a binding that is not already set.
+//
+// The per-binding check matters for a half-migrated config: someone adding
+// toggle: to a file that still has trigger:/mode: would otherwise lose the
+// trigger entirely, because a whole-config check would see "some new binding
+// exists" and skip the migration.
 func (h *HotkeyConfig) Normalize() {
-	if h.PushToTalk != "" || h.Toggle != "" || h.Trigger == "" {
+	if h.Trigger == "" {
 		return
 	}
 	if h.Mode == "toggle" {
-		h.Toggle = h.Trigger
+		if h.Toggle == "" {
+			h.Toggle = h.Trigger
+		}
 		return
 	}
-	h.PushToTalk = h.Trigger
+	if h.PushToTalk == "" {
+		h.PushToTalk = h.Trigger
+	}
 }
 
 // Configured reports whether any keyboard binding is set. None is valid: on

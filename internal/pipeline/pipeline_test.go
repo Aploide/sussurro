@@ -10,6 +10,7 @@ import (
 
 	"github.com/aploide/sussurro/internal/audio"
 	ctxProvider "github.com/aploide/sussurro/internal/context"
+	"github.com/aploide/sussurro/internal/session"
 )
 
 const testSampleRate = 16000
