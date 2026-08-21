@@ -74,7 +74,10 @@ const (
 var (
 	interactionModes = []InteractionMode{ModeImmediate, ModeReview}
 	inputBackends    = []InputBackend{InputAuto, InputNative, InputTrigger, InputEvdev}
-	deliveryBackends = []DeliveryBackend{DeliveryAuto, DeliveryClipboardPaste, DeliveryWtype, DeliveryYdotool, DeliveryClipboardOnly}
+	deliveryBackends = []DeliveryBackend{
+		DeliveryAuto, DeliveryClipboardPaste, DeliveryClipboardOnly,
+		DeliveryWtype, DeliveryYdotool,
+	}
 )
 
 // WorkflowConfig holds the opt-in streaming review settings. An absent

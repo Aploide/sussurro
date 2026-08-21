@@ -333,15 +333,6 @@ kbd {
 
 .setting-select,
 .setting-input {
-  /* The longest option — "wtype (Wayland) — wtype is not installed" — is
-     about 40 characters, which no longer fitted once the type scale was
-     raised to 14px. Sized to that rather than to a fixed cap, so an option
-     that explains why it is unavailable is still readable. */
-  min-width: 200px;
-  max-width: 320px;
-  /* The row is flex, so without this the control shrinks to its min-width
-     and crops the option text rather than taking the room it needs. */
-  flex: 0 1 320px;
   height: 30px;
   padding: 0 8px;
   border-radius: 6px;
@@ -350,13 +341,33 @@ kbd {
   color: var(--text);
   font-size: 14px;
   font-family: var(--font);
+  /* Values sit at the right edge, aligned with each other down the column,
+     so the eye reads label-on-the-left, value-on-the-right. */
+  text-align: right;
+}
+
+/* Selects size to their content: the widest option varies with the host,
+   since an unavailable backend carries a reason ("wtype is not installed").
+   Bounded so one long option cannot crowd out the label beside it, and
+   flex-basis auto so the row does not shrink it back and crop the text. */
+.setting-select {
+  width: fit-content;
+  min-width: 160px;
+  max-width: 300px;
+  flex: 0 1 auto;
+}
+
+/* Text inputs take a fixed, shared width. Their content is user-entered and
+   variable, so sizing to it would make the column jitter as you type. */
+.setting-input {
+  width: 200px;
+  flex: 0 0 200px;
 }
 
 .setting-select {
   cursor: pointer;
-  /* Right-aligned: the row's label sits on the left, so the control reads as
-     the value of that label rather than a second column of prose. */
-  text-align: right;
+  /* A select needs RTL for its closed value to right-align; the options
+     themselves are pinned back to LTR below. */
   direction: rtl;
 }
 

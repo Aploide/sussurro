@@ -120,16 +120,19 @@ func deliveryBackendChoices(probe capabilityProbe) []choice {
 	return []choice{
 		{Value: string(config.DeliveryAuto), Label: "Automatic", Available: true},
 		{Value: string(config.DeliveryClipboardPaste), Label: "Clipboard paste", Available: true},
-		toolChoice(config.DeliveryWtype, "wtype (Wayland)", "wtype"),
-		toolChoice(config.DeliveryYdotool, "ydotool", "ydotool"),
-		// Not a way of inserting text but a decision not to, which is why it
-		// belongs in this list: offering it separately produced a dropdown
-		// that did nothing whenever the separate control was set.
+		// Sits with the other clipboard option and ahead of the tool-specific
+		// ones: it is always available, whereas those depend on what the host
+		// has installed. Not a way of inserting text but a decision not to,
+		// which is why it belongs in this list at all — offering it separately
+		// produced a dropdown that did nothing whenever the other control was
+		// set.
 		{
 			Value:     string(config.DeliveryClipboardOnly),
 			Label:     "Copy to clipboard, don't paste",
 			Available: true,
 		},
+		toolChoice(config.DeliveryWtype, "wtype (Wayland)", "wtype"),
+		toolChoice(config.DeliveryYdotool, "ydotool", "ydotool"),
 	}
 }
 
