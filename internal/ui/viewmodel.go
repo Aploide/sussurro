@@ -87,6 +87,8 @@ func compactStatus(state AppState) string {
 		return "Listening"
 	case session.StateTranscribing:
 		return "Transcribing"
+	case session.StateCleaningUp:
+		return "Cleaning up"
 	default:
 		return ""
 	}

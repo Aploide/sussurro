@@ -7,7 +7,13 @@ type State uint8
 const (
 	StateIdle State = iota
 	StateRecording
+	// StateTranscribing covers ASR only. It must not be used for the work
+	// that follows recognition, which is what StateCleaningUp names.
 	StateTranscribing
+	// StateCleaningUp covers everything after recognition: filler removal by
+	// the LLM, context lookup, and delivery. Reusing StateTranscribing here
+	// misreported the reuse path, which runs no ASR at all.
+	StateCleaningUp
 	stateCount
 )
 
@@ -24,6 +30,8 @@ func (state State) String() string {
 		return "recording"
 	case StateTranscribing:
 		return "transcribing"
+	case StateCleaningUp:
+		return "cleaning up"
 	default:
 		return "invalid"
 	}

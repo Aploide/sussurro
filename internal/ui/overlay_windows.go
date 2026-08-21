@@ -71,7 +71,9 @@ func nativeOverlayState(state AppState) (C.int, bool) {
 		return C.OVERLAY_STATE_IDLE, true
 	case StateRecording:
 		return C.OVERLAY_STATE_RECORDING, true
-	case StateTranscribing:
+	case StateTranscribing, StateCleaningUp:
+		// Both are work-in-progress after speech; the shimmer is shared and
+		// the label distinguishes them.
 		return C.OVERLAY_STATE_TRANSCRIBING, true
 	default:
 		return 0, false

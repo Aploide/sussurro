@@ -186,14 +186,15 @@ func (m *Manager) OnStateChange(state AppState) {
 	m.publish(CompactModel(state))
 }
 
-// OnTranscribing implements pipeline.TranscribingNotifier: it keeps the text
-// already on screen while the final pass runs, rather than blanking it.
-func (m *Manager) OnTranscribing(partial string) {
+// OnPhase implements pipeline.TranscribingNotifier: it keeps the text already
+// on screen while post-recording work runs, rather than blanking it, and
+// labels the phase that is actually running.
+func (m *Manager) OnPhase(state session.State, partial string) {
 	m.Present(ViewModel{
-		State:      session.StateTranscribing,
+		State:      state,
 		Transcript: partial,
 		Partial:    true,
-		Status:     "Transcribing",
+		Status:     compactStatus(state),
 		Mode:       ViewExpanded,
 	})
 }

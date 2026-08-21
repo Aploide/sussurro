@@ -227,10 +227,10 @@ func run() {
 			PushToTalk: cfg.Hotkey.PushToTalk,
 			Toggle:     cfg.Hotkey.Toggle,
 			OnPress:    func() { log.Info("Listening..."); input.Dispatch(session.InputPress) },
-			OnRelease:  func() { log.Info("Transcribing..."); input.Dispatch(session.InputRelease) },
+			OnRelease:  func() { log.Info("Recording stopped"); input.Dispatch(session.InputRelease) },
 			OnToggle: func() {
 				if input.Dispatch(session.InputToggle) {
-					log.Info("Transcribing...")
+					log.Info("Recording stopped")
 				} else {
 					log.Info("Listening...")
 				}
@@ -304,7 +304,7 @@ func run() {
 			defer ptt.Unregister()
 			if err := ptt.Register(
 				func() { log.Info("Listening..."); input.Dispatch(session.InputPress) },
-				func() { log.Info("Transcribing..."); input.Dispatch(session.InputRelease) },
+				func() { log.Info("Recording stopped"); input.Dispatch(session.InputRelease) },
 			); err != nil {
 				log.Error("Failed to register the push-to-talk hotkey", "error", err)
 				os.Exit(1)
@@ -327,7 +327,7 @@ func run() {
 
 		onDown := func() {
 			if input.Dispatch(session.InputToggle) {
-				log.Info("Transcribing...")
+				log.Info("Recording stopped")
 			} else {
 				log.Info("Listening...")
 			}

@@ -247,30 +247,48 @@ func TestNewDictationCancelsAPendingHide(t *testing.T) {
 	}
 }
 
-func TestTranscribingKeepsTextOnScreen(t *testing.T) {
-	overlay := &presentingOverlay{}
-	manager := &Manager{
-		stateChangeCh: make(chan ViewModel, 8),
-		overlay:       overlay,
+func TestPhaseKeepsTextOnScreen(t *testing.T) {
+	phases := []struct {
+		state  session.State
+		status string
+	}{
+		{session.StateTranscribing, "Transcribing"},
+		{session.StateCleaningUp, "Cleaning up"},
 	}
 
-	manager.OnTranscribing("the text so far")
+	for _, phase := range phases {
+		t.Run(phase.status, func(t *testing.T) {
+			overlay := &presentingOverlay{}
+			manager := &Manager{
+				stateChangeCh: make(chan ViewModel, 8),
+				overlay:       overlay,
+			}
 
-	select {
-	case model := <-manager.stateChangeCh:
-		// Blanking text the user is reading, only to restore the same words
-		// moments later, reads as the app losing their dictation.
-		if model.Transcript != "the text so far" {
-			t.Errorf("Transcript = %q, want the partial retained", model.Transcript)
-		}
-		if model.State != session.StateTranscribing {
-			t.Errorf("State = %s, want transcribing", model.State)
-		}
-		if !model.Visible() {
-			t.Error("Visible() = false while transcribing with text")
-		}
-	default:
-		t.Fatal("OnTranscribing queued nothing")
+			manager.OnPhase(phase.state, "the text so far")
+
+			select {
+			case model := <-manager.stateChangeCh:
+				// Blanking text the user is reading, only to restore the same
+				// words moments later, reads as the app losing their dictation.
+				if model.Transcript != "the text so far" {
+					t.Errorf("Transcript = %q, want the partial retained", model.Transcript)
+				}
+				if model.State != phase.state {
+					t.Errorf("State = %s, want %s", model.State, phase.state)
+				}
+				// The label must name the work actually running: the reuse
+				// path performs no recognition, so "Transcribing" there is
+				// simply false.
+				if model.Status != phase.status {
+					t.Errorf("Status = %q, want %q", model.Status, phase.status)
+				}
+				if !model.Visible() {
+					t.Errorf("Visible() = false during %s with text", phase.status)
+				}
+			default:
+				t.Fatal("OnPhase queued nothing")
+			}
+		})
 	}
 }
 

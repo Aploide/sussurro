@@ -387,14 +387,18 @@ func TestStopTranscribesNormallyWithoutAStreamer(t *testing.T) {
 // the optional text-carrying ones.
 type finishNotifier struct {
 	states   []session.State
+	phases   []session.State
 	finished []string
 	partials []string
 }
 
 func (n *finishNotifier) OnStateChange(state session.State) { n.states = append(n.states, state) }
 func (n *finishNotifier) OnRMSData(float32)                 {}
-func (n *finishNotifier) OnTranscribing(partial string)     { n.partials = append(n.partials, partial) }
-func (n *finishNotifier) OnFinished(text string)            { n.finished = append(n.finished, text) }
+func (n *finishNotifier) OnPhase(state session.State, partial string) {
+	n.phases = append(n.phases, state)
+	n.partials = append(n.partials, partial)
+}
+func (n *finishNotifier) OnFinished(text string) { n.finished = append(n.finished, text) }
 
 func TestCompletionCarriesTheFinalText(t *testing.T) {
 	asr := &stubTranscriber{text: "the quick brown fox"}
@@ -433,5 +437,50 @@ func TestCompletionWithNoResultCarriesNoText(t *testing.T) {
 	if len(notifier.finished) != 0 {
 		t.Errorf("OnFinished called with %q for a rejected result, want no text",
 			notifier.finished)
+	}
+}
+
+// TestReusePathNeverReportsTranscribing covers the case that prompted
+// sussurro-xvj.34: when the streaming partial is reused, no ASR runs at all,
+// so telling the user "Transcribing" describes work that is not happening.
+func TestReusePathNeverReportsTranscribing(t *testing.T) {
+	asr := &stubTranscriber{text: "unused by the reuse path"}
+	llm := &stubCleaner{text: "The quick brown fox."}
+	notifier := &finishNotifier{}
+
+	p := newTestPipeline(t, asr, llm, stubContext{info: &ctxProvider.ContextInfo{}})
+	p.SetResultConsumer(&recordingConsumer{})
+	p.uiNotifier = notifier
+
+	p.wg.Add(1)
+	p.completeFromPartial("the quick brown fox")
+	p.notifyPhase(session.StateCleaningUp, "the quick brown fox")
+
+	for _, state := range notifier.phases {
+		if state == session.StateTranscribing {
+			t.Error("reuse path reported StateTranscribing; no ASR runs on this path")
+		}
+	}
+}
+
+// TestFinalPassMovesFromTranscribingToCleaningUp checks the phases are
+// reported in order, so the label stops saying "Transcribing" once
+// recognition has finished and only cleanup remains.
+func TestFinalPassMovesFromTranscribingToCleaningUp(t *testing.T) {
+	asr := &stubTranscriber{text: "the quick brown fox"}
+	llm := &stubCleaner{text: "The quick brown fox."}
+	notifier := &finishNotifier{}
+
+	p := newTestPipeline(t, asr, llm, stubContext{info: &ctxProvider.ContextInfo{}})
+	p.SetResultConsumer(&recordingConsumer{})
+	p.uiNotifier = notifier
+
+	run(p, samplesFor(3))
+
+	if len(notifier.phases) != 1 {
+		t.Fatalf("phases = %v, want exactly the post-ASR transition", notifier.phases)
+	}
+	if notifier.phases[0] != session.StateCleaningUp {
+		t.Errorf("phase after ASR = %s, want cleaning up", notifier.phases[0])
 	}
 }

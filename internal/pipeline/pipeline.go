@@ -255,10 +255,6 @@ func (p *Pipeline) StopRecording() bool {
 	bufferCopy := make([]float32, len(p.audioBuffer))
 	copy(bufferCopy, p.audioBuffer)
 
-	// Notify after taking the partial, so the transcribing state can carry the
-	// text already on screen rather than blanking it.
-	p.notifyTranscribing(partial)
-
 	// Audio keeps arriving while a partial is running, so a completed partial
 	// has essentially never seen the whole buffer — measured 59200 samples
 	// against 80400, a 1.3s gap. Requiring full coverage therefore never
@@ -268,6 +264,9 @@ func (p *Pipeline) StopRecording() bool {
 		p.log.Debug("Reusing partial transcription",
 			"partial_samples", partialSamples, "buffer_samples", len(bufferCopy),
 			"text", partial)
+		// No ASR runs on this path, so announcing transcription would be a
+		// plain falsehood: the only remaining work is cleanup and delivery.
+		p.notifyPhase(session.StateCleaningUp, partial)
 		p.wg.Add(1)
 		go p.completeFromPartial(partial)
 		return true
@@ -275,31 +274,43 @@ func (p *Pipeline) StopRecording() bool {
 
 	p.log.Debug("Final pass needed",
 		"partial_samples", partialSamples, "buffer_samples", len(bufferCopy))
+	// Announce after taking the partial, so the state carries the text
+	// already on screen rather than blanking it.
+	p.notifyPhase(session.StateTranscribing, partial)
 	p.wg.Add(1)
 	go p.processSegment(bufferCopy)
 	return true
 }
 
-// notifyTranscribing announces the final pass, carrying the last partial so
+// notifyPhase announces a post-recording phase, carrying the last partial so
 // the overlay keeps showing it. Blanking the text the user is reading, only
 // to replace it moments later with the same words, reads as the app losing
 // their dictation.
-func (p *Pipeline) notifyTranscribing(partial string) {
+//
+// The phase is passed in rather than assumed: the reuse path performs no
+// recognition, so reporting StateTranscribing there would describe work that
+// is not happening.
+func (p *Pipeline) notifyPhase(state session.State, partial string) {
+	// Logged here rather than at the key handler, which fires before any work
+	// is dispatched and so cannot know which phase actually follows.
+	p.log.Info(phaseMessage(state))
+
 	if p.uiNotifier == nil {
 		return
 	}
 	if holder, ok := p.uiNotifier.(TranscribingNotifier); ok && partial != "" {
-		holder.OnTranscribing(partial)
+		holder.OnPhase(state, partial)
 		return
 	}
-	p.uiNotifier.OnStateChange(session.StateTranscribing)
+	p.uiNotifier.OnStateChange(state)
 }
 
 // TranscribingNotifier is the optional extension a notifier implements to
 // keep transcript text visible across the states that carry it.
 type TranscribingNotifier interface {
-	// OnTranscribing keeps provisional text visible while the final pass runs.
-	OnTranscribing(partial string)
+	// OnPhase keeps provisional text visible during a post-recording phase,
+	// naming the phase so the UI can describe it accurately.
+	OnPhase(state session.State, partial string)
 	// OnFinished hands over the completed text so the UI can display it
 	// before it stops showing anything. Without this the overlay only ever
 	// learns that the session ended, never what it produced.
@@ -440,6 +451,10 @@ func (p *Pipeline) processSegment(samples []float32) {
 		return
 	}
 
+	// Recognition is done; what follows is cleanup and delivery. Announce the
+	// change so the overlay stops claiming to transcribe.
+	p.notifyPhase(session.StateCleaningUp, text)
+
 	p.finishSegment(text, start)
 }
 
@@ -467,9 +482,6 @@ func (p *Pipeline) completeFromPartial(text string) {
 
 // finishSegment turns a recognised transcription into a published result.
 func (p *Pipeline) finishSegment(text string, start time.Time) {
-	// Recorded so the completion notifier can show what was produced rather
-	// than only that the session ended.
-	defer func() { p.setFinalText(text) }()
 
 	// Check word count
 	// If detected less than 4 words, avoid transcribing completely (treat as false positive)
@@ -544,7 +556,14 @@ func (p *Pipeline) finishSegment(text string, start time.Time) {
 }
 
 // publish hands a completed result to the installed consumer (nil-safe).
+//
+// The delivered text is recorded here, rather than on entry to finishSegment,
+// for two reasons: it is the cleaned text the user actually receives, not the
+// raw ASR output, and a segment rejected as too short or empty returns before
+// reaching this point, so it correctly records nothing.
 func (p *Pipeline) publish(result Result) {
+	p.setFinalText(result.Text)
+
 	consumer := p.resultConsumer
 	if consumer == nil {
 		p.log.Debug("No result consumer installed, discarding result")
@@ -568,4 +587,16 @@ func (p *Pipeline) takeFinalText() string {
 	text := p.finalText
 	p.finalText = ""
 	return text
+}
+
+// phaseMessage is the console wording for a post-recording phase.
+func phaseMessage(state session.State) string {
+	switch state {
+	case session.StateTranscribing:
+		return "Transcribing..."
+	case session.StateCleaningUp:
+		return "Cleaning up..."
+	default:
+		return state.String()
+	}
 }

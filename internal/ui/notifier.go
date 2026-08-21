@@ -9,4 +9,5 @@ const (
 	StateIdle         = session.StateIdle         // 7 animated dots
 	StateRecording    = session.StateRecording    // waveform bars
 	StateTranscribing = session.StateTranscribing // shimmer text
+	StateCleaningUp   = session.StateCleaningUp   // shimmer text, post-ASR
 )
