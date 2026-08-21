@@ -42,6 +42,15 @@ static void setup_settings_hide_on_close(void *win) {
 // Only the second needs correcting here; the first is already handled. It is
 // returned separately so the caller can divide it back out.
 static double window_scale(void) {
+    // gtk_settings_get_default() returns NULL until GTK is initialised, and
+    // silently yields the 1.0 fallback below - which sizes the window in CSS
+    // pixels and undoes the whole correction. Initialising here is safe:
+    // gtk_init_check is idempotent, and webview has usually initialised GTK
+    // already by the time a window is being sized.
+    if (!gtk_init_check(NULL, NULL)) {
+        return 1.0;
+    }
+
     GtkSettings *settings = gtk_settings_get_default();
     if (!settings) {
         return 1.0;

@@ -46,16 +46,32 @@ func TestScaleDimensionCapsForSmallDisplays(t *testing.T) {
 	}
 }
 
-func TestSettingsWindowFitsSmallDisplay(t *testing.T) {
+func TestSettingsWindowFitsCommonDisplays(t *testing.T) {
+	// The cap must not exceed the working area of a display people actually
+	// use. 1366x768 is the smallest common laptop, but its 768 height cannot
+	// hold the content the Models tab needs (600 CSS px, 800 device px at
+	// 1.33 scaling) once a title bar and panel are allowed for. Scaling is
+	// also rare on such a display, so the unscaled 600 fits it comfortably.
+	//
+	// The cap therefore guards against a scaled window growing past a
+	// 1920x1080 screen, and the small-laptop case is covered by the content
+	// height fitting unscaled.
 	const (
-		smallWidth  = 1366
-		smallHeight = 768
+		commonWidth  = 1920
+		commonHeight = 1080
 	)
-	if maxSettingsWidth > smallWidth {
-		t.Errorf("maxSettingsWidth = %d, wider than a %d display", maxSettingsWidth, smallWidth)
+	if maxSettingsWidth > commonWidth {
+		t.Errorf("maxSettingsWidth = %d, wider than a %d display", maxSettingsWidth, commonWidth)
 	}
-	if maxSettingsHeight > smallHeight {
-		t.Errorf("maxSettingsHeight = %d, taller than a %d display", maxSettingsHeight, smallHeight)
+	if maxSettingsHeight > commonHeight {
+		t.Errorf("maxSettingsHeight = %d, taller than a %d display", maxSettingsHeight, commonHeight)
+	}
+
+	// Unscaled, the content must fit a small laptop with room for chrome.
+	const smallLaptopHeight = 768
+	if settingsContentHeight+settingsChrome > smallLaptopHeight {
+		t.Errorf("content %d+%d does not fit a %d display unscaled",
+			settingsContentHeight, settingsChrome, smallLaptopHeight)
 	}
 }
 

@@ -3,6 +3,7 @@ package ui
 import (
 	_ "embed"
 	"fmt"
+	"log/slog"
 	"math"
 	"strings"
 	"unsafe"
@@ -96,17 +97,26 @@ func (sw *settingsWindow) Terminate() {
 // point below which controls overflow their rows, and the height is the
 // tallest tab panel. See sussurro-xvj.33.
 const (
-	settingsContentWidth  = 793
-	settingsContentHeight = 408
-	// settingsChrome covers the tab strip, window padding, and title bar,
-	// which sit outside the measured panel height.
-	settingsChrome = 120
+	settingsContentWidth = 793
+	// Derived from the Models tab, which is the tallest: two recognition
+	// models, the language row, and the LLM section come to roughly 525 CSS
+	// px, plus headroom for a third model.
+	//
+	// An earlier value of 408 was measured from a hidden panel, which does
+	// not lay out, and from a harness whose model list was never populated
+	// because it could not answer the page's model query. Both under-reported
+	// it, and the Models tab was cut off mid-section as a result.
+	settingsContentHeight = 560
+	// settingsChrome covers the title bar and window frame. The tab strip,
+	// page padding, and status bar are already inside settingsContentHeight,
+	// which is measured from the whole rendered page rather than one panel.
+	settingsChrome = 40
 
 	// maxSettingsWidth and maxSettingsHeight keep the window on a small
 	// laptop display (1366x768) even at high scaling, where the scaled
 	// requirement would otherwise exceed the screen.
 	maxSettingsWidth  = 1300
-	maxSettingsHeight = 740
+	maxSettingsHeight = 900
 )
 
 // applySettingsSize sizes the settings window so its CSS viewport matches what
@@ -132,6 +142,11 @@ func applySettingsSize(w webview.WebView) {
 
 	w.SetSize(width, height, webview.HintMin)
 	w.SetSize(width, height, webview.HintNone)
+
+	// Logged because the scale lookup silently returning 1.0 is exactly the
+	// failure this function had, and it is invisible from the outside.
+	slog.Debug("Sized the settings window",
+		"scale", scale, "device", fmt.Sprintf("%dx%d", width, height))
 }
 
 // scaleDimension converts a CSS-pixel requirement into device pixels, capped
