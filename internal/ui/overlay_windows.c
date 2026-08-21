@@ -126,7 +126,10 @@ static void draw_recording_bars(OverlayData *od)
 
 static void draw_transcribing_text(OverlayData *od)
 {
-    static const WCHAR text[] = L"transcribing";
+    /* Cleanup shares this shimmer but not its label: no recognition runs
+     * during it, and on the partial-reuse path none ran at all. */
+    const WCHAR *text = (od->state == OVERLAY_STATE_CLEANING_UP)
+        ? L"cleaning up" : L"transcribing";
 
     GpFontFamily *family = NULL;
     if (GdipCreateFontFamilyFromName(L"Segoe UI", NULL, &family) != Ok || !family)
@@ -203,7 +206,8 @@ static void render_frame(OverlayData *od)
     switch (od->state) {
     case OVERLAY_STATE_IDLE:         draw_idle_dots(od);         break;
     case OVERLAY_STATE_RECORDING:    draw_recording_bars(od);    break;
-    case OVERLAY_STATE_TRANSCRIBING: draw_transcribing_text(od); break;
+    case OVERLAY_STATE_TRANSCRIBING:
+    case OVERLAY_STATE_CLEANING_UP:  draw_transcribing_text(od); break;
     }
 
     GdipFlush(od->gfx, FlushIntentionSync);

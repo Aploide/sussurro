@@ -165,7 +165,8 @@ static CVReturn displayLinkCallback(CVDisplayLinkRef link,
     switch (state) {
     case OVERLAY_STATE_IDLE:   [self drawDots:ctx w:w h:h]; break;
     case OVERLAY_STATE_RECORDING:  [self drawBars:ctx w:w h:h]; break;
-    case OVERLAY_STATE_TRANSCRIBING: [self drawShimmer:ctx w:w h:h]; break;
+    case OVERLAY_STATE_TRANSCRIBING:
+    case OVERLAY_STATE_CLEANING_UP:  [self drawShimmer:ctx w:w h:h]; break;
     }
 }
 
@@ -218,7 +219,10 @@ static CVReturn displayLinkCallback(CVDisplayLinkRef link,
                                                weight:NSFontWeightMedium],
         NSForegroundColorAttributeName: [NSColor whiteColor]
     };
-    NSString *text = @"transcribing";
+    /* Cleanup shares this shimmer but not its label: no recognition runs
+       during it, and on the partial-reuse path none ran at all. */
+    NSString *text = (state == OVERLAY_STATE_CLEANING_UP)
+        ? @"cleaning up" : @"transcribing";
     NSSize sz  = [text sizeWithAttributes:attrs];
     NSPoint pt = NSMakePoint(floor((w - sz.width)  / 2.0),
                              floor((h - sz.height) / 2.0));

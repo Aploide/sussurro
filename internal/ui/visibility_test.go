@@ -456,3 +456,22 @@ func TestCompletionStatusWithoutConfigDoesNotPanic(t *testing.T) {
 		t.Errorf("completionStatus() = %q with no config, want %q", got, "Done")
 	}
 }
+
+// TestCleaningUpGetsItsOwnNativeState covers the gap that reopened
+// sussurro-xvj.34: the native overlays draw their own label from the state
+// they are given, so folding cleanup into the transcribing state made the
+// capsule read "transcribing" during work where no recognition runs.
+func TestCleaningUpGetsItsOwnNativeState(t *testing.T) {
+	transcribing, ok := nativeOverlayState(session.StateTranscribing)
+	if !ok {
+		t.Fatal("transcribing has no native state")
+	}
+	cleaning, ok := nativeOverlayState(session.StateCleaningUp)
+	if !ok {
+		t.Fatal("cleaning up has no native state")
+	}
+	if transcribing == cleaning {
+		t.Error("cleaning up shares the transcribing native state; the capsule " +
+			"would draw the transcribing label during cleanup")
+	}
+}

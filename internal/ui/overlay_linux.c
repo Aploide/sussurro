@@ -131,17 +131,27 @@ static void draw_recording_bars(cairo_t *cr, OverlayData *od)
     }
 }
 
+/* The capsule's label for a working state. Kept beside the enum it switches
+ * on so a new state cannot silently inherit the wrong word, which is how
+ * cleanup came to be labelled "transcribing". */
+static const char *working_label(int state)
+{
+    return state == OVERLAY_STATE_CLEANING_UP ? "cleaning up" : "transcribing";
+}
+
 static void draw_transcribing_text(cairo_t *cr, OverlayData *od)
 {
     /* Plain white text with animated shimmer gradient */
     double cx = OVERLAY_WIDTH  / 2.0;
     double cy = OVERLAY_HEIGHT / 2.0;
 
+    const char *label = working_label(od->state);
+
     cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
     cairo_set_font_size(cr, 14.0);
 
     cairo_text_extents_t ext;
-    cairo_text_extents(cr, "transcribing", &ext);
+    cairo_text_extents(cr, label, &ext);
 
     double tx = cx - ext.width / 2.0 - ext.x_bearing;
     double ty = cy - ext.height / 2.0 - ext.y_bearing;
@@ -149,7 +159,7 @@ static void draw_transcribing_text(cairo_t *cr, OverlayData *od)
     /* Base white text */
     cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.7);
     cairo_move_to(cr, tx, ty);
-    cairo_show_text(cr, "transcribing");
+    cairo_show_text(cr, label);
 
     /* Shimmer: a white highlight sweeping left→right over 1.5 s */
     double phase   = fmod(od->shimmer_phase, 1.5) / 1.5; /* 0→1 */
@@ -167,7 +177,7 @@ static void draw_transcribing_text(cairo_t *cr, OverlayData *od)
 
     cairo_set_source(cr, pat);
     cairo_move_to(cr, tx, ty);
-    cairo_show_text(cr, "transcribing");
+    cairo_show_text(cr, label);
     cairo_pattern_destroy(pat);
     cairo_reset_clip(cr);
 }
@@ -330,6 +340,7 @@ static gboolean on_draw(GtkWidget *widget, cairo_t *cr, gpointer data)
         draw_recording_bars(cr, od);
         break;
     case OVERLAY_STATE_TRANSCRIBING:
+    case OVERLAY_STATE_CLEANING_UP:
         draw_transcribing_text(cr, od);
         break;
     }
