@@ -59,6 +59,8 @@ const (
 	DefaultStreamingInterval = "750ms"
 	DefaultInputBackend      = InputAuto
 	DefaultDeliveryBackend   = DeliveryAuto
+	// Pasting automatically is the existing behavior, so it stays the default.
+	DefaultClipboardOnly = false
 
 	// minStreamingInterval bounds partial transcription so it cannot starve
 	// the final transcription of CPU on modest hardware.
@@ -106,6 +108,10 @@ type InputConfig struct {
 // DeliveryConfig selects the text insertion backend.
 type DeliveryConfig struct {
 	Backend DeliveryBackend `mapstructure:"backend"`
+	// ClipboardOnly stages the text on the clipboard without pressing paste,
+	// leaving the user to place it themselves. Orthogonal to Backend, which
+	// says how to insert rather than whether to.
+	ClipboardOnly bool `mapstructure:"clipboard_only"`
 }
 
 // ReviewEnabled reports whether results should be held for explicit delivery.
@@ -200,14 +206,15 @@ func enumError[T ~string](key, value string, allowed []T) error {
 // variable. Explicit binding is required because viper's AutomaticEnv does not
 // expose keys to Unmarshal unless they exist in the config file.
 var workflowEnvKeys = map[string]string{
-	"workflow.mode":               "SUSSURRO_WORKFLOW_MODE",
-	"workflow.streaming.enabled":  "SUSSURRO_WORKFLOW_STREAMING_ENABLED",
-	"workflow.streaming.interval": "SUSSURRO_WORKFLOW_STREAMING_INTERVAL",
-	"workflow.input.backend":      "SUSSURRO_WORKFLOW_INPUT_BACKEND",
-	"workflow.input.device":       "SUSSURRO_WORKFLOW_INPUT_DEVICE",
-	"workflow.input.chord":        "SUSSURRO_WORKFLOW_INPUT_CHORD",
-	"workflow.input.cancel_chord": "SUSSURRO_WORKFLOW_INPUT_CANCEL_CHORD",
-	"workflow.delivery.backend":   "SUSSURRO_WORKFLOW_DELIVERY_BACKEND",
+	"workflow.mode":                    "SUSSURRO_WORKFLOW_MODE",
+	"workflow.streaming.enabled":       "SUSSURRO_WORKFLOW_STREAMING_ENABLED",
+	"workflow.streaming.interval":      "SUSSURRO_WORKFLOW_STREAMING_INTERVAL",
+	"workflow.input.backend":           "SUSSURRO_WORKFLOW_INPUT_BACKEND",
+	"workflow.input.device":            "SUSSURRO_WORKFLOW_INPUT_DEVICE",
+	"workflow.input.chord":             "SUSSURRO_WORKFLOW_INPUT_CHORD",
+	"workflow.input.cancel_chord":      "SUSSURRO_WORKFLOW_INPUT_CANCEL_CHORD",
+	"workflow.delivery.backend":        "SUSSURRO_WORKFLOW_DELIVERY_BACKEND",
+	"workflow.delivery.clipboard_only": "SUSSURRO_WORKFLOW_DELIVERY_CLIPBOARD_ONLY",
 }
 
 // setWorkflowDefaults registers the backward-compatible workflow defaults.
@@ -217,6 +224,7 @@ func setWorkflowDefaults(v *viper.Viper) {
 	v.SetDefault("workflow.streaming.interval", DefaultStreamingInterval)
 	v.SetDefault("workflow.input.backend", string(DefaultInputBackend))
 	v.SetDefault("workflow.delivery.backend", string(DefaultDeliveryBackend))
+	v.SetDefault("workflow.delivery.clipboard_only", DefaultClipboardOnly)
 }
 
 // bindWorkflowEnv binds every workflow key to its environment variable.

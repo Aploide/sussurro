@@ -104,3 +104,37 @@ func available(look lookPath, tool string) bool {
 	_, err := look(tool)
 	return err == nil
 }
+
+// clipboardOnlyBackend stages text without inserting it, leaving the user to
+// paste where they want it. Wrapping the selected backend rather than
+// replacing it keeps the clipboard-writing behavior of whichever backend was
+// configured, and keeps "how to insert" separate from "whether to".
+type clipboardOnlyBackend struct {
+	write ClipboardWriter
+	name  string
+}
+
+// NewClipboardOnlyBackend builds a backend that only ever stages text.
+func NewClipboardOnlyBackend(write ClipboardWriter, name string) Backend {
+	return &clipboardOnlyBackend{write: write, name: name}
+}
+
+// Name implements Backend.
+func (b *clipboardOnlyBackend) Name() string { return b.name + " (clipboard only)" }
+
+// Type stages the text and stops there.
+func (b *clipboardOnlyBackend) Type(text string) error {
+	if b.write == nil {
+		return fmt.Errorf("no clipboard available")
+	}
+	if err := b.write(text); err != nil {
+		return fmt.Errorf("staging clipboard: %w", err)
+	}
+	return nil
+}
+
+// Submit is refused: sending Enter without having inserted anything would
+// press it in whatever window happens to be focused.
+func (b *clipboardOnlyBackend) Submit() error {
+	return fmt.Errorf("%s cannot submit: nothing was inserted", b.Name())
+}

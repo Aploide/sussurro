@@ -386,3 +386,39 @@ func readShippedDefaults(t *testing.T) string {
 	}
 	return string(body)
 }
+
+func TestClipboardOnlyDefaultsToPasting(t *testing.T) {
+	cfg, err := loadTestConfig(t, legacyConfig)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	// Auto-paste is the existing behaviour and must stay the default.
+	if cfg.Workflow.Delivery.ClipboardOnly {
+		t.Error("ClipboardOnly = true by default, want false")
+	}
+}
+
+func TestClipboardOnlyLoadsFromConfig(t *testing.T) {
+	cfg, err := loadTestConfig(t, legacyConfig+`workflow:
+  delivery:
+    clipboard_only: true
+`)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if !cfg.Workflow.Delivery.ClipboardOnly {
+		t.Error("ClipboardOnly = false, want true")
+	}
+}
+
+func TestClipboardOnlyFromEnvironment(t *testing.T) {
+	t.Setenv("SUSSURRO_WORKFLOW_DELIVERY_CLIPBOARD_ONLY", "true")
+
+	cfg, err := loadTestConfig(t, legacyConfig)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if !cfg.Workflow.Delivery.ClipboardOnly {
+		t.Error("ClipboardOnly = false, want true from the environment")
+	}
+}

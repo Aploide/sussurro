@@ -69,3 +69,6 @@ workflow:
   delivery:
     # auto, clipboard-paste, wtype (Wayland), or ydotool (uinput daemon).
     backend: "auto"
+    # Copy the text without pasting it, leaving you to place it yourself.
+    # Useful when the focused window is not where the text should go.
+    clipboard_only: false

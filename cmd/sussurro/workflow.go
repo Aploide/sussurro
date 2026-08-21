@@ -40,6 +40,12 @@ func buildWorkflow(
 	log *slog.Logger,
 ) workflow {
 	if !cfg.Workflow.ReviewEnabled() {
+		// Clipboard-only means the paste keystroke is skipped; the text is
+		// still staged and echoed exactly as before.
+		if cfg.Workflow.Delivery.ClipboardOnly {
+			injector = nil
+			log.Info("Delivery is clipboard-only; text will not be pasted automatically")
+		}
 		installImmediateDelivery(pipe, injector, log)
 		return workflow{dispatch: session.NewImmediateDispatcher(pipe)}
 	}
@@ -108,8 +114,19 @@ func selectDeliveryBackend(cfg *config.Config, injector delivery.Injector, log *
 		clipboardBackend = delivery.NewClipboardBackend(clipboard.Write, injector, nil)
 	}
 
-	return delivery.SelectBackend(
+	backend, err := delivery.SelectBackend(
 		delivery.BackendName(cfg.Workflow.Delivery.Backend),
 		delivery.Capabilities{Clipboard: clipboardBackend},
 	)
+	if err != nil {
+		return nil, err
+	}
+
+	// Clipboard-only wraps whatever backend was selected, so the choice of
+	// how to insert is preserved even though nothing is inserted.
+	if cfg.Workflow.Delivery.ClipboardOnly {
+		log.Info("Delivery is clipboard-only; text will not be pasted automatically")
+		return delivery.NewClipboardOnlyBackend(clipboard.Write, backend.Name()), nil
+	}
+	return backend, nil
 }

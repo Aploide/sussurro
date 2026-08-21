@@ -271,6 +271,7 @@ function renderWorkflow(workflow) {
   const interval       = document.getElementById('workflow-streaming-interval');
   const deliverySelect = document.getElementById('workflow-delivery-backend');
   const inputSelect    = document.getElementById('workflow-input-backend');
+  const clipboardOnly  = document.getElementById('workflow-clipboard-only');
   const device         = document.getElementById('workflow-input-device');
   const chord          = document.getElementById('workflow-input-chord');
   const cancelChord    = document.getElementById('workflow-input-cancel-chord');
@@ -315,6 +316,14 @@ function renderWorkflow(workflow) {
     streaming.onchange = async () => {
       await saveWorkflow('workflow.streaming.enabled', streaming.checked,
         () => { streaming.checked = !streaming.checked; });
+    };
+  }
+
+  if (clipboardOnly) {
+    clipboardOnly.checked = !!workflow.clipboardOnly;
+    clipboardOnly.onchange = async () => {
+      await saveWorkflow('workflow.delivery.clipboard_only', clipboardOnly.checked,
+        () => { clipboardOnly.checked = !clipboardOnly.checked; });
     };
   }
 

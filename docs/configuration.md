@@ -166,7 +166,8 @@ workflow:
     chord: ""             # evdev only
     cancel_chord: ""      # evdev only
   delivery:
-    backend: "auto"       # auto, clipboard-paste, wtype, ydotool
+    backend: "auto"        # auto, clipboard-paste, wtype, ydotool
+    clipboard_only: false  # copy without pasting
 ```
 
 Every default reproduces the original dictation behaviour, so **omitting this
@@ -235,6 +236,12 @@ These three keys apply to `evdev` only; other backends ignore them.
 Naming a backend whose tool is not installed is an error rather than a silent
 downgrade, so a misconfigured host is diagnosable. `auto` never fails this way.
 
+**`clipboard_only`** copies the text without pasting it, leaving you to place
+it yourself. `backend` still decides *how* text would be inserted; this
+decides *whether* to insert it at all. Useful when the focused window is not
+where the text belongs, or when you want to look before committing. Off by
+default, so dictation pastes as it always has.
+
 Delivery waits for the trigger keys to be released before typing, so text is
 not turned into keyboard shortcuts by a modifier that is still held. It inserts
 the text exactly, adding no trailing space, and refuses to deliver empty text
@@ -266,6 +273,7 @@ The review workflow keys follow the same rule:
 | `SUSSURRO_WORKFLOW_INPUT_CHORD` | `workflow.input.chord` |
 | `SUSSURRO_WORKFLOW_INPUT_CANCEL_CHORD` | `workflow.input.cancel_chord` |
 | `SUSSURRO_WORKFLOW_DELIVERY_BACKEND` | `workflow.delivery.backend` |
+| `SUSSURRO_WORKFLOW_DELIVERY_CLIPBOARD_ONLY` | `workflow.delivery.clipboard_only` |
 
 ```bash
 SUSSURRO_WORKFLOW_MODE=review ./sussurro   # try review mode without editing the config

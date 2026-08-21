@@ -473,3 +473,72 @@ func equalArgs(got, want []string) bool {
 	}
 	return true
 }
+
+func TestClipboardOnlyStagesWithoutPasting(t *testing.T) {
+	var staged []string
+	backend := NewClipboardOnlyBackend(func(text string) error {
+		staged = append(staged, text)
+		return nil
+	}, "clipboard-paste")
+
+	if err := backend.Type("the dictated text"); err != nil {
+		t.Fatalf("Type() error = %v", err)
+	}
+	if len(staged) != 1 || staged[0] != "the dictated text" {
+		t.Errorf("staged %v, want one %q", staged, "the dictated text")
+	}
+}
+
+func TestClipboardOnlyRefusesToSubmit(t *testing.T) {
+	backend := NewClipboardOnlyBackend(func(string) error { return nil }, "clipboard-paste")
+
+	// Enter without an insert would land in whatever window has focus.
+	if err := backend.Submit(); err == nil {
+		t.Fatal("Submit() error = nil, want a refusal")
+	}
+}
+
+func TestClipboardOnlyReportsStagingFailure(t *testing.T) {
+	backend := NewClipboardOnlyBackend(func(string) error {
+		return errors.New("no clipboard owner")
+	}, "clipboard-paste")
+
+	if err := backend.Type("text"); err == nil {
+		t.Fatal("Type() error = nil, want the staging failure")
+	}
+}
+
+func TestClipboardOnlyNamesTheWrappedBackend(t *testing.T) {
+	backend := NewClipboardOnlyBackend(func(string) error { return nil }, "wtype")
+
+	// The chosen backend still shows in diagnostics, since it is what would
+	// have been used had pasting been enabled.
+	if !strings.Contains(backend.Name(), "wtype") {
+		t.Errorf("Name() = %q, want it to name the wrapped backend", backend.Name())
+	}
+	if !strings.Contains(backend.Name(), "clipboard only") {
+		t.Errorf("Name() = %q, want it to say clipboard only", backend.Name())
+	}
+}
+
+func TestClipboardOnlyDeliversThroughTheDeliverer(t *testing.T) {
+	var staged []string
+	backend := NewClipboardOnlyBackend(func(text string) error {
+		staged = append(staged, text)
+		return nil
+	}, "clipboard-paste")
+
+	d := NewDeliverer(backend, ReleaseWaiterFunc(func() {}))
+	if err := d.Do(ActionDeliver, "text"); err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	if len(staged) != 1 {
+		t.Errorf("staged %d times, want 1", len(staged))
+	}
+
+	// DeliverAndSubmit cannot work without an insert, and must say so rather
+	// than silently sending Enter.
+	if err := d.Do(ActionDeliverAndSubmit, "text"); err == nil {
+		t.Fatal("Do(submit) error = nil, want a refusal")
+	}
+}

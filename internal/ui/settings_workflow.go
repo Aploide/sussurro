@@ -34,6 +34,7 @@ type workflowSettings struct {
 	InputCancelChord  string   `json:"inputCancelChord"`
 	DeliveryBackend   string   `json:"deliveryBackend"`
 	DeliveryBackends  []choice `json:"deliveryBackends"`
+	ClipboardOnly     bool     `json:"clipboardOnly"`
 	// VoiceEditing reports whether review mode's voice editing is reachable.
 	// It has no separate switch: it is available exactly when review mode is.
 	VoiceEditing bool `json:"voiceEditing"`
@@ -67,6 +68,7 @@ func buildWorkflowSettings(cfg *config.Config, probe capabilityProbe) workflowSe
 		InputCancelChord:  workflow.Input.CancelChord,
 		DeliveryBackend:   string(workflow.Delivery.Backend),
 		DeliveryBackends:  deliveryBackendChoices(probe),
+		ClipboardOnly:     workflow.Delivery.ClipboardOnly,
 		VoiceEditing:      workflow.ReviewEnabled(),
 	}
 }
@@ -174,6 +176,8 @@ func applyWorkflowField(workflow *config.WorkflowConfig, key, value string) erro
 		workflow.Input.CancelChord = value
 	case "workflow.delivery.backend":
 		workflow.Delivery.Backend = config.DeliveryBackend(value)
+	case "workflow.delivery.clipboard_only":
+		workflow.Delivery.ClipboardOnly = value == "true"
 	default:
 		return fmt.Errorf("unknown setting %q", key)
 	}
@@ -183,7 +187,7 @@ func applyWorkflowField(workflow *config.WorkflowConfig, key, value string) erro
 // yamlScalar renders a value for the config file, quoting everything except
 // the one boolean setting.
 func yamlScalar(key, value string) string {
-	if key == "workflow.streaming.enabled" {
+	if key == "workflow.streaming.enabled" || key == "workflow.delivery.clipboard_only" {
 		return config.YAMLBool(value == "true")
 	}
 	return config.YAMLString(value)
