@@ -20,12 +20,9 @@
 #endif
 
 /* ---- Geometry ---- */
-#define OVERLAY_WIDTH    220
-#define OVERLAY_HEIGHT    52
-
-/* Transcript panel geometry. Live text needs room to wrap, so the window
-   widens and grows downward while text is showing, then returns to the
-   capsule when it is cleared. */
+/* One overlay in every state, not a capsule that swaps for a panel. The window
+   keeps a constant width and a bottom edge that does not move; text grows the
+   height upwards from the resting size and shrinks it back as text clears. */
 #define PANEL_WIDTH      860
 #define PANEL_PAD_X       22
 #define PANEL_PAD_Y       18
@@ -55,12 +52,24 @@
 #define BAR_MAX_HEIGHT 40.0
 #define RMS_SCALE       0.08
 
+/* ---- Bottom control row ---- */
+/* Waveform and buffer-fill share one row anchored to the overlay's bottom
+ * edge, which is the only position that stays put as text grows upwards
+ * (sussurro-xvj.48). Both are permanent: anything drawn only on the pill
+ * vanished the moment text arrived, which is what made the buffer-fill
+ * indicator useless during the long dictations it exists to warn about.
+ *
+ * The gauge takes the larger share because it is what carries information over
+ * a long dictation; the waveform only has to show that capture is live. */
+#define ROW_WAVEFORM_FRACTION 0.10
+#define ROW_GAP               14.0
+#define ROW_HEIGHT            44.0
+/* The overlay's resting height: the control row plus its padding, with no text.
+   Text grows the panel upwards from here. */
+#define OVERLAY_REST_HEIGHT   (int)(ROW_HEIGHT + 2 * PANEL_PAD_Y)
+
 /* ---- Recording buffer fill indicator ---- */
-/* A thin track inset from the capsule's bottom edge. It is always drawn while
- * recording, so an approaching cap is never a surprise. */
-#define FILL_TRACK_INSET_X  18.0
-#define FILL_TRACK_INSET_Y   7.0
-#define FILL_TRACK_HEIGHT    2.5
+#define FILL_TRACK_HEIGHT    5.0
 /* Past this fraction the fill turns warning-coloured. */
 #define FILL_WARN_FRACTION   0.8
 

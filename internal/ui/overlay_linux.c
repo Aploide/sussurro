@@ -76,41 +76,13 @@ static void rounded_rect(cairo_t *cr, double x, double y,
     cairo_close_path(cr);
 }
 
-static void pill_path(cairo_t *cr)
+/* Draws the idle dots centred within the slot (x, w) at vertical centre_y. */
+static void draw_idle_dots(cairo_t *cr, OverlayData *od,
+                           double x, double w, double centre_y)
 {
-    double w = OVERLAY_WIDTH;
-    double h = OVERLAY_HEIGHT;
-    double r = OVERLAY_RADIUS;
-
-    cairo_new_sub_path(cr);
-    cairo_arc(cr, r,     r,     r,  M_PI,        3.0*M_PI/2.0);
-    cairo_arc(cr, w - r, r,     r,  3.0*M_PI/2.0, 0.0);
-    cairo_arc(cr, w - r, h - r, r,  0.0,          M_PI/2.0);
-    cairo_arc(cr, r,     h - r, r,  M_PI/2.0,    M_PI);
-    cairo_close_path(cr);
-}
-
-static void draw_pill_background(cairo_t *cr)
-{
-    pill_path(cr);
-    cairo_set_source_rgba(cr, BG_R, BG_G, BG_B, BG_A);
-    cairo_fill(cr);
-}
-
-static void draw_pill_border(cairo_t *cr)
-{
-    pill_path(cr);
-    cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.30); /* subtle white rim */
-    cairo_set_line_width(cr, 1.5);
-    cairo_stroke(cr);
-}
-
-static void draw_idle_dots(cairo_t *cr, OverlayData *od)
-{
-    /* 7 dots, centered in the pill */
     double total_w = (ITEM_COUNT - 1) * DOT_SPACING;
-    double start_x = (OVERLAY_WIDTH - total_w) / 2.0;
-    double center_y = OVERLAY_HEIGHT / 2.0;
+    double start_x = x + (w - total_w) / 2.0;
+    double center_y = centre_y;
 
     for (int i = 0; i < ITEM_COUNT; i++) {
         double t   = od->anim_time;
@@ -125,26 +97,25 @@ static void draw_idle_dots(cairo_t *cr, OverlayData *od)
     }
 }
 
-/* Draws the recording buffer fill as a thin track along the capsule's lower
- * edge. Always drawn while recording rather than appearing near the limit: an
- * indicator that materialises late is itself a surprise, and the user asked to
- * see the fill throughout.
+/* Draws the recording buffer fill into the given rect.
+ *
+ * The rect is passed in rather than derived from the pill, because this now
+ * lives in the overlay's permanent bottom row: it must stay visible while text
+ * is on screen, which is exactly when a long dictation risks reaching the cap.
  *
  * The track turns warning-coloured past FILL_WARN_FRACTION, so the approach to
  * a truncating cap reads at a glance without needing a number. */
-static void draw_buffer_fill(cairo_t *cr, OverlayData *od)
+static void draw_buffer_fill(cairo_t *cr, OverlayData *od,
+                             double x, double y, double w)
 {
-    double track_w = OVERLAY_WIDTH - 2.0 * FILL_TRACK_INSET_X;
-    double x = FILL_TRACK_INSET_X;
-    double y = OVERLAY_HEIGHT - FILL_TRACK_INSET_Y - FILL_TRACK_HEIGHT;
     double r = FILL_TRACK_HEIGHT / 2.0;
 
     /* Unfilled track: dim enough to read as a groove rather than content. */
     cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.18);
-    rounded_rect(cr, x, y, track_w, FILL_TRACK_HEIGHT, r);
+    rounded_rect(cr, x, y, w, FILL_TRACK_HEIGHT, r);
     cairo_fill(cr);
 
-    double fill_w = track_w * od->fill;
+    double fill_w = w * od->fill;
     if (fill_w <= 0.0) return;
     /* Never narrower than the cap it is drawn with, or the rounded ends
        degenerate into a dot at very low fill. */
@@ -159,11 +130,18 @@ static void draw_buffer_fill(cairo_t *cr, OverlayData *od)
     cairo_fill(cr);
 }
 
-static void draw_recording_bars(cairo_t *cr, OverlayData *od)
+/* Draws the waveform centred within the slot (x, w) at vertical centre_y.
+ *
+ * The bars occupy a fixed width, so at the wide slot of the unified layout they
+ * are centred in the space rather than stretched across it: the waveform is a
+ * liveness indicator here, and thinner bars spread wider would read as less,
+ * not more. */
+static void draw_recording_bars(cairo_t *cr, OverlayData *od,
+                                double x, double w, double centre_y)
 {
     double total_w = (ITEM_COUNT - 1) * BAR_SPACING;
-    double start_x = (OVERLAY_WIDTH - total_w) / 2.0;
-    double center_y = OVERLAY_HEIGHT / 2.0;
+    double start_x = x + (w - total_w) / 2.0;
+    double center_y = centre_y;
 
     cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 1.0);
 
@@ -178,60 +156,35 @@ static void draw_recording_bars(cairo_t *cr, OverlayData *od)
     }
 }
 
-/* The capsule's label for a working state. Kept beside the enum it switches
- * on so a new state cannot silently inherit the wrong word, which is how
- * cleanup came to be labelled "transcribing".
+/* Draws the overlay's permanent bottom row: waveform on the left, buffer-fill
+ * gauge filling the rest.
  *
- * The capsule draws only when there is no transcript panel, so nothing has
- * been shown to the user yet and "transcribing" is accurate here. The panel
- * says "Finalizing" instead, because there the user is already reading text
- * that this pass is completing rather than producing. */
-static const char *working_label(int state)
+ * Anchored to the bottom edge, which is the only part of the overlay that
+ * holds still as text grows upwards (sussurro-xvj.48). Drawn in every state, so
+ * neither element disappears when text arrives — that disappearance was the
+ * reported defect.
+ *
+ * panel_h is the overlay's current height, so the row finds its own position
+ * whether the overlay is the bare control strip or a full transcript panel. */
+static void draw_control_row(cairo_t *cr, OverlayData *od,
+                             double width, double panel_h)
 {
-    return state == OVERLAY_STATE_CLEANING_UP ? "cleaning up" : "transcribing";
-}
+    double content_w = width - 2.0 * PANEL_PAD_X;
+    double wave_w    = content_w * ROW_WAVEFORM_FRACTION;
+    double gauge_w   = content_w - wave_w - ROW_GAP;
+    double row_top   = panel_h - PANEL_PAD_Y - ROW_HEIGHT;
+    double centre_y  = row_top + ROW_HEIGHT / 2.0;
 
-static void draw_transcribing_text(cairo_t *cr, OverlayData *od)
-{
-    /* Plain white text with animated shimmer gradient */
-    double cx = OVERLAY_WIDTH  / 2.0;
-    double cy = OVERLAY_HEIGHT / 2.0;
+    if (od->state == OVERLAY_STATE_IDLE) {
+        draw_idle_dots(cr, od, PANEL_PAD_X, wave_w, centre_y);
+    } else {
+        draw_recording_bars(cr, od, PANEL_PAD_X, wave_w, centre_y);
+    }
 
-    const char *label = working_label(od->state);
-
-    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-    cairo_set_font_size(cr, 14.0);
-
-    cairo_text_extents_t ext;
-    cairo_text_extents(cr, label, &ext);
-
-    double tx = cx - ext.width / 2.0 - ext.x_bearing;
-    double ty = cy - ext.height / 2.0 - ext.y_bearing;
-
-    /* Base white text */
-    cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.7);
-    cairo_move_to(cr, tx, ty);
-    cairo_show_text(cr, label);
-
-    /* Shimmer: a white highlight sweeping left→right over 1.5 s */
-    double phase   = fmod(od->shimmer_phase, 1.5) / 1.5; /* 0→1 */
-    double shimmer_x = tx - 40.0 + (ext.width + 80.0) * phase;
-
-    cairo_pattern_t *pat = cairo_pattern_create_linear(
-        shimmer_x - 20.0, 0, shimmer_x + 20.0, 0);
-    cairo_pattern_add_color_stop_rgba(pat, 0.0, 1,1,1, 0.0);
-    cairo_pattern_add_color_stop_rgba(pat, 0.5, 1,1,1, 0.5);
-    cairo_pattern_add_color_stop_rgba(pat, 1.0, 1,1,1, 0.0);
-
-    /* Clip to pill shape before drawing shimmer */
-    pill_path(cr);
-    cairo_clip(cr);
-
-    cairo_set_source(cr, pat);
-    cairo_move_to(cr, tx, ty);
-    cairo_show_text(cr, label);
-    cairo_pattern_destroy(pat);
-    cairo_reset_clip(cr);
+    /* The gauge is vertically centred in the row rather than sitting on the
+       overlay's edge, so it stays aligned with the waveform beside it. */
+    draw_buffer_fill(cr, od, PANEL_PAD_X + wave_w + ROW_GAP,
+                     centre_y - FILL_TRACK_HEIGHT / 2.0, gauge_w);
 }
 
 /* Keeps the overlay bottom-centred on the primary monitor at the given size.
@@ -345,7 +298,9 @@ static int draw_panel(cairo_t *cr, OverlayData *od, gboolean paint)
         status_h += 6; /* gap above the status line */
     }
 
-    int height = PANEL_PAD_Y * 2 + text_h + status_h;
+    /* The control row is permanent, so it is part of the panel's height at
+       every size, including when there is no text at all. */
+    int height = PANEL_PAD_Y * 2 + text_h + status_h + (int)ROW_HEIGHT;
 
     /* Past the cap the panel stops growing. The text is then anchored to its
        END rather than its start: during dictation the newest words matter, and
@@ -379,7 +334,8 @@ static int draw_panel(cairo_t *cr, OverlayData *od, gboolean paint)
            without this it would paint over the window's surroundings, and
            its last line would run underneath the status text. */
         cairo_save(cr);
-        cairo_rectangle(cr, 0, 0, PANEL_WIDTH, height - PANEL_PAD_Y - status_h);
+        cairo_rectangle(cr, 0, 0, PANEL_WIDTH,
+                        height - PANEL_PAD_Y - status_h - ROW_HEIGHT);
         cairo_clip(cr);
         cairo_move_to(cr, PANEL_PAD_X, PANEL_PAD_Y - text_offset);
         pango_cairo_show_layout(cr, layout);
@@ -389,9 +345,12 @@ static int draw_panel(cairo_t *cr, OverlayData *od, gboolean paint)
             cairo_set_source_rgba(cr, 1, 1, 1, 0.45);
             /* Positioned from the panel's bottom edge so it stays visible when
                the text above it has scrolled. */
-            cairo_move_to(cr, PANEL_PAD_X, height - PANEL_PAD_Y - (status_h - 6));
+            cairo_move_to(cr, PANEL_PAD_X,
+                          height - PANEL_PAD_Y - ROW_HEIGHT - (status_h - 6));
             pango_cairo_show_layout(cr, status_layout);
         }
+
+        draw_control_row(cr, od, PANEL_WIDTH, height);
     }
 
     if (status_layout) g_object_unref(status_layout);
@@ -413,29 +372,12 @@ static gboolean on_draw(GtkWidget *widget, cairo_t *cr, gpointer data)
     cairo_paint(cr);
     cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
 
-    /* With live text to show, the capsule gives way to the transcript panel. */
-    if (od->transcript && od->transcript[0]) {
-        draw_panel(cr, od, TRUE);
-        return FALSE;
-    }
-
-    draw_pill_background(cr);
-    draw_pill_border(cr);
-
-    switch (od->state) {
-    case OVERLAY_STATE_IDLE:
-        draw_idle_dots(cr, od);
-        break;
-    case OVERLAY_STATE_RECORDING:
-        draw_recording_bars(cr, od);
-        draw_buffer_fill(cr, od);
-        break;
-    case OVERLAY_STATE_TRANSCRIBING:
-    case OVERLAY_STATE_CLEANING_UP:
-        draw_transcribing_text(cr, od);
-        break;
-    }
-
+    /* One overlay in every state. There is no pill-to-panel switch: the panel
+       always carries the control row along its bottom edge, and the text area
+       above it grows from zero as text arrives. Swapping between two shapes is
+       what produced the jolt, and what made anything drawn on the pill vanish
+       the moment text appeared. */
+    draw_panel(cr, od, TRUE);
     return FALSE;
 }
 
@@ -615,7 +557,7 @@ GtkWidget *overlay_create(void)
     GtkWidget *win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
 
     gtk_window_set_title(GTK_WINDOW(win), "Sussurro Overlay");
-    gtk_window_set_default_size(GTK_WINDOW(win), OVERLAY_WIDTH, OVERLAY_HEIGHT);
+    gtk_window_set_default_size(GTK_WINDOW(win), PANEL_WIDTH, OVERLAY_REST_HEIGHT);
     gtk_window_set_resizable(GTK_WINDOW(win), FALSE);
     gtk_window_set_decorated(GTK_WINDOW(win), FALSE);
     /* EWMH window type — WMs don't decorate notification windows regardless
@@ -634,7 +576,7 @@ GtkWidget *overlay_create(void)
 
     /* Drawing area */
     GtkWidget *da = gtk_drawing_area_new();
-    gtk_widget_set_size_request(da, OVERLAY_WIDTH, OVERLAY_HEIGHT);
+    gtk_widget_set_size_request(da, PANEL_WIDTH, OVERLAY_REST_HEIGHT);
     gtk_container_add(GTK_CONTAINER(win), da);
 
     /* Allocate and attach overlay data */
@@ -677,7 +619,7 @@ GtkWidget *overlay_create(void)
        re-positioning, no moving — the window sits exactly where we put it,
        regardless of how the process was started. */
     {
-        reposition_overlay(win, OVERLAY_WIDTH, OVERLAY_HEIGHT);
+        reposition_overlay(win, PANEL_WIDTH, OVERLAY_REST_HEIGHT);
 
         /* Realize creates the underlying GdkWindow without mapping (showing)
            it, so override-redirect can be set before the WM ever sees the
@@ -967,26 +909,22 @@ static gboolean idle_set_transcript(gpointer data)
     od->status      = arg->status ? g_strdup(arg->status) : NULL;
     od->provisional = arg->provisional ? TRUE : FALSE;
 
-    if (od->transcript && od->transcript[0]) {
-        /* Measure against a throwaway surface: the height depends on how the
-           text wraps, which only Pango can tell us. */
-        cairo_surface_t *probe = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
-        cairo_t *cr = cairo_create(probe);
-        int height = draw_panel(cr, od, FALSE);
-        cairo_destroy(cr);
-        cairo_surface_destroy(probe);
+    /* One size calculation for every state. Measured against a throwaway
+       surface because the height depends on how the text wraps, which only
+       Pango can tell us; with no text the panel collapses to the control row
+       and its padding, which is the resting size. Reverting to a separate
+       pill geometry here is what made the overlay change shape. */
+    cairo_surface_t *probe = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
+    cairo_t *cr = cairo_create(probe);
+    int height = draw_panel(cr, od, FALSE);
+    cairo_destroy(cr);
+    cairo_surface_destroy(probe);
 
-        if (height != od->panel_height) {
-            od->panel_height = height;
-            gtk_widget_set_size_request(od->drawing_area, PANEL_WIDTH, height);
-            gtk_window_resize(GTK_WINDOW(arg->win), PANEL_WIDTH, height);
-            reposition_overlay(arg->win, PANEL_WIDTH, height);
-        }
-    } else if (od->panel_height != 0) {
-        od->panel_height = 0;
-        gtk_widget_set_size_request(od->drawing_area, OVERLAY_WIDTH, OVERLAY_HEIGHT);
-        gtk_window_resize(GTK_WINDOW(arg->win), OVERLAY_WIDTH, OVERLAY_HEIGHT);
-        reposition_overlay(arg->win, OVERLAY_WIDTH, OVERLAY_HEIGHT);
+    if (height != od->panel_height) {
+        od->panel_height = height;
+        gtk_widget_set_size_request(od->drawing_area, PANEL_WIDTH, height);
+        gtk_window_resize(GTK_WINDOW(arg->win), PANEL_WIDTH, height);
+        reposition_overlay(arg->win, PANEL_WIDTH, height);
     }
 
     gtk_widget_queue_draw(od->drawing_area);
