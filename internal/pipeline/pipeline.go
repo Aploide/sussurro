@@ -558,11 +558,13 @@ func (p *Pipeline) processSegment(samples []float32) {
 		return
 	}
 
+	asrDuration := time.Since(start)
+
 	// Recognition is done; what follows is cleanup and delivery. Announce the
 	// change so the overlay stops claiming to transcribe.
 	p.notifyPhase(session.StateCleaningUp, text)
 
-	p.finishSegment(text, start)
+	p.finishSegment(text, start, asrDuration)
 }
 
 // completeFromPartial delivers text a streaming pass already produced,
@@ -584,11 +586,15 @@ func (p *Pipeline) completeFromPartial(text string) {
 		}
 	}()
 
-	p.finishSegment(text, time.Now())
+	p.finishSegment(text, time.Now(), 0)
 }
 
 // finishSegment turns a recognised transcription into a published result.
-func (p *Pipeline) finishSegment(text string, start time.Time) {
+//
+// asrDuration is how long recognition took, or zero on the partial-reuse path
+// where none ran, so the completion log can attribute the wait after speech
+// ends to a stage rather than reporting one opaque total.
+func (p *Pipeline) finishSegment(text string, start time.Time, asrDuration time.Duration) {
 
 	// Check word count
 	// If detected less than 4 words, avoid transcribing completely (treat as false positive)
@@ -607,6 +613,11 @@ func (p *Pipeline) finishSegment(text string, start time.Time) {
 	p.log.Debug("ASR Output", "text", text, "duration", time.Since(start))
 
 	// 2. Context: Get Current Window Info
+	//
+	// Timed separately: this queries the window manager, which can block, and
+	// a slow answer here is indistinguishable from slow recognition in a log
+	// that reports only the total.
+	contextStart := time.Now()
 	var ctxInfo ctxProvider.ContextInfo
 	info, err := p.ctxProvider.GetContext()
 	if err != nil {
@@ -616,6 +627,7 @@ func (p *Pipeline) finishSegment(text string, start time.Time) {
 	if info != nil {
 		ctxInfo = *info
 	}
+	contextDuration := time.Since(contextStart)
 
 	p.mu.Lock()
 	skipLLMCleanup := p.skipLLMCleanup
@@ -623,10 +635,13 @@ func (p *Pipeline) finishSegment(text string, start time.Time) {
 
 	cleanedText := text
 	cleaned := false
+	var cleanupDuration time.Duration
 	if !skipLLMCleanup {
 		// 3. LLM: Cleanup and Contextualize
 		// TODO: Pass context info to LLM if supported
+		cleanupStart := time.Now()
 		cleanedText, err = p.llmEngine.CleanupText(text)
+		cleanupDuration = time.Since(cleanupStart)
 		if err != nil {
 			p.log.Error("LLM cleanup failed", "error", err)
 			// Fallback to raw text
@@ -644,12 +659,17 @@ func (p *Pipeline) finishSegment(text string, start time.Time) {
 	}
 	p.mu.Unlock()
 
+	// Broken down by stage: a single total cannot say whether the wait after
+	// speech ends is recognition, the window-manager query, or cleanup.
 	p.log.Info("Final Output",
 		"raw", text,
 		"cleaned", cleanedText,
 		"app", ctxInfo.AppName,
 		"window", ctxInfo.WindowTitle,
-		"total_duration", time.Since(start),
+		"asr_duration", asrDuration.Round(time.Millisecond),
+		"context_duration", contextDuration.Round(time.Millisecond),
+		"cleanup_duration", cleanupDuration.Round(time.Millisecond),
+		"total_duration", time.Since(start).Round(time.Millisecond),
 	)
 
 	// 4. Publish the result. Delivery is the consumer's responsibility, so
