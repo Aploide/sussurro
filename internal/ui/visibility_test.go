@@ -336,3 +336,46 @@ func TestOnFinishedCarriesTheText(t *testing.T) {
 		t.Fatal("OnFinished queued nothing")
 	}
 }
+
+func TestBothHotkeyBindingsAreInstalled(t *testing.T) {
+	manager := &Manager{}
+
+	// The point of the redesign: a held key and a tapped key at once, which
+	// the single-trigger-plus-mode design could not express.
+	manager.InstallHotkey(HotkeyBindings{
+		PushToTalk: "super+7",
+		Toggle:     "super+8",
+		OnPress:    func() {},
+		OnRelease:  func() {},
+		OnToggle:   func() {},
+	})
+
+	if manager.bindings.PushToTalk != "super+7" {
+		t.Errorf("PushToTalk = %q, want super+7", manager.bindings.PushToTalk)
+	}
+	if manager.bindings.Toggle != "super+8" {
+		t.Errorf("Toggle = %q, want super+8", manager.bindings.Toggle)
+	}
+}
+
+func TestEitherBindingMayBeEmpty(t *testing.T) {
+	for _, tt := range []struct{ name, ptt, toggle string }{
+		{name: "toggle only", toggle: "super+8"},
+		{name: "push to talk only", ptt: "super+7"},
+		{name: "neither"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := &Manager{}
+			// Must not panic or refuse: an unset binding is valid, since
+			// Wayland uses the trigger socket instead.
+			manager.InstallHotkey(HotkeyBindings{PushToTalk: tt.ptt, Toggle: tt.toggle})
+
+			if manager.bindings.PushToTalk != tt.ptt {
+				t.Errorf("PushToTalk = %q, want %q", manager.bindings.PushToTalk, tt.ptt)
+			}
+			if manager.bindings.Toggle != tt.toggle {
+				t.Errorf("Toggle = %q, want %q", manager.bindings.Toggle, tt.toggle)
+			}
+		})
+	}
+}
