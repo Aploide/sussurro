@@ -333,9 +333,16 @@ kbd {
 
 .setting-select,
 .setting-input {
-  min-width: 150px;
-  max-width: 190px;
-  height: 26px;
+  /* The longest option — "wtype (Wayland) — wtype is not installed" — is
+     about 40 characters, which no longer fitted once the type scale was
+     raised to 14px. Sized to that rather than to a fixed cap, so an option
+     that explains why it is unavailable is still readable. */
+  min-width: 200px;
+  max-width: 320px;
+  /* The row is flex, so without this the control shrinks to its min-width
+     and crops the option text rather than taking the room it needs. */
+  flex: 0 1 320px;
+  height: 30px;
   padding: 0 8px;
   border-radius: 6px;
   border: 1px solid var(--border);
@@ -345,7 +352,21 @@ kbd {
   font-family: var(--font);
 }
 
-.setting-select { cursor: pointer; }
+.setting-select {
+  cursor: pointer;
+  /* Right-aligned: the row's label sits on the left, so the control reads as
+     the value of that label rather than a second column of prose. */
+  text-align: right;
+  direction: rtl;
+}
+
+/* The options themselves stay left-to-right; only the closed control is
+   right-aligned. Without this, punctuation in an option renders in the wrong
+   place under the inherited RTL direction. */
+.setting-select option {
+  direction: ltr;
+  text-align: left;
+}
 
 .setting-select:focus-visible,
 .setting-input:focus-visible {
