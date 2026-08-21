@@ -119,24 +119,33 @@ func (m *Manager) render(model ViewModel) {
 		return
 	}
 
-	// Show the finished text first, then hide after the linger. Deferring the
-	// draw as well as the hide meant the complete transcription was never
-	// displayed: the overlay simply waited, then vanished.
+	// Draw the finished state and keep it on screen for the linger, then hide.
 	//
-	// The linger is measured from this moment — when the final text goes on
-	// screen — not from when the key was released, because the final pass
-	// runs in between and would otherwise consume most of the second.
-	visible := model
-	visible.Mode = ViewExpanded
-	present(m.overlay, visible, trayReady)
+	// present() hides whenever the model is not Visible(), and a finished
+	// dictation is StateIdle, so the draw has to bypass that decision — going
+	// through present() here would hide instantly, which is precisely the
+	// defect this path exists to fix.
+	//
+	// The linger runs from this moment, when the text goes on screen, not from
+	// the key release: the final pass runs in between and would otherwise
+	// consume most of the second.
+	if presenter, ok := m.overlay.(Presenter); ok {
+		presenter.Present(model)
+	} else {
+		m.overlay.SetState(model.State)
+	}
+	m.overlay.Show()
 
-	hidden := model
-	hidden.Transcript = ""
 	m.hideTimer = time.AfterFunc(hideLinger, func() {
 		m.hideMu.Lock()
 		m.hideTimer = nil
 		m.hideMu.Unlock()
-		present(m.overlay, hidden, trayReady)
+
+		// Clear the text as it goes, so a later show cannot flash the
+		// previous dictation.
+		cleared := model
+		cleared.Transcript = ""
+		present(m.overlay, cleared, trayReady)
 	})
 	m.hideMu.Unlock()
 }
