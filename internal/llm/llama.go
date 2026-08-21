@@ -93,6 +93,11 @@ const cleanupChunkTarget = 350
 // and recursive bisection still catch any misbehavior.
 const cleanupChunkTargetExtended = 1500
 
+// antiSummarizationFloor is the input length above which the summarization
+// check applies. Below it, ordinary filler removal can legitimately account
+// for a large fraction of a very short utterance.
+const antiSummarizationFloor = 80
+
 // cleanupMaxTokens bounds cleanup output while leaving enough room for the
 // model to preserve and lightly reformat a full input chunk. Passing zero to
 // go-llama.cpp can produce no output instead of selecting its default.
@@ -456,9 +461,15 @@ func validateOutput(raw, cleaned string, dictionary []string) bool {
 	}
 
 	// 1b. Anti-summarization backstop: cleanup removes fillers, not content.
-	// If a long dictation came back at less than half its size, the model
+	// If a dictation came back much shorter than it went in, the model
 	// summarized it — better to deliver the raw text in full.
-	if len(raw) > 400 && len(cleaned) < len(raw)/2 {
+	//
+	// The floor used to be 400 characters, which let a 291-character
+	// dictation lose 74% of its words unchallenged: repeated sentences are
+	// exactly what the model likes to collapse, and they are also common in
+	// real speech. Filler removal rarely takes more than a third, so anything
+	// past that on a sentence-length input is treated as summarization.
+	if len(raw) > antiSummarizationFloor && len(cleaned)*3 < len(raw)*2 {
 		return false
 	}
 

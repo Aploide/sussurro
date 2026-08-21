@@ -256,6 +256,27 @@ static GdkFilterReturn x11_event_filter(GdkXEvent *xevent, GdkEvent *event, gpoi
             }
             return GDK_FILTER_REMOVE;
         }
+        /* A release for a key we did not grab, arriving while the hotkey is
+           held, means the modifier went up first. X11 delivers the grabbed
+           key's release to the grab owner, but some setups (and key repeat
+           filters) drop it once the modifier state no longer matches. Ending
+           the recording here is better than waiting for max_duration. */
+        if (od->hk_pressed && od->hk_mods != 0) {
+            unsigned int released_mod = 0;
+            KeySym       sym = XkbKeycodeToKeysym(xe->xkey.display,
+                                                  xe->xkey.keycode, 0, 0);
+            switch (sym) {
+                case XK_Super_L: case XK_Super_R: released_mod = Mod4Mask;    break;
+                case XK_Control_L: case XK_Control_R: released_mod = ControlMask; break;
+                case XK_Shift_L: case XK_Shift_R: released_mod = ShiftMask;   break;
+                case XK_Alt_L: case XK_Alt_R: released_mod = Mod1Mask;        break;
+                default: break;
+            }
+            if (released_mod && (od->hk_mods & released_mod)) {
+                od->hk_pressed = FALSE;
+                if (od->up_cb) od->up_cb();
+            }
+        }
     }
 
     return GDK_FILTER_CONTINUE;

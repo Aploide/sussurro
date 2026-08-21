@@ -40,6 +40,13 @@ func NewEngine(modelPath string, threads int, language string, debug bool) (*Eng
 		return nil, fmt.Errorf("failed to create whisper context: %w", err)
 	}
 
+	// The threads setting was accepted and then never applied, so every
+	// transcription ran on whisper's internal default (4) regardless of
+	// configuration or how many cores the machine has.
+	if threads > 0 {
+		ctx.SetThreads(uint(threads))
+	}
+
 	if language != "" {
 		if err := ctx.SetLanguage(language); err != nil {
 			// Log warning but don't fail — e.g. english-only model ignores language

@@ -70,3 +70,42 @@ func TestCleanupOnceFallsBackToRawTextOnEmptyOutput(t *testing.T) {
 		t.Fatal("cleanupOnce accepted empty model output")
 	}
 }
+
+func TestValidateOutputRejectsSummarizedDictation(t *testing.T) {
+	// Real dictation from a user report: the model kept the first sentence and
+	// silently dropped the rest, losing 74% of the words. The old 400-char
+	// floor let this through because the input was only 291 characters.
+	const raw = "Now in theory this should be showing me stuff as I type, as I dictate rather. " +
+		"Now in theory this should be showing me stuff like that. " +
+		"Now in theory this should be showing me stuff like that. " +
+		"Now in theory this should be showing me stuff like that. " +
+		"So I'm going to show you stuff like that."
+	const summarized = "Now in theory this should be showing me stuff as I type, as I dictate rather."
+
+	if validateOutput(raw, summarized, nil) {
+		t.Errorf("validateOutput accepted a %d%% reduction, want it rejected as summarization",
+			100-100*len(summarized)/len(raw))
+	}
+}
+
+func TestValidateOutputAllowsOrdinaryFillerRemoval(t *testing.T) {
+	// Cleanup legitimately strips fillers and false starts; that must not be
+	// mistaken for summarization.
+	const raw = "So um I was thinking that we should uh probably move the meeting to " +
+		"Tuesday afternoon because you know Monday is already quite full."
+	const cleaned = "I was thinking we should probably move the meeting to Tuesday afternoon " +
+		"because Monday is already quite full."
+
+	if !validateOutput(raw, cleaned, nil) {
+		t.Errorf("validateOutput rejected ordinary filler removal (%d -> %d chars)",
+			len(raw), len(cleaned))
+	}
+}
+
+func TestValidateOutputIgnoresShortUtterances(t *testing.T) {
+	// Below the floor, filler removal can legitimately account for a large
+	// fraction of a very short utterance.
+	if !validateOutput("Um, so, yeah, okay then.", "Okay then.", nil) {
+		t.Error("validateOutput rejected a short utterance, want it accepted")
+	}
+}
