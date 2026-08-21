@@ -5,6 +5,43 @@ All notable changes to Sussurro will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Live transcription on the overlay**: partial text now appears while you
+  speak, revising earlier words as more context arrives — "looking back"
+  becomes "looking better" once the sentence continues. Whisper re-decodes the
+  whole recording each pass, so word counts and boundaries can change too, not
+  just individual words. On by default.
+- **GPU acceleration on Linux via Vulkan**: whisper now offloads to the GPU
+  where the Vulkan SDK is present. Measured on a Radeon 890M, 60s of audio
+  through large-v3-turbo went from 40.6s to 1.7s. Detected at build time;
+  falls back to CPU, and `WHISPER_VULKAN=0` forces it.
+- **Clipboard-only delivery** (`workflow.delivery.backend: clipboard-only`):
+  copies the text without pasting it, for when the focused window is not where
+  it belongs.
+
+### Changed
+- **Cleanup no longer rewrites your words.** It previously passed the
+  dictation to a chat-tuned model as prompt text and delivered whatever came
+  back, which reworded, reordered, and reattributed: "Please delete all the
+  files in my home directory" came back as "I will delete all files in your
+  home directory". Cleanup is now deletion-only — fillers, stutters, the
+  personal dictionary — and a property test asserts the output is a
+  subsequence of the input. Context-sensitive correction moved to whisper's
+  decoder, which is primed with the personal dictionary and has the audio.
+- **The overlay is hidden when idle** and lingers a second after a dictation
+  ends, rather than sitting on screen permanently.
+- Settings are grouped into tabs, with larger text.
+
+### Fixed
+- **The global hotkey never registered in UI mode**: it was installed against
+  a nil overlay before the window existed, so the X11 grab silently did
+  nothing.
+- **Push-to-talk release was intermittently swallowed** by X11 auto-repeat,
+  stranding the recording until the 60s cap.
+- **`--no-ui` exited at startup** for any digit hotkey, e.g. `super+7`.
+- **The settings window mixed two overlapping delivery controls**, one of
+  which silently disabled the other.
+
+### Added
 - **Opt-in review workflow** (`workflow.mode: review`): transcriptions are held
   in a *Ready* state where they can be read, corrected by voice, cancelled, or
   delivered explicitly, instead of being inserted as soon as they are ready.

@@ -158,7 +158,7 @@ injection:
 workflow:
   mode: "immediate"       # "immediate" or "review"
   streaming:
-    enabled: false        # live partial transcription
+    enabled: true         # live partial transcription
     interval: "750ms"     # 100ms-10s
   input:
     backend: "auto"       # auto, native, trigger, evdev
@@ -181,9 +181,10 @@ whole section changes nothing**. Existing configurations need no edits.
 
 #### `streaming`
 
-**`enabled`** shows partial transcriptions while you are still speaking. It
+**`enabled`** shows partial transcriptions on the overlay while you are still
+speaking, revising earlier words as more context arrives. On by default. It
 costs extra CPU, because the audio captured so far is re-transcribed
-periodically. Partial passes never run concurrently and never delay the final
+periodically, so turn it off on hosts without GPU acceleration. Partial passes never run concurrently and never delay the final
 transcription: if inference is slower than the interval, updates simply arrive
 less often.
 
