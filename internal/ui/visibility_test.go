@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"github.com/aploide/sussurro/internal/config"
 	"sync"
 	"testing"
 	"time"
@@ -395,5 +396,63 @@ func TestEitherBindingMayBeEmpty(t *testing.T) {
 				t.Errorf("Toggle = %q, want %q", manager.bindings.Toggle, tt.toggle)
 			}
 		})
+	}
+}
+
+// TestClipboardOnlyDeliveryIsConfirmed covers sussurro-xvj.44: copying
+// without pasting produces no visible effect in the target window, so the
+// overlay has to say it happened.
+func TestClipboardOnlyDeliveryIsConfirmed(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Workflow.Delivery.Backend = config.DeliveryClipboardOnly
+
+	manager := &Manager{
+		cfg:           cfg,
+		stateChangeCh: make(chan ViewModel, 8),
+		overlay:       &presentingOverlay{},
+	}
+
+	manager.OnFinished("the quick brown fox")
+
+	select {
+	case model := <-manager.stateChangeCh:
+		if model.Status != "Copied to clipboard!" {
+			t.Errorf("Status = %q, want the copy confirmed", model.Status)
+		}
+	default:
+		t.Fatal("OnFinished queued nothing")
+	}
+}
+
+// TestPasteDeliveryKeepsTheGenericStatus checks the other delivery methods
+// are unchanged: the text appearing in the window is its own confirmation.
+func TestPasteDeliveryKeepsTheGenericStatus(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Workflow.Delivery.Backend = config.DeliveryClipboardPaste
+
+	manager := &Manager{
+		cfg:           cfg,
+		stateChangeCh: make(chan ViewModel, 8),
+		overlay:       &presentingOverlay{},
+	}
+
+	manager.OnFinished("the quick brown fox")
+
+	select {
+	case model := <-manager.stateChangeCh:
+		if model.Status != "Done" {
+			t.Errorf("Status = %q, want the generic completion status", model.Status)
+		}
+	default:
+		t.Fatal("OnFinished queued nothing")
+	}
+}
+
+// TestCompletionStatusWithoutConfigDoesNotPanic guards the nil-config path
+// used by tests that construct a Manager directly.
+func TestCompletionStatusWithoutConfigDoesNotPanic(t *testing.T) {
+	manager := &Manager{}
+	if got := manager.completionStatus(); got != "Done" {
+		t.Errorf("completionStatus() = %q with no config, want %q", got, "Done")
 	}
 }

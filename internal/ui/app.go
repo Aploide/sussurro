@@ -206,9 +206,21 @@ func (m *Manager) OnFinished(text string) {
 	m.Present(ViewModel{
 		State:      session.StateIdle,
 		Transcript: text,
-		Status:     "Done",
+		Status:     m.completionStatus(),
 		Mode:       ViewExpanded,
 	})
+}
+
+// completionStatus describes what happened to the finished text.
+//
+// Pasting is self-evident: the words appear in the window the user was
+// typing into. Copying without pasting is not, so it says so explicitly
+// rather than leaving the user unsure whether anything was delivered.
+func (m *Manager) completionStatus() string {
+	if m.cfg != nil && m.cfg.Workflow.ClipboardOnlyDelivery() {
+		return "Copied to clipboard!"
+	}
+	return "Done"
 }
 
 // Present queues an already-built view model for display. Review-mode
