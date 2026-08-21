@@ -275,6 +275,24 @@ static double panel_font_scale(void)
     return dpi / 96.0;
 }
 
+/* The tallest the panel may become before it scrolls instead of growing.
+   Derived from the monitor so a long transcript on a large screen uses the
+   space available, rather than stopping at a pixel count chosen for a smaller
+   one. */
+static int panel_max_height(void)
+{
+    GdkDisplay *display = gdk_display_get_default();
+    GdkMonitor *monitor = display ? gdk_display_get_primary_monitor(display) : NULL;
+    if (display && !monitor) monitor = gdk_display_get_monitor(display, 0);
+
+    GdkRectangle geo = {0, 0, 1920, 1080}; /* safe fallback */
+    if (monitor) gdk_monitor_get_geometry(monitor, &geo);
+
+    int cap = (int)(geo.height * PANEL_MAX_HEIGHT_FRACTION);
+    if (cap < PANEL_MIN_MAX_HEIGHT) cap = PANEL_MIN_MAX_HEIGHT;
+    return cap;
+}
+
 static PangoLayout *panel_text_layout(cairo_t *cr, OverlayData *od)
 {
     PangoLayout *layout = pango_cairo_create_layout(cr);
@@ -328,7 +346,17 @@ static int draw_panel(cairo_t *cr, OverlayData *od, gboolean paint)
     }
 
     int height = PANEL_PAD_Y * 2 + text_h + status_h;
-    if (height > PANEL_MAX_HEIGHT) height = PANEL_MAX_HEIGHT;
+
+    /* Past the cap the panel stops growing. The text is then anchored to its
+       END rather than its start: during dictation the newest words matter, and
+       drawing from the top would leave them off the bottom edge, which is the
+       cropping reported in sussurro-xvj.48. */
+    int max_height = panel_max_height();
+    int text_offset = 0;
+    if (height > max_height) {
+        text_offset = height - max_height;
+        height = max_height;
+    }
 
     if (paint) {
         panel_path(cr, PANEL_WIDTH, height);
@@ -346,12 +374,22 @@ static int draw_panel(cairo_t *cr, OverlayData *od, gboolean paint)
         } else {
             cairo_set_source_rgba(cr, 1, 1, 1, 0.95);
         }
-        cairo_move_to(cr, PANEL_PAD_X, PANEL_PAD_Y);
+        /* Clip the text to its own region, which stops above the status
+           line. A scrolled layout starts above the panel's top edge, so
+           without this it would paint over the window's surroundings, and
+           its last line would run underneath the status text. */
+        cairo_save(cr);
+        cairo_rectangle(cr, 0, 0, PANEL_WIDTH, height - PANEL_PAD_Y - status_h);
+        cairo_clip(cr);
+        cairo_move_to(cr, PANEL_PAD_X, PANEL_PAD_Y - text_offset);
         pango_cairo_show_layout(cr, layout);
+        cairo_restore(cr);
 
         if (status_layout) {
             cairo_set_source_rgba(cr, 1, 1, 1, 0.45);
-            cairo_move_to(cr, PANEL_PAD_X, PANEL_PAD_Y + text_h + 6);
+            /* Positioned from the panel's bottom edge so it stays visible when
+               the text above it has scrolled. */
+            cairo_move_to(cr, PANEL_PAD_X, height - PANEL_PAD_Y - (status_h - 6));
             pango_cairo_show_layout(cr, status_layout);
         }
     }

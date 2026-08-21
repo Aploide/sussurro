@@ -26,12 +26,18 @@
 /* Transcript panel geometry. Live text needs room to wrap, so the window
    widens and grows downward while text is showing, then returns to the
    capsule when it is cleared. */
-#define PANEL_WIDTH      620
+#define PANEL_WIDTH      860
 #define PANEL_PAD_X       22
 #define PANEL_PAD_Y       18
 #define PANEL_TEXT_SIZE   17
 #define PANEL_STATUS_SIZE 12
-#define PANEL_MAX_HEIGHT 320
+/* Fraction of the monitor height the panel may occupy before it stops growing
+   and scrolls instead. A fixed pixel cap was the cause of sussurro-xvj.48:
+   past it the window stopped rising while the text kept going, so the overflow
+   ran off the bottom edge and read as the panel growing downwards. */
+#define PANEL_MAX_HEIGHT_FRACTION 0.6
+/* Floor for the above, for a very short screen or an unreadable monitor size. */
+#define PANEL_MIN_MAX_HEIGHT 320
 #define OVERLAY_RADIUS    26.0
 #define ITEM_COUNT         7
 
