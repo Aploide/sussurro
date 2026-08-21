@@ -5,6 +5,13 @@ All notable changes to Sussurro will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Trigger socket on every display server**: the local command socket used to
+  run only under Wayland, as an alternative to the global hotkey grab. They are
+  not alternatives — one is a key listener, the other a control channel — and
+  `deliver`, `cancel`, and `submit` exist only as socket commands. Review mode
+  was therefore impossible to complete on X11 and macOS: a session reached the
+  ready state with no way out. The socket now listens everywhere, alongside the
+  hotkeys. A second instance refuses the socket rather than taking it over.
 - **Live transcription on the overlay**: partial text now appears while you
   speak, revising earlier words as more context arrives — "looking back"
   becomes "looking better" once the sentence continues. Whisper re-decodes the

@@ -11,6 +11,7 @@ import (
 	"github.com/aploide/sussurro/internal/pipeline"
 	"github.com/aploide/sussurro/internal/review"
 	"github.com/aploide/sussurro/internal/session"
+	"github.com/aploide/sussurro/internal/trigger"
 	"github.com/aploide/sussurro/internal/ui"
 )
 
@@ -129,4 +130,39 @@ func selectDeliveryBackend(cfg *config.Config, injector delivery.Injector, log *
 		log.Info("Delivery is clipboard-only; text will not be pasted automatically")
 	}
 	return backend, nil
+}
+
+// startTriggerServer starts the trigger socket, returning a stop function, or
+// nil if it could not start.
+//
+// The socket used to run only under Wayland, as the else-arm of a platform
+// choice against the global hotkey grab. That treated the two as alternative
+// input backends when they are not: the grab is a key listener, the socket is
+// a control channel, and nothing about a Unix socket is Wayland-specific.
+//
+// The consequence was that Deliver and Cancel, which exist only as socket
+// commands, were unreachable on X11 and macOS, so a review session could
+// reach ReviewReady with no way out.
+//
+// Failure to start is not fatal. On Wayland it is the only input route, but
+// elsewhere the hotkeys still work, so a taken socket degrades rather than
+// preventing dictation entirely.
+func startTriggerServer(flow workflow, input session.InputDispatcher, log *slog.Logger) func() {
+	server, err := trigger.NewServer(log)
+	if err != nil {
+		log.Error("Trigger socket unavailable", "error", err)
+		return nil
+	}
+
+	if flow.controller != nil {
+		server.SetHandler(flow.controller)
+	}
+
+	if err := server.Start(input); err != nil {
+		log.Error("Failed to start trigger server", "error", err)
+		return nil
+	}
+
+	log.Debug("Trigger socket listening", "path", server.GetSocketPath())
+	return server.Stop
 }

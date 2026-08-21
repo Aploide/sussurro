@@ -8,7 +8,12 @@ Check with:
 ```bash
 echo $XDG_SESSION_TYPE
 ```
-If it says `wayland`, follow this guide. If it says `x11`, you don't need this - hotkeys work automatically.
+If it says `wayland`, follow this guide. If it says `x11`, you don't need this for dictation - hotkeys work automatically.
+
+The trigger socket described under [Trigger commands](#trigger-commands) runs
+on every display server, not only Wayland. X11 and macOS users need it for
+`deliver`, `cancel`, and `submit`, which have no hotkey binding: review mode
+cannot be completed without them.
 
 ## Prerequisites
 
@@ -123,6 +128,15 @@ configuration change is required.
 `cancel`, `deliver`, and `submit` require review mode (`workflow.mode: review`
 in the config); in immediate mode they are refused with an error rather than
 silently ignored.
+
+These three are the only way to complete a review session on any platform, so
+bind a shortcut to at least `deliver` and `cancel` before enabling review
+mode. The socket listens regardless of display server; only Wayland needs the
+recording gestures routed through it as well, because it cannot grab keys.
+
+One instance owns the socket at a time. A second instance refuses to start its
+server rather than taking the socket over, which would leave both apparently
+working while only one received commands.
 
 The bundled script takes the command as its argument:
 

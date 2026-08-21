@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/aploide/sussurro/internal/session"
 )
@@ -42,8 +43,13 @@ func NewServer(log *slog.Logger) (*Server, error) {
 
 	socketPath := filepath.Join(runtimeDir, "sussurro.sock")
 
-	// Remove existing socket if present
-	os.Remove(socketPath)
+	// A leftover socket from a crashed run must be cleared, but a socket a
+	// live instance is listening on must not: removing it would silently
+	// steal the trigger channel from the running process, and both would
+	// appear to work while only one received commands.
+	if err := removeStaleSocket(socketPath); err != nil {
+		return nil, err
+	}
 
 	return &Server{
 		socket: socketPath,
@@ -52,6 +58,33 @@ func NewServer(log *slog.Logger) (*Server, error) {
 		notify: notifySend,
 	}, nil
 }
+
+// removeStaleSocket clears a socket path left behind by a previous run,
+// refusing if another instance is currently listening on it.
+func removeStaleSocket(path string) error {
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("checking trigger socket %s: %w", path, err)
+	}
+
+	// Connecting is the only reliable test: the file exists either way, so
+	// its presence says nothing about whether anyone is accepting on it.
+	conn, err := net.DialTimeout("unix", path, staleSocketTimeout)
+	if err == nil {
+		conn.Close()
+		return fmt.Errorf("another sussurro instance is already listening on %s", path)
+	}
+
+	// Nobody accepted, so the socket is stale and safe to replace.
+	return os.Remove(path)
+}
+
+// staleSocketTimeout bounds the liveness probe above. A live server accepts
+// immediately; anything slower is treated as stale rather than hanging
+// startup.
+const staleSocketTimeout = 200 * time.Millisecond
 
 // SetHandler installs the review-mode action handler. Must be called before
 // Start. Leaving it unset refuses cancel, deliver, and submit, which is

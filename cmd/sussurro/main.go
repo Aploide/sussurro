@@ -19,7 +19,6 @@ import (
 	"github.com/aploide/sussurro/internal/pipeline"
 	"github.com/aploide/sussurro/internal/session"
 	"github.com/aploide/sussurro/internal/setup"
-	"github.com/aploide/sussurro/internal/trigger"
 	"github.com/aploide/sussurro/internal/ui"
 	"github.com/aploide/sussurro/internal/version"
 
@@ -238,21 +237,11 @@ func run() {
 		}
 
 		// Set up input handler before entering the UI main loop.
+		if stop := startTriggerServer(flow, input, log); stop != nil {
+			defer stop()
+		}
+
 		if hotkey.IsWayland() {
-			log.Debug("Wayland detected - using trigger server")
-			triggerServer, err := trigger.NewServer(log)
-			if err != nil {
-				log.Error("Failed to initialize trigger server", "error", err)
-				os.Exit(1)
-			}
-			defer triggerServer.Stop()
-			if flow.controller != nil {
-				triggerServer.SetHandler(flow.controller)
-			}
-			if err := triggerServer.Start(input); err != nil {
-				log.Error("Failed to start trigger server", "error", err)
-				os.Exit(1)
-			}
 			log.Warn("Wayland: configure keyboard shortcut (see docs/wayland.md)")
 		} else {
 			if !cfg.Hotkey.Configured() {
@@ -272,23 +261,11 @@ func run() {
 	// ---- Headless / CLI mode (--no-ui) ----
 	log.Info("Headless mode — no overlay")
 
+	if stop := startTriggerServer(flow, input, log); stop != nil {
+		defer stop()
+	}
+
 	if hotkey.IsWayland() {
-		log.Debug("Wayland detected - using trigger server")
-
-		triggerServer, err := trigger.NewServer(log)
-		if err != nil {
-			log.Error("Failed to initialize trigger server", "error", err)
-			os.Exit(1)
-		}
-		defer triggerServer.Stop()
-
-		if flow.controller != nil {
-			triggerServer.SetHandler(flow.controller)
-		}
-		if err := triggerServer.Start(input); err != nil {
-			log.Error("Failed to start trigger server", "error", err)
-			os.Exit(1)
-		}
 		log.Warn("Wayland detected: Configure keyboard shortcut (see docs/wayland.md)")
 	} else {
 		log.Info("Using global hotkeys (X11 / macOS)")

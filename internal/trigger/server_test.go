@@ -413,3 +413,48 @@ func TestDeliverWithNothingReadyIsNotAnError(t *testing.T) {
 		t.Errorf("reply = %q, want a non-error status", reply)
 	}
 }
+
+// TestNewServerRefusesALiveSocket covers acceptance criterion 4 of
+// sussurro-xvj.39: with the socket no longer gated behind Wayland, every
+// instance starts one, so a second instance must not silently take over the
+// first one's socket. Both would then appear to work while only one received
+// commands.
+func TestNewServerRefusesALiveSocket(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", dir)
+
+	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	first, err := NewServer(quiet)
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	if err := first.Start(&fakeDispatcher{}); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	defer first.Stop()
+
+	if _, err := NewServer(quiet); err == nil {
+		t.Error("NewServer() succeeded while another instance was listening, want an error")
+	}
+}
+
+// TestNewServerReplacesAStaleSocket keeps the crash-recovery path working: a
+// socket file left by a dead process must not block startup forever.
+func TestNewServerReplacesAStaleSocket(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", dir)
+
+	// A socket file nobody is accepting on, as a crashed run would leave.
+	stale := filepath.Join(dir, "sussurro.sock")
+	listener, err := net.Listen("unix", stale)
+	if err != nil {
+		t.Fatalf("creating stale socket: %v", err)
+	}
+	listener.Close()
+
+	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if _, err := NewServer(quiet); err != nil {
+		t.Errorf("NewServer() error = %v, want the stale socket replaced", err)
+	}
+}
