@@ -56,8 +56,10 @@ func (d *Immediate) Deliver(text string) error {
 	// A nil injector is normal on hosts where keystroke synthesis is
 	// unavailable; the clipboard still carries the text.
 	if d.injector == nil {
+		d.log.Debug("Delivered to clipboard only; no paste keystroke sent")
 		return nil
 	}
+	d.log.Debug("Pasting into the focused window")
 	if err := d.injector.Inject(text); err != nil {
 		d.log.Error("Failed to inject text", "error", err)
 		return err

@@ -542,3 +542,33 @@ func TestClipboardOnlyDeliversThroughTheDeliverer(t *testing.T) {
 		t.Fatal("Do(submit) error = nil, want a refusal")
 	}
 }
+
+func TestImmediateWithNilInjectorSendsNoKeystroke(t *testing.T) {
+	// This is what clipboard-only mode produces: main.go nils the injector,
+	// so the text is staged and nothing is typed.
+	var staged []string
+	d := NewImmediate(func(text string) error {
+		staged = append(staged, text)
+		return nil
+	}, nil, nil, discardLogger())
+
+	if err := d.Deliver("the dictated text"); err != nil {
+		t.Fatalf("Deliver() error = %v", err)
+	}
+	if len(staged) != 1 || staged[0] != "the dictated text" {
+		t.Errorf("staged %v, want the text on the clipboard", staged)
+	}
+}
+
+func TestImmediateWithInjectorDoesPaste(t *testing.T) {
+	// The converse, so the test above cannot pass for the wrong reason.
+	injector := &stubInjector{}
+	d := NewImmediate(func(string) error { return nil }, injector, nil, discardLogger())
+
+	if err := d.Deliver("text"); err != nil {
+		t.Fatalf("Deliver() error = %v", err)
+	}
+	if len(injector.texts) != 1 {
+		t.Errorf("pasted %d times, want 1 when an injector is present", len(injector.texts))
+	}
+}
