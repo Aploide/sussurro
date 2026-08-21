@@ -341,18 +341,24 @@ kbd {
   color: var(--text);
   font-size: 14px;
   font-family: var(--font);
-  /* Values sit at the right edge, aligned with each other down the column,
-     so the eye reads label-on-the-left, value-on-the-right. */
-  text-align: right;
+  /* Left-aligned, matching the option list. Right-aligning the closed value
+     needed direction: rtl, which flipped the options too and had to be undone
+     on them, so the control and its own list disagreed. The alignment was
+     compensating for slack between a short value and min-width; the widths
+     below remove that slack instead. */
+  text-align: left;
 }
 
 /* Selects size to their content: the widest option varies with the host,
    since an unavailable backend carries a reason ("wtype is not installed").
    Bounded so one long option cannot crowd out the label beside it, and
    flex-basis auto so the row does not shrink it back and crop the text. */
+/* Sized to the widest option so no value is cropped and no slack is left for
+   a short one to float in. The minimum only guards a control whose options
+   are all very short, which would otherwise be an awkwardly small hit area. */
 .setting-select {
   width: fit-content;
-  min-width: 160px;
+  min-width: 96px;
   max-width: 300px;
   flex: 0 1 auto;
 }
@@ -366,17 +372,6 @@ kbd {
 
 .setting-select {
   cursor: pointer;
-  /* A select needs RTL for its closed value to right-align; the options
-     themselves are pinned back to LTR below. */
-  direction: rtl;
-}
-
-/* The options themselves stay left-to-right; only the closed control is
-   right-aligned. Without this, punctuation in an option renders in the wrong
-   place under the inherited RTL direction. */
-.setting-select option {
-  direction: ltr;
-  text-align: left;
 }
 
 .setting-select:focus-visible,
