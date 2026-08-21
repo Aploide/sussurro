@@ -14,6 +14,12 @@ All notable changes to Sussurro will be documented in this file.
   where the Vulkan SDK is present. Measured on a Radeon 890M, 60s of audio
   through large-v3-turbo went from 40.6s to 1.7s. Detected at build time;
   falls back to CPU, and `WHISPER_VULKAN=0` forces it.
+- **Independent push-to-talk and toggle hotkeys**: `hotkey.push_to_talk` and
+  `hotkey.toggle` are separate bindings, each optional, so one key can be held
+  while another is tapped. The previous single trigger with a mode applied to
+  it made the behaviour a property of the binding and allowed only one at a
+  time. Existing configs migrate: a `trigger` folds into whichever binding its
+  `mode` named.
 - **Clipboard-only delivery** (`workflow.delivery.backend: clipboard-only`):
   copies the text without pasting it, for when the focused window is not where
   it belongs.
@@ -40,6 +46,11 @@ All notable changes to Sussurro will be documented in this file.
 - **`--no-ui` exited at startup** for any digit hotkey, e.g. `super+7`.
 - **The settings window mixed two overlapping delivery controls**, one of
   which silently disabled the other.
+- **Transcribed text could flash back to a bare "Transcribing" capsule**, from
+  a race between two separate overlay updates.
+- **The overlay hid before showing the last few words** unless you waited
+  before releasing: the one-second linger ran from the key release rather
+  than from when the final text appeared.
 
 ### Added
 - **Opt-in review workflow** (`workflow.mode: review`): transcriptions are held
