@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aploide/sussurro/internal/asr"
@@ -58,15 +59,46 @@ type Pipeline struct {
 	wg        sync.WaitGroup
 
 	// State
-	isRecording     bool
+	//
+	// isRecording is atomic because the realtime audio callback reads it on
+	// every chunk. Reading it under mu made the audio thread wait on whatever
+	// else held the lock, and a blocked realtime callback overruns the device
+	// ring buffer, losing speech. Writes still happen under mu, which
+	// continues to order it against isTranscribing and audioBuffer.
+	isRecording     atomic.Bool
 	isTranscribing  bool // true while processSegment is running; blocks new recordings
 	lowercaseOutput bool
 	skipLLMCleanup  bool
 	audioBuffer     []float32
 	audioBufferCap  int        // pre-computed capacity to avoid repeated slice growth
-	mu              sync.Mutex // Protects isRecording, isTranscribing, lowercaseOutput, skipLLMCleanup, and audioBuffer
+	mu              sync.Mutex // Protects isTranscribing, lowercaseOutput, skipLLMCleanup, audioBuffer, and recordingStart
 	maxDuration     string
+
+	// recordingStart is when the current recording began, so a stop can
+	// report how long it ran. Without it a premature stop is
+	// indistinguishable in the log from a normal one.
+	recordingStart time.Time
+
+	// droppedFrames counts audio frames discarded because the consumer could
+	// not keep up. Written from the realtime audio thread, so it is atomic
+	// and never guarded by mu.
+	droppedFrames atomic.Uint64
+	// lastDropWarn throttles the drop warning: the audio thread can drop
+	// hundreds of frames a second, and one line per frame would bury the log.
+	lastDropWarn atomic.Int64
 }
+
+// StopReason names what ended a recording, so the log can distinguish a user
+// release from an internal stop. A recording that ends early otherwise leaves
+// no trace of which path ended it.
+type StopReason string
+
+const (
+	// StopReleased is the ordinary end: the user let go, or toggled off.
+	StopReleased StopReason = "released"
+	// StopMaxDuration is the max_duration safety cap firing mid-utterance.
+	StopMaxDuration StopReason = "max-duration"
+)
 
 // NewPipeline creates a new processing pipeline
 func NewPipeline(
@@ -136,7 +168,7 @@ func (p *Pipeline) SnapshotRecording() ([]float32, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if !p.isRecording {
+	if !p.isRecording.Load() {
 		return nil, false
 	}
 	snapshot := make([]float32, len(p.audioBuffer))
@@ -150,11 +182,9 @@ func (p *Pipeline) SetUINotifier(n StateNotifier) {
 	p.uiNotifier = n
 	// Forward RMS data from the audio engine to the notifier
 	if n != nil {
+		// Runs on the realtime audio thread: no lock, no allocation.
 		p.audioEngine.SetRMSCallback(func(rms float32) {
-			p.mu.Lock()
-			recording := p.isRecording
-			p.mu.Unlock()
-			if recording {
+			if p.isRecording.Load() {
 				n.OnRMSData(rms)
 			}
 		})
@@ -168,9 +198,57 @@ func (p *Pipeline) notifyState(state session.State) {
 	}
 }
 
+// dropWarnInterval bounds how often dropped frames are reported.
+const dropWarnInterval = time.Second
+
+// slowStepThreshold is roughly one audio chunk period. Anything in the
+// capture path that takes longer than this is stalling the consumer, which
+// leads to dropped frames.
+const slowStepThreshold = 50 * time.Millisecond
+
+// warnIfSlow reports a step in the capture path that took long enough to
+// risk dropping audio. Rate-limited by the same window as drop warnings.
+func (p *Pipeline) warnIfSlow(step string, start time.Time) {
+	elapsed := time.Since(start)
+	if elapsed < slowStepThreshold {
+		return
+	}
+
+	now := time.Now().UnixNano()
+	last := p.lastDropWarn.Load()
+	if now-last < int64(dropWarnInterval) {
+		return
+	}
+	if !p.lastDropWarn.CompareAndSwap(last, now) {
+		return
+	}
+	p.log.Warn("Audio capture path stalled; frames may be dropped",
+		"step", step, "elapsed", elapsed.Round(time.Millisecond))
+}
+
+// onFrameDropped records a discarded audio frame. It runs on the realtime
+// audio thread, so it does no allocation, takes no lock, and rate-limits
+// itself rather than logging every frame.
+func (p *Pipeline) onFrameDropped() {
+	total := p.droppedFrames.Add(1)
+
+	now := time.Now().UnixNano()
+	last := p.lastDropWarn.Load()
+	if now-last < int64(dropWarnInterval) {
+		return
+	}
+	if !p.lastDropWarn.CompareAndSwap(last, now) {
+		// Another callback is already reporting this window.
+		return
+	}
+	p.log.Warn("Dropping captured audio; the consumer is not keeping up",
+		"dropped_frames_total", total)
+}
+
 // Start begins the pipeline processing
 func (p *Pipeline) Start() error {
 	p.log.Debug("Starting pipeline")
+	p.audioEngine.SetDropCallback(p.onFrameDropped)
 
 	// Start Audio Capture Loop (runs continuously to keep device ready)
 	p.wg.Add(1)
@@ -204,7 +282,7 @@ func (p *Pipeline) StartRecording() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if p.isRecording || p.isTranscribing {
+	if p.isRecording.Load() || p.isTranscribing {
 		return
 	}
 
@@ -213,7 +291,10 @@ func (p *Pipeline) StartRecording() {
 		<-p.audioChan
 	}
 
-	p.isRecording = true
+	p.isRecording.Store(true)
+	p.recordingStart = time.Now()
+	// Per-recording, so the count logged at stop describes this utterance.
+	p.droppedFrames.Store(0)
 	// Reuse the backing array from the previous recording to avoid re-allocating
 	// every time. On the very first recording we make an upfront allocation sized
 	// to the configured max duration so appends never need to grow the slice.
@@ -233,16 +314,30 @@ func (p *Pipeline) StartRecording() {
 // StopRecording stops accumulating and triggers processing
 // Returns true if recording was stopped and processing started, false if not recording
 func (p *Pipeline) StopRecording() bool {
+	return p.stopRecordingBecause(StopReleased)
+}
+
+// stopRecordingBecause ends the recording, recording why. The reason is
+// logged at info level with the elapsed time: a recording that ends before
+// the user released the key is otherwise indistinguishable from one that did
+// not, which made sussurro-xvj.36 impossible to diagnose from a log.
+func (p *Pipeline) stopRecordingBecause(reason StopReason) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if !p.isRecording {
+	if !p.isRecording.Load() {
 		return false
 	}
 
-	p.isRecording = false
+	p.isRecording.Store(false)
 	p.isTranscribing = true
-	p.log.Debug("Recording stopped", "buffer_size", len(p.audioBuffer))
+
+	elapsed := time.Since(p.recordingStart)
+	p.log.Info("Recording stopped",
+		"reason", reason,
+		"elapsed", elapsed.Round(time.Millisecond),
+		"samples", len(p.audioBuffer),
+		"dropped_frames", p.droppedFrames.Load())
 
 	// Stop streaming before the final pass so partial inference cannot delay
 	// it or publish text belonging to the session just ended. The last
@@ -383,12 +478,18 @@ func (p *Pipeline) captureLoop() {
 	for {
 		select {
 		case chunk := <-p.audioChan:
+			lockWait := time.Now()
 			p.mu.Lock()
-			if p.isRecording {
+			p.warnIfSlow("acquiring the pipeline lock", lockWait)
+			if p.isRecording.Load() {
 				// Safety check: Auto-stop if recording gets too long (prevents OOM/Stuck state)
 				if len(p.audioBuffer) >= maxSamples {
-					p.log.Warn("Max recording duration reached, forcing stop", "limit", p.maxDuration)
-					p.isRecording = false
+					p.log.Warn("Max recording duration reached, forcing stop",
+						"limit", p.maxDuration,
+						"reason", StopMaxDuration,
+						"elapsed", time.Since(p.recordingStart).Round(time.Millisecond),
+						"dropped_frames", p.droppedFrames.Load())
+					p.isRecording.Store(false)
 					p.isTranscribing = true
 					p.notifyState(session.StateTranscribing)
 					p.stopStreaming()

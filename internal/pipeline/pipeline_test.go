@@ -270,7 +270,7 @@ func TestSnapshotRecordingReportsNoRecordingWhenIdle(t *testing.T) {
 
 func TestSnapshotRecordingCopiesBuffer(t *testing.T) {
 	p := newTestPipeline(t, &stubTranscriber{}, &stubCleaner{}, stubContext{})
-	p.isRecording = true
+	p.isRecording.Store(true)
 	p.audioBuffer = []float32{0.1, 0.2, 0.3}
 
 	snapshot, recording := p.SnapshotRecording()
@@ -313,7 +313,7 @@ func TestStopReusesPartialCoveringTheWholeRecording(t *testing.T) {
 	streamer.Start()
 	streamer.runPass(streamer.Generation())
 
-	p.isRecording = true
+	p.isRecording.Store(true)
 	p.audioBuffer = make([]float32, 48000)
 	if !p.StopRecording() {
 		t.Fatal("StopRecording() = false, want the recording stopped")
@@ -347,7 +347,7 @@ func TestStopRetranscribesWhenAudioArrivedAfterThePartial(t *testing.T) {
 	streamer.Start()
 	streamer.runPass(streamer.Generation())
 
-	p.isRecording = true
+	p.isRecording.Store(true)
 	p.audioBuffer = make([]float32, 64000)
 	if !p.StopRecording() {
 		t.Fatal("StopRecording() = false, want the recording stopped")
@@ -368,7 +368,7 @@ func TestStopTranscribesNormallyWithoutAStreamer(t *testing.T) {
 	p := newTestPipeline(t, asr, llm, stubContext{info: &ctxProvider.ContextInfo{}})
 	p.SetResultConsumer(consumer)
 
-	p.isRecording = true
+	p.isRecording.Store(true)
 	p.audioBuffer = make([]float32, 48000)
 	if !p.StopRecording() {
 		t.Fatal("StopRecording() = false, want the recording stopped")
@@ -482,5 +482,76 @@ func TestFinalPassMovesFromTranscribingToCleaningUp(t *testing.T) {
 	}
 	if notifier.phases[0] != session.StateCleaningUp {
 		t.Errorf("phase after ASR = %s, want cleaning up", notifier.phases[0])
+	}
+}
+
+// TestStopReasonDistinguishesReleaseFromCap covers sussurro-xvj.37: a
+// recording that ends early must be separable in the log from one the user
+// ended, otherwise the cause cannot be identified after the fact.
+func TestStopReasonDistinguishesReleaseFromCap(t *testing.T) {
+	if StopReleased == StopMaxDuration {
+		t.Fatal("stop reasons must be distinguishable")
+	}
+	for _, reason := range []StopReason{StopReleased, StopMaxDuration} {
+		if string(reason) == "" {
+			t.Errorf("stop reason %v has no name", reason)
+		}
+	}
+}
+
+// TestDroppedFramesAreCounted checks the counter the stop log reports. A
+// silent drop loses speech with no trace, which is what made the fault
+// impossible to diagnose.
+func TestDroppedFramesAreCounted(t *testing.T) {
+	asr := &stubTranscriber{text: "the quick brown fox"}
+	llm := &stubCleaner{text: "The quick brown fox."}
+	p := newTestPipeline(t, asr, llm, stubContext{info: &ctxProvider.ContextInfo{}})
+
+	if got := p.droppedFrames.Load(); got != 0 {
+		t.Fatalf("droppedFrames = %d before any drop, want 0", got)
+	}
+
+	p.onFrameDropped()
+	p.onFrameDropped()
+
+	if got := p.droppedFrames.Load(); got != 2 {
+		t.Errorf("droppedFrames = %d, want 2", got)
+	}
+}
+
+// TestDropCounterResetsPerRecording keeps the count attributable to one
+// utterance rather than accumulating across a session.
+func TestDropCounterResetsPerRecording(t *testing.T) {
+	asr := &stubTranscriber{text: "the quick brown fox"}
+	llm := &stubCleaner{text: "The quick brown fox."}
+	p := newTestPipeline(t, asr, llm, stubContext{info: &ctxProvider.ContextInfo{}})
+
+	p.onFrameDropped()
+	p.StartRecording()
+
+	if got := p.droppedFrames.Load(); got != 0 {
+		t.Errorf("droppedFrames = %d after StartRecording, want the count reset", got)
+	}
+}
+
+// TestStopRecordingReportsElapsed checks a recording start time is captured,
+// so the stop log can say how long it actually ran.
+func TestStopRecordingReportsElapsed(t *testing.T) {
+	asr := &stubTranscriber{text: "the quick brown fox"}
+	llm := &stubCleaner{text: "The quick brown fox."}
+	p := newTestPipeline(t, asr, llm, stubContext{info: &ctxProvider.ContextInfo{}})
+	p.SetResultConsumer(&recordingConsumer{})
+
+	p.StartRecording()
+	if p.recordingStart.IsZero() {
+		t.Fatal("recordingStart not set by StartRecording")
+	}
+
+	if !p.stopRecordingBecause(StopReleased) {
+		t.Fatal("stopRecordingBecause returned false for an active recording")
+	}
+	// A stop with nothing recording must report that, not invent a session.
+	if p.stopRecordingBecause(StopReleased) {
+		t.Error("stopRecordingBecause returned true when not recording")
 	}
 }
