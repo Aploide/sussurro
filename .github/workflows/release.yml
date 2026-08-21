@@ -36,10 +36,11 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # The packages listed here are pure Go, so this job needs neither
-      # whisper.cpp nor GTK and stays fast enough to gate every release.
-      # internal/ui and the cmd packages are excluded: they pull in the
-      # WebKitGTK cgo dependency, which the race detector cannot build here.
+      # These packages are pure Go: no whisper.cpp or GTK build needed, which
+      # keeps the job fast enough to gate every release. The packages that
+      # link whisper are covered by "make test", which supplies the same
+      # CGO_LDFLAGS as the binary — with Vulkan enabled a plain "go test"
+      # cannot resolve the backend symbols.
       - name: Vet and test
         shell: bash
         run: |
@@ -49,7 +50,6 @@ jobs:
             ./internal/delivery/...
             ./internal/input/...
             ./internal/llm/...
-            ./internal/pipeline/...
             ./internal/review/...
             ./internal/session/...
             ./internal/setup/...

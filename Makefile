@@ -69,9 +69,34 @@ ifeq ($(OS),Windows_NT)
 	LIBRARY_PATH :=
 else
 	EXE :=
-	WHISPER_CMAKE_EXTRA :=
-	GGML_VULKAN_PATH :=
 	WIN_LDFLAGS :=
+	# Linux: offload whisper to the GPU through Vulkan when the SDK is
+	# present. Vulkan is the portable choice — it covers AMD, Intel and
+	# NVIDIA without a vendor runtime install, which is why other local
+	# dictation apps ship it rather than ROCm or CUDA.
+	#
+	# Opt out with WHISPER_VULKAN=0 for a pure CPU build.
+	WHISPER_VULKAN ?= auto
+	ifeq ($(WHISPER_VULKAN),auto)
+		HAS_VULKAN := $(shell pkg-config --exists vulkan 2>/dev/null && command -v glslc >/dev/null 2>&1 && echo yes || echo no)
+	else ifeq ($(WHISPER_VULKAN),0)
+		HAS_VULKAN := no
+	else
+		HAS_VULKAN := yes
+	endif
+	ifeq ($(HAS_VULKAN),yes)
+		# patch-whisper.sh renames the GGML_ CMake options, hence WSP_.
+		WHISPER_CMAKE_EXTRA := -DWSP_GGML_VULKAN=ON
+		GGML_VULKAN_PATH := -L$(WHISPER_DIR)/build/ggml/src/ggml-vulkan
+		# Passed via CGO_LDFLAGS rather than the bindings' #cgo directives:
+		# the bindings are a vendored upstream file, and the backend is only
+		# present when whisper was configured with Vulkan enabled.
+		VULKAN_LDFLAGS := -lggml-vulkan -lvulkan
+	else
+		WHISPER_CMAKE_EXTRA :=
+		GGML_VULKAN_PATH :=
+		VULKAN_LDFLAGS :=
+	endif
 endif
 
 # Conservative CPU target for Apple Silicon.
@@ -130,6 +155,7 @@ UI_TAGS :=
 endif  # !Windows_NT
 
 # Base CGO link flags (whisper + llama)
+VULKAN_LDFLAGS ?=
 BASE_LDFLAGS := -L$(WHISPER_DIR)/build/src -L$(WHISPER_DIR)/build/ggml/src \
 	-L$(WHISPER_DIR)/build/ggml/src/ggml-cpu $(GGML_METAL_PATH) \
 	-L$(WHISPER_DIR)/build/ggml/src/ggml-blas -lwhisper
@@ -138,7 +164,16 @@ BASE_LDFLAGS := -L$(WHISPER_DIR)/build/src -L$(WHISPER_DIR)/build/ggml/src \
 export C_INCLUDE_PATH
 export LIBRARY_PATH
 
-.PHONY: all build compat-pc run clean deps
+.PHONY: all build compat-pc run clean deps test
+
+# Packages that link whisper need the same CGO_LDFLAGS as the binary: with
+# Vulkan enabled, a plain "go test ./..." cannot resolve the backend symbols.
+# Use this target rather than calling go test directly.
+test: deps compat-pc
+	PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_UI)" \
+	CGO_CFLAGS="$(LAYER_CFLAGS) $(WV_CFLAGS)" \
+	CGO_LDFLAGS="$(BASE_LDFLAGS) $(GGML_VULKAN_PATH) $(VULKAN_LDFLAGS) $(LAYER_LDFLAGS) $(WV_LDFLAGS)" \
+	go test $(UI_TAGS) $(if $(RACE),-race) ./internal/... ./cmd/...
 
 all: build build-transcribe
 
@@ -215,10 +250,11 @@ else ifeq ($(UNAME_S),Darwin)
 	go build $(GO_LDFLAGS) -o $(BUILD_DIR)/$(APP_NAME) ./$(CMD_DIR)
 else
 	@echo "  Layer shell  : $(HAS_LAYER_SHELL)$(if $(LAYER_SHELL_PC), ($(LAYER_SHELL_PC)))"
+	@echo "  Vulkan       : $(HAS_VULKAN)"
 	@echo "  Build tags   : $(UI_TAGS)"
 	PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_UI)" \
 	CGO_CFLAGS="$(LAYER_CFLAGS) $(WV_CFLAGS)" \
-	CGO_LDFLAGS="$(BASE_LDFLAGS) $(LAYER_LDFLAGS) $(WV_LDFLAGS)" \
+	CGO_LDFLAGS="$(BASE_LDFLAGS) $(GGML_VULKAN_PATH) $(VULKAN_LDFLAGS) $(LAYER_LDFLAGS) $(WV_LDFLAGS)" \
 	go build $(UI_TAGS) $(GO_LDFLAGS) -o $(BUILD_DIR)/$(APP_NAME) ./$(CMD_DIR)
 endif
 

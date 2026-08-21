@@ -239,6 +239,14 @@ static GdkFilterReturn x11_event_filter(GdkXEvent *xevent, GdkEvent *event, gpoi
     OverlayData *od = (OverlayData *)data;
     XEvent *xe = (XEvent *)xevent;
 
+    if (xe->type == KeyPress || xe->type == KeyRelease) {
+        g_debug("sussurro hotkey filter: type=%s keycode=%d state=0x%x "
+                "want_keycode=%d want_mods=0x%x pressed=%d",
+                xe->type == KeyPress ? "press" : "release",
+                (int)xe->xkey.keycode, (unsigned int)xe->xkey.state,
+                od->hk_keycode, od->hk_mods, od->hk_pressed);
+    }
+
     if (xe->type == KeyPress) {
         if ((int)xe->xkey.keycode == od->hk_keycode &&
             (xe->xkey.state & od->hk_mods) == od->hk_mods) {

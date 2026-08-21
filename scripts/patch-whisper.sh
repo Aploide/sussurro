@@ -11,6 +11,23 @@ if [ ! -d "$WHISPER_DIR" ]; then
     exit 1
 fi
 
+# The rename is not idempotent: running it twice turns wsp_ggml_ into
+# wsp_wsp_ggml_ and leaves the tree unbuildable, with CMake options renamed
+# out from under the flags the Makefile passes. Detect an already-patched
+# tree and stop before doing any damage.
+if grep -rqs 'wsp_wsp_ggml_\|WSP_WSP_GGML_' "$WHISPER_DIR/ggml/include" 2>/dev/null; then
+    echo "ERROR: $WHISPER_DIR is doubly patched (wsp_wsp_ggml_ present)." >&2
+    echo "Restore it with: git -C $WHISPER_DIR checkout -- . && ./scripts/patch-whisper.sh" >&2
+    exit 1
+fi
+
+if grep -rqs 'wsp_ggml_' "$WHISPER_DIR/ggml/include" 2>/dev/null; then
+    echo "whisper.cpp is already patched; skipping symbol rename."
+    ALREADY_PATCHED=1
+else
+    ALREADY_PATCHED=0
+fi
+
 echo "Patching whisper.cpp to rename ggml and gguf symbols..."
 
 # Detect OS for sed syntax (macOS requires -i '', Linux requires -i)
@@ -27,6 +44,7 @@ fi
 # gguf_ -> wsp_gguf_
 # GGUF_ -> WSP_GGUF_
 # quantize_row_ -> wsp_quantize_row_ (and related functions)
+if [ "$ALREADY_PATCHED" = "0" ]; then
 find "$WHISPER_DIR" -type f \( -name "*.c" -o -name "*.cpp" -o -name "*.h" -o -name "*.cu" -o -name "*.m" -o -name "*.go" -o -name "*.metal" -o -name "CMakeLists.txt" -o -name "*.cmake" \) -not -path "*/.git/*" -print0 | xargs -0 $SED_INPLACE \
     -e 's/ggml_/wsp_ggml_/g' \
     -e 's/GGML_/WSP_GGML_/g' \
@@ -86,6 +104,12 @@ if [ -d "$WHISPER_DIR/ggml/src/ggml-vulkan" ]; then
         "$WHISPER_DIR/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp"
 fi
 
+fi  # ALREADY_PATCHED
+
+# Steps 8 and 9 below are idempotent (each is guarded by its own grep), so
+# they run even on an already-patched tree — that is how a Vulkan rebuild
+# picks up the new link flags without redoing the rename.
+
 # 8. Ensure Go bindings can locate headers and static libs without external env vars
 BINDINGS_GO="$WHISPER_DIR/bindings/go/whisper.go"
 if [ -f "$BINDINGS_GO" ]; then
@@ -105,5 +129,11 @@ if [ -f "$BINDINGS_GO" ]; then
         mv "$tmp_file" "$BINDINGS_GO"
     fi
 fi
+
+# Note: Vulkan link flags are deliberately NOT injected here. Enabling the
+# backend needs -Wl,--whole-archive (ggml registers it from a static
+# initialiser nothing references), and cgo rejects that flag inside a #cgo
+# directive. The Makefile supplies it through CGO_LDFLAGS instead, which is
+# not subject to that allowlist. See WHISPER_VULKAN in the Makefile.
 
 echo "Patch applied successfully."
