@@ -217,6 +217,7 @@ func run() {
 		pipe.SetUINotifier(uiMgr)
 		// Route review presentation to the overlay now that a UI exists.
 		presentToUI.Set(uiMgr.Present)
+		uiMgr.SetBufferFillSource(pipe.BufferFill)
 		uiMgr.SetLowercaseOutputCallback(func(v bool) { pipe.SetLowercaseOutput(v) })
 		uiMgr.SetSkipLLMCleanupCallback(func(v bool) { pipe.SetSkipLLMCleanup(v) })
 

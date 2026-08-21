@@ -49,6 +49,15 @@
 #define BAR_MAX_HEIGHT 40.0
 #define RMS_SCALE       0.08
 
+/* ---- Recording buffer fill indicator ---- */
+/* A thin track inset from the capsule's bottom edge. It is always drawn while
+ * recording, so an approaching cap is never a surprise. */
+#define FILL_TRACK_INSET_X  18.0
+#define FILL_TRACK_INSET_Y   7.0
+#define FILL_TRACK_HEIGHT    2.5
+/* Past this fraction the fill turns warning-coloured. */
+#define FILL_WARN_FRACTION   0.8
+
 /* ---- Dot parameters ---- */
 #define DOT_RADIUS   3.0
 #define DOT_SPACING 10.0
@@ -73,6 +82,11 @@ typedef struct {
     float      rms;
 } IdleRMSArg;
 
+typedef struct {
+    GtkWidget *win;
+    double     fill;
+} IdleFillArg;
+
 /* ---- Public API ---- */
 
 /* Create the overlay window (layer-shell if possible, else always-on-top fallback) */
@@ -89,6 +103,7 @@ void overlay_install_hotkey(GtkWidget *win, const char *push_to_talk,
 /* Thread-safe async state/RMS updates via gdk_threads_add_idle */
 void overlay_set_state_async(GtkWidget *win, int state);
 void overlay_push_rms_async(GtkWidget *win, float rms);
+void overlay_push_fill_async(GtkWidget *win, double fill);
 
 /* Idle callbacks (called by GLib event loop, not directly from Go) */
 gboolean idle_set_state(gpointer data);

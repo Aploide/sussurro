@@ -177,6 +177,11 @@ func (o *linuxOverlay) PushRMS(rms float32) {
 	C.overlay_push_rms_async((*C.GtkWidget)(o.win), C.float(rms))
 }
 
+// PushBufferFill implements FillIndicator.
+func (o *linuxOverlay) PushBufferFill(fill float64) {
+	C.overlay_push_fill_async((*C.GtkWidget)(o.win), C.double(fill))
+}
+
 func (o *linuxOverlay) Close() {
 	o.Hide()
 }

@@ -22,6 +22,11 @@ struct OverlayData {
     double       bar_heights[ITEM_COUNT]; /* smoothed current heights         */
     double       bar_targets[ITEM_COUNT]; /* targets from RMS                 */
 
+    /* Recording buffer fill, 0 to 1. Smoothed toward its target on the
+       animation tick like the bars, so the track glides rather than steps. */
+    double       fill;
+    double       fill_target;
+
     /* Shimmer phase for transcribing text */
     double       shimmer_phase;
 
@@ -53,6 +58,23 @@ struct OverlayData {
 /* ------------------------------------------------------------------ */
 /* Drawing helpers                                                     */
 /* ------------------------------------------------------------------ */
+
+/* Appends a rounded-rectangle sub-path. The corner radius is clamped so a
+ * shape shorter or narrower than its own corners still renders, degenerating
+ * to a stadium rather than to overlapping arcs. */
+static void rounded_rect(cairo_t *cr, double x, double y,
+                         double w, double h, double r)
+{
+    if (r > w / 2.0) r = w / 2.0;
+    if (r > h / 2.0) r = h / 2.0;
+
+    cairo_new_sub_path(cr);
+    cairo_arc(cr, x + r,     y + r,     r, M_PI,         3.0*M_PI/2.0);
+    cairo_arc(cr, x + w - r, y + r,     r, 3.0*M_PI/2.0, 0.0);
+    cairo_arc(cr, x + w - r, y + h - r, r, 0.0,          M_PI/2.0);
+    cairo_arc(cr, x + r,     y + h - r, r, M_PI/2.0,     M_PI);
+    cairo_close_path(cr);
+}
 
 static void pill_path(cairo_t *cr)
 {
@@ -103,6 +125,40 @@ static void draw_idle_dots(cairo_t *cr, OverlayData *od)
     }
 }
 
+/* Draws the recording buffer fill as a thin track along the capsule's lower
+ * edge. Always drawn while recording rather than appearing near the limit: an
+ * indicator that materialises late is itself a surprise, and the user asked to
+ * see the fill throughout.
+ *
+ * The track turns warning-coloured past FILL_WARN_FRACTION, so the approach to
+ * a truncating cap reads at a glance without needing a number. */
+static void draw_buffer_fill(cairo_t *cr, OverlayData *od)
+{
+    double track_w = OVERLAY_WIDTH - 2.0 * FILL_TRACK_INSET_X;
+    double x = FILL_TRACK_INSET_X;
+    double y = OVERLAY_HEIGHT - FILL_TRACK_INSET_Y - FILL_TRACK_HEIGHT;
+    double r = FILL_TRACK_HEIGHT / 2.0;
+
+    /* Unfilled track: dim enough to read as a groove rather than content. */
+    cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.18);
+    rounded_rect(cr, x, y, track_w, FILL_TRACK_HEIGHT, r);
+    cairo_fill(cr);
+
+    double fill_w = track_w * od->fill;
+    if (fill_w <= 0.0) return;
+    /* Never narrower than the cap it is drawn with, or the rounded ends
+       degenerate into a dot at very low fill. */
+    if (fill_w < FILL_TRACK_HEIGHT) fill_w = FILL_TRACK_HEIGHT;
+
+    if (od->fill >= FILL_WARN_FRACTION) {
+        cairo_set_source_rgba(cr, 1.0, 0.62, 0.23, 0.95);
+    } else {
+        cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.55);
+    }
+    rounded_rect(cr, x, y, fill_w, FILL_TRACK_HEIGHT, r);
+    cairo_fill(cr);
+}
+
 static void draw_recording_bars(cairo_t *cr, OverlayData *od)
 {
     double total_w = (ITEM_COUNT - 1) * BAR_SPACING;
@@ -117,16 +173,7 @@ static void draw_recording_bars(cairo_t *cr, OverlayData *od)
         double x  = cx - BAR_WIDTH / 2.0;
         double y  = center_y - h / 2.0;
 
-        /* Rounded rectangle */
-        double r = BAR_RADIUS;
-        if (r > h / 2.0) r = h / 2.0;
-
-        cairo_new_sub_path(cr);
-        cairo_arc(cr, x + r,           y + r,     r, M_PI,       3.0*M_PI/2.0);
-        cairo_arc(cr, x + BAR_WIDTH-r, y + r,     r, 3.0*M_PI/2.0, 0.0);
-        cairo_arc(cr, x + BAR_WIDTH-r, y + h - r, r, 0.0,         M_PI/2.0);
-        cairo_arc(cr, x + r,           y + h - r, r, M_PI/2.0,   M_PI);
-        cairo_close_path(cr);
+        rounded_rect(cr, x, y, BAR_WIDTH, h, BAR_RADIUS);
         cairo_fill(cr);
     }
 }
@@ -343,6 +390,7 @@ static gboolean on_draw(GtkWidget *widget, cairo_t *cr, gpointer data)
         break;
     case OVERLAY_STATE_RECORDING:
         draw_recording_bars(cr, od);
+        draw_buffer_fill(cr, od);
         break;
     case OVERLAY_STATE_TRANSCRIBING:
     case OVERLAY_STATE_CLEANING_UP:
@@ -368,6 +416,8 @@ static gboolean animation_tick(gpointer data)
     for (int i = 0; i < ITEM_COUNT; i++) {
         od->bar_heights[i] = od->bar_heights[i] * 0.7 + od->bar_targets[i] * 0.3;
     }
+
+    od->fill = od->fill * 0.9 + od->fill_target * 0.1;
 
     gtk_widget_queue_draw(od->drawing_area);
     return G_SOURCE_CONTINUE;
@@ -691,6 +741,13 @@ gboolean idle_set_state(gpointer data)
     IdleStateArg *arg = (IdleStateArg *)data;
     OverlayData  *od  = (OverlayData *)g_object_get_data(G_OBJECT(arg->win), "overlay-data");
     if (od) {
+        /* Entering RECORDING starts a fresh buffer, so clear the fill rather
+           than letting the smoothing drag the previous recording's value down
+           across the first second of the new one. */
+        if (arg->state == OVERLAY_STATE_RECORDING && od->state != OVERLAY_STATE_RECORDING) {
+            od->fill        = 0.0;
+            od->fill_target = 0.0;
+        }
         od->state = arg->state;
         gtk_widget_queue_draw(od->drawing_area);
     }
@@ -734,6 +791,28 @@ void overlay_push_rms_async(GtkWidget *win, float rms)
     arg->win = win;
     arg->rms = rms;
     gdk_threads_add_idle(idle_push_rms, arg);
+}
+
+gboolean idle_push_fill(gpointer data)
+{
+    IdleFillArg *arg = (IdleFillArg *)data;
+    OverlayData *od  = (OverlayData *)g_object_get_data(G_OBJECT(arg->win), "overlay-data");
+    if (od) {
+        double fill = arg->fill;
+        if (fill < 0.0) fill = 0.0;
+        if (fill > 1.0) fill = 1.0;
+        od->fill_target = fill;
+    }
+    g_free(arg);
+    return G_SOURCE_REMOVE;
+}
+
+void overlay_push_fill_async(GtkWidget *win, double fill)
+{
+    IdleFillArg *arg = g_new(IdleFillArg, 1);
+    arg->win  = win;
+    arg->fill = fill;
+    gdk_threads_add_idle(idle_push_fill, arg);
 }
 
 /* ------------------------------------------------------------------ */

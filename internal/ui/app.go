@@ -33,6 +33,13 @@ type Manager struct {
 	// Called when the user toggles LLM cleanup bypass in Settings.
 	onSkipLLMCleanup func(bool)
 
+	// fillSource reports how full the recording buffer is, from 0 to 1, and
+	// whether a meaningful cap exists. It is sampled on the UI goroutine
+	// rather than pushed from the audio callback: reading the fill takes the
+	// pipeline lock, and the RMS callback runs on the realtime audio thread,
+	// where taking that lock is what stalled capture in sussurro-xvj.36.
+	fillSource func() (float64, bool)
+
 	// trayReady reports whether the system tray has appeared. Until it does,
 	// the overlay stays visible even when idle: its right-click menu is the
 	// documented fallback route to Settings and Quit, and some desktops never
@@ -268,6 +275,14 @@ func (m *Manager) processUpdates() {
 
 		case rms := <-m.rmsCh:
 			m.overlay.PushRMS(rms)
+			// RMS arrives once per audio chunk while recording, which is
+			// exactly the cadence the fill bar wants, so it rides along
+			// rather than running a timer of its own.
+			if m.fillSource != nil {
+				if fill, bounded := m.fillSource(); bounded {
+					pushBufferFill(m.overlay, fill)
+				}
+			}
 
 		case <-m.quitCh:
 			return
@@ -307,6 +322,15 @@ func (m *Manager) applyLowercaseOutput(v bool) {
 	if m.onLowercaseOutput != nil {
 		m.onLowercaseOutput(v)
 	}
+}
+
+// SetBufferFillSource stores a function reporting recording-buffer fill from
+// 0 to 1, and whether a meaningful cap exists. An unbounded cap reports false
+// and the overlay draws no indicator, rather than one pinned at zero.
+//
+// Must be called before Run().
+func (m *Manager) SetBufferFillSource(fn func() (float64, bool)) {
+	m.fillSource = fn
 }
 
 // SetSkipLLMCleanupCallback stores a function that is called whenever the user

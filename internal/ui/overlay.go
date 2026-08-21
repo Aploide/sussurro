@@ -57,3 +57,19 @@ type HotkeyBindings struct {
 	OnRelease func()
 	OnToggle  func()
 }
+
+// FillIndicator is the optional recording-buffer extension to Overlay.
+// Platforms that can draw the fill implement it; those that cannot keep
+// working through PushRMS alone, so the indicator degrades to a plain
+// waveform rather than failing to build.
+type FillIndicator interface {
+	// PushBufferFill reports how full the recording buffer is, from 0 to 1.
+	PushBufferFill(fill float64)
+}
+
+// pushBufferFill forwards fill to overlay when the platform can draw it.
+func pushBufferFill(overlay Overlay, fill float64) {
+	if indicator, ok := overlay.(FillIndicator); ok {
+		indicator.PushBufferFill(fill)
+	}
+}
