@@ -48,6 +48,7 @@ type Streamer struct {
 	snapshot   SnapshotFunc
 	onPartial  PartialFunc
 	newTicker  func() Ticker
+	sampleRate int
 	log        *slog.Logger
 
 	// generation identifies the active recording session. Bumping it
@@ -77,15 +78,27 @@ func NewStreamer(
 	snapshot SnapshotFunc,
 	onPartial PartialFunc,
 	interval time.Duration,
+	sampleRate int,
 	log *slog.Logger,
 ) *Streamer {
+	if sampleRate <= 0 {
+		sampleRate = 16000
+	}
 	return &Streamer{
 		transcribe: transcribe,
 		snapshot:   snapshot,
 		onPartial:  onPartial,
 		newTicker:  func() Ticker { return NewTicker(interval) },
+		sampleRate: sampleRate,
 		log:        log,
 	}
+}
+
+// minPartialSamples is the least audio worth transcribing. Below this whisper
+// tends to invent stock phrases rather than report silence.
+func minPartialSamples(sampleRate int) int {
+	const minAudio = 900 * time.Millisecond
+	return int(minAudio.Seconds() * float64(sampleRate))
 }
 
 // Generation returns the currently active session generation.
@@ -147,8 +160,12 @@ func (s *Streamer) stopAndTake() (text string, samples int, ok bool) {
 }
 
 // StopAndTakePartial ends the session and hands back the last partial it
-// published, so a caller holding the complete audio can skip a redundant
-// final pass when that partial already covered all of it.
+// published, with the number of samples that partial covered.
+//
+// Audio keeps arriving while a pass runs, so this has essentially never seen
+// the whole buffer — measured at 59200 samples against 80400. Callers must
+// treat it as provisional text to display, not as a finished transcription,
+// unless the tail it missed is too short to hold speech.
 func (s *Streamer) StopAndTakePartial() (text string, samples int, ok bool) {
 	return s.stopAndTake()
 }
@@ -210,6 +227,14 @@ func (s *Streamer) runPass(generation uint64) {
 
 	samples, ok := s.snapshot()
 	if !ok || len(samples) == 0 {
+		return
+	}
+
+	// Whisper hallucinates on near-silence, emitting stock phrases like
+	// "Thank you." or "you" from its training data. Showing those before the
+	// user has said anything is worse than showing nothing, so wait until
+	// there is enough audio to hold speech.
+	if len(samples) < minPartialSamples(s.sampleRate) {
 		return
 	}
 

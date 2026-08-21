@@ -240,7 +240,6 @@ func (p *Pipeline) StopRecording() bool {
 	p.isRecording = false
 	p.isTranscribing = true
 	p.log.Debug("Recording stopped", "buffer_size", len(p.audioBuffer))
-	p.notifyState(session.StateTranscribing)
 
 	// Stop streaming before the final pass so partial inference cannot delay
 	// it or publish text belonging to the session just ended. The last
@@ -253,17 +252,58 @@ func (p *Pipeline) StopRecording() bool {
 	bufferCopy := make([]float32, len(p.audioBuffer))
 	copy(bufferCopy, p.audioBuffer)
 
-	if hasPartial && partialSamples >= len(bufferCopy) {
-		p.log.Debug("Reusing final partial transcription",
-			"samples", partialSamples, "text", partial)
+	// Notify after taking the partial, so the transcribing state can carry the
+	// text already on screen rather than blanking it.
+	p.notifyTranscribing(partial)
+
+	// Audio keeps arriving while a partial is running, so a completed partial
+	// has essentially never seen the whole buffer — measured 59200 samples
+	// against 80400, a 1.3s gap. Requiring full coverage therefore never
+	// fired. Reuse only when the tail it missed is too short to contain
+	// speech; otherwise the final pass is genuinely needed.
+	if hasPartial && len(bufferCopy)-partialSamples <= reusableTailSamples(p.vadParams.SampleRate) {
+		p.log.Debug("Reusing partial transcription",
+			"partial_samples", partialSamples, "buffer_samples", len(bufferCopy),
+			"text", partial)
 		p.wg.Add(1)
 		go p.completeFromPartial(partial)
 		return true
 	}
 
+	p.log.Debug("Final pass needed",
+		"partial_samples", partialSamples, "buffer_samples", len(bufferCopy))
 	p.wg.Add(1)
 	go p.processSegment(bufferCopy)
 	return true
+}
+
+// notifyTranscribing announces the final pass, carrying the last partial so
+// the overlay keeps showing it. Blanking the text the user is reading, only
+// to replace it moments later with the same words, reads as the app losing
+// their dictation.
+func (p *Pipeline) notifyTranscribing(partial string) {
+	if p.uiNotifier == nil {
+		return
+	}
+	if holder, ok := p.uiNotifier.(TranscribingNotifier); ok && partial != "" {
+		holder.OnTranscribing(partial)
+		return
+	}
+	p.uiNotifier.OnStateChange(session.StateTranscribing)
+}
+
+// TranscribingNotifier is the optional extension a notifier implements to
+// keep provisional text visible while the final pass runs.
+type TranscribingNotifier interface {
+	OnTranscribing(partial string)
+}
+
+// reusableTailSamples is how much unseen audio a partial may have missed and
+// still be reused. Speech shorter than this cannot carry a word, so nothing
+// is lost by not transcribing it; anything longer might.
+func reusableTailSamples(sampleRate int) int {
+	const tail = 250 * time.Millisecond
+	return int(tail.Seconds() * float64(sampleRate))
 }
 
 // takeStreamingPartial ends the streaming session and returns its last

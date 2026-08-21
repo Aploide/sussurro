@@ -42,6 +42,10 @@ type Manager struct {
 	// documented fallback route to Settings and Quit, and some desktops never
 	// host an SNI item at all. Hiding it there would leave no way in.
 	trayReady atomic.Bool
+
+	// hideTimer defers hiding the overlay so finished text can be read.
+	hideMu    sync.Mutex
+	hideTimer *time.Timer
 }
 
 // NewManager constructs the Manager.  Call Run() to start the event loop.
@@ -94,10 +98,40 @@ func (m *Manager) Run() {
 	m.settings.Run()
 }
 
+// hideLinger is how long finished text stays on screen after a dictation
+// ends. Hiding the instant the key is released gives the user no chance to
+// read what was delivered.
+const hideLinger = time.Second
+
 // render draws a model, keeping the overlay on screen while the tray has not
 // appeared so its context menu stays reachable.
+//
+// A model that would hide the overlay is deferred by hideLinger, and
+// cancelled if anything else arrives first, so a new dictation is never
+// delayed by the previous one's linger.
 func (m *Manager) render(model ViewModel) {
-	present(m.overlay, model, m.trayReady.Load())
+	trayReady := m.trayReady.Load()
+
+	m.hideMu.Lock()
+	if m.hideTimer != nil {
+		m.hideTimer.Stop()
+		m.hideTimer = nil
+	}
+
+	if model.Visible() || !trayReady {
+		m.hideMu.Unlock()
+		present(m.overlay, model, trayReady)
+		return
+	}
+
+	// Draw the final state, then hide after the linger.
+	m.hideTimer = time.AfterFunc(hideLinger, func() {
+		m.hideMu.Lock()
+		m.hideTimer = nil
+		m.hideMu.Unlock()
+		present(m.overlay, model, trayReady)
+	})
+	m.hideMu.Unlock()
 }
 
 // markTrayReady records that the tray is hosting Sussurro, which releases the
@@ -134,6 +168,18 @@ func (m *Manager) OnStateChange(state AppState) {
 		return
 	}
 	m.publish(CompactModel(state))
+}
+
+// OnTranscribing implements pipeline.TranscribingNotifier: it keeps the text
+// already on screen while the final pass runs, rather than blanking it.
+func (m *Manager) OnTranscribing(partial string) {
+	m.Present(ViewModel{
+		State:      session.StateTranscribing,
+		Transcript: partial,
+		Partial:    true,
+		Status:     "Transcribing",
+		Mode:       ViewExpanded,
+	})
 }
 
 // Present queues an already-built view model for display. Review-mode

@@ -3,6 +3,7 @@ package ui
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/aploide/sussurro/internal/session"
 )
@@ -140,6 +141,7 @@ func TestOverlayStaysUpUntilTheTrayAppears(t *testing.T) {
 	if overlay.shown() {
 		t.Error("overlay still shown once the tray is available")
 	}
+	// present() hides immediately; the linger lives in Manager.render.
 }
 
 func TestMarkTrayReadyTakesTheFallbackDown(t *testing.T) {
@@ -152,9 +154,23 @@ func TestMarkTrayReadyTakesTheFallbackDown(t *testing.T) {
 	}
 
 	manager.markTrayReady()
-	if overlay.shown() {
-		t.Error("overlay still shown after the tray appeared")
+
+	// Hiding is deferred by hideLinger so finished text can be read.
+	waitFor(t, func() bool { return !overlay.shown() },
+		"overlay still shown after the tray appeared")
+}
+
+// waitFor polls until condition holds, failing with msg on timeout.
+func waitFor(t *testing.T, condition func() bool, msg string) {
+	t.Helper()
+	deadline := time.Now().Add(hideLinger + 2*time.Second)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
+	t.Error(msg)
 }
 
 func TestMarkTrayReadyIsIdempotent(t *testing.T) {
@@ -193,4 +209,67 @@ func TestVisibilityIsRaceFree(t *testing.T) {
 		go func() { defer wg.Done(); manager.markTrayReady() }()
 	}
 	wg.Wait()
+}
+
+func TestOverlayLingersBeforeHiding(t *testing.T) {
+	overlay := &visibilityOverlay{}
+	manager := &Manager{overlay: overlay}
+	manager.trayReady.Store(true)
+
+	manager.render(CompactModel(session.StateRecording))
+	if !overlay.shown() {
+		t.Fatal("overlay hidden while recording")
+	}
+
+	manager.render(CompactModel(session.StateIdle))
+
+	// Hiding the instant a dictation ends leaves no time to read the result.
+	if !overlay.shown() {
+		t.Error("overlay hid immediately, want it to linger")
+	}
+
+	waitFor(t, func() bool { return !overlay.shown() },
+		"overlay never hid after the linger elapsed")
+}
+
+func TestNewDictationCancelsAPendingHide(t *testing.T) {
+	overlay := &visibilityOverlay{}
+	manager := &Manager{overlay: overlay}
+	manager.trayReady.Store(true)
+
+	manager.render(CompactModel(session.StateIdle))
+	manager.render(CompactModel(session.StateRecording))
+
+	// The previous dictation's linger must not hide the new one mid-flow.
+	time.Sleep(hideLinger + 200*time.Millisecond)
+	if !overlay.shown() {
+		t.Error("a pending hide fired during a new recording")
+	}
+}
+
+func TestTranscribingKeepsTextOnScreen(t *testing.T) {
+	overlay := &presentingOverlay{}
+	manager := &Manager{
+		stateChangeCh: make(chan ViewModel, 8),
+		overlay:       overlay,
+	}
+
+	manager.OnTranscribing("the text so far")
+
+	select {
+	case model := <-manager.stateChangeCh:
+		// Blanking text the user is reading, only to restore the same words
+		// moments later, reads as the app losing their dictation.
+		if model.Transcript != "the text so far" {
+			t.Errorf("Transcript = %q, want the partial retained", model.Transcript)
+		}
+		if model.State != session.StateTranscribing {
+			t.Errorf("State = %s, want transcribing", model.State)
+		}
+		if !model.Visible() {
+			t.Error("Visible() = false while transcribing with text")
+		}
+	default:
+		t.Fatal("OnTranscribing queued nothing")
+	}
 }

@@ -26,13 +26,19 @@ WHISPER_COMMIT ?= 764482c3175d9c3bc6089c1ec84df7d1b9537d83
 GO_LLAMA_COMMIT ?= b2c101738f26f466f1a30317d50a88ce7c0ada12
 
 # Detect number of CPU cores for parallel builds
-# Build parallelism. Defaults to 60% of the cores so a rebuild leaves the
+# Build parallelism. Defaults to 50% of the cores so a rebuild leaves the
 # machine usable — these builds are long, and saturating every core makes the
 # desktop unresponsive for their duration. This is a default, not a cap:
 # override with e.g. BUILD_JOBS=24 to use everything.
 NCORES    := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)
-BUILD_JOBS ?= $(shell n=$$(( $(NCORES) * 3 / 5 )); [ $$n -lt 1 ] && n=1; echo $$n)
+BUILD_JOBS ?= $(shell n=$$(( $(NCORES) / 2 )); [ $$n -lt 1 ] && n=1; echo $$n)
 NPROCS    := $(BUILD_JOBS)
+
+# Run compilers at low CPU and IO priority, so an interactive desktop keeps
+# its responsiveness even while a long build saturates its share of cores.
+# Both tools are optional; the build works without them.
+NICE := $(shell command -v nice >/dev/null 2>&1 && echo "nice -n 19")
+NICE += $(shell command -v ionice >/dev/null 2>&1 && echo "ionice -c 3")
 
 # Detect OS and architecture for platform-specific builds
 UNAME_S := $(shell uname -s)
@@ -179,7 +185,7 @@ test: deps compat-pc
 	PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_UI)" \
 	CGO_CFLAGS="$(LAYER_CFLAGS) $(WV_CFLAGS)" \
 	CGO_LDFLAGS="$(BASE_LDFLAGS) $(GGML_VULKAN_PATH) $(VULKAN_LDFLAGS) $(LAYER_LDFLAGS) $(WV_LDFLAGS)" \
-	go test $(UI_TAGS) $(if $(RACE),-race) ./internal/... ./cmd/...
+	$(NICE) go test $(UI_TAGS) $(if $(RACE),-race) ./internal/... ./cmd/...
 
 all: build build-transcribe
 
@@ -201,7 +207,7 @@ deps:
 		-DWHISPER_BUILD_EXAMPLES=OFF \
 		$(WHISPER_CMAKE_EXTRA) \
 		$(if $(ARM_COMPAT_CFLAGS),-DCMAKE_C_FLAGS="$(ARM_COMPAT_CFLAGS)" -DCMAKE_CXX_FLAGS="$(ARM_COMPAT_CFLAGS)")
-	@cmake --build $(WHISPER_DIR)/build --config Release --target whisper -j $(NPROCS)
+	@$(NICE) cmake --build $(WHISPER_DIR)/build --config Release --target whisper -j $(NPROCS)
 ifeq ($(OS),Windows_NT)
 	@# The renamed CMake targets emit ggml archives without the "lib" prefix on
 	@# Windows; provide lib-prefixed copies so -lggml/-lggml-vulkan/... resolve.
@@ -228,9 +234,9 @@ endif
 	@echo "Building go-llama.cpp library..."
 	@$(MAKE) -C $(LLAMA_DIR) clean
 ifeq ($(OS),Windows_NT)
-	@$(MAKE) -j $(NPROCS) -C $(LLAMA_DIR) libbinding.a BUILD_TYPE=$(BUILD_TYPE) CMAKE_ARGS="$(LLAMA_CMAKE_ARGS)"
+	@$(NICE) $(MAKE) -j $(NPROCS) -C $(LLAMA_DIR) libbinding.a BUILD_TYPE=$(BUILD_TYPE) CMAKE_ARGS="$(LLAMA_CMAKE_ARGS)"
 else
-	@$(MAKE) -j $(NPROCS) -C $(LLAMA_DIR) libbinding.a BUILD_TYPE=$(BUILD_TYPE)
+	@$(NICE) $(MAKE) -j $(NPROCS) -C $(LLAMA_DIR) libbinding.a BUILD_TYPE=$(BUILD_TYPE)
 endif
 
 # Create webkit2gtk-4.0 compatibility .pc when only 4.1 is installed
@@ -257,12 +263,12 @@ else ifeq ($(UNAME_S),Darwin)
 else
 	@echo "  Layer shell  : $(HAS_LAYER_SHELL)$(if $(LAYER_SHELL_PC), ($(LAYER_SHELL_PC)))"
 	@echo "  Vulkan       : $(HAS_VULKAN)"
-	@echo "  Build jobs   : $(BUILD_JOBS) of $(NCORES) cores"
+	@echo "  Build jobs   : $(BUILD_JOBS) of $(NCORES) cores ($(NICE))"
 	@echo "  Build tags   : $(UI_TAGS)"
 	PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_UI)" \
 	CGO_CFLAGS="$(LAYER_CFLAGS) $(WV_CFLAGS)" \
 	CGO_LDFLAGS="$(BASE_LDFLAGS) $(GGML_VULKAN_PATH) $(VULKAN_LDFLAGS) $(LAYER_LDFLAGS) $(WV_LDFLAGS)" \
-	go build $(UI_TAGS) $(GO_LDFLAGS) -o $(BUILD_DIR)/$(APP_NAME) ./$(CMD_DIR)
+	$(NICE) go build $(UI_TAGS) $(GO_LDFLAGS) -o $(BUILD_DIR)/$(APP_NAME) ./$(CMD_DIR)
 endif
 
 # Build sussurro-transcribe CLI (no UI dependencies)

@@ -143,7 +143,7 @@ func newTestStreamer(t *testing.T, asr *blockingTranscriber, onPartial PartialFu
 	t.Helper()
 	ticker := newManualTicker()
 	snapshot := func() ([]float32, bool) { return make([]float32, 16000), true }
-	s := NewStreamer(asr, snapshot, onPartial, time.Millisecond, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	s := NewStreamer(asr, snapshot, onPartial, time.Millisecond, testSampleRate, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	s.newTicker = func() Ticker { return ticker }
 	t.Cleanup(func() {
 		s.Stop()
@@ -327,7 +327,7 @@ func TestStreamerSkipsPassWhenNotRecording(t *testing.T) {
 	recorder := newPartialRecorder()
 	ticker := newManualTicker()
 	s := NewStreamer(asr, func() ([]float32, bool) { return nil, false },
-		recorder.record, time.Millisecond, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		recorder.record, time.Millisecond, testSampleRate, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	s.newTicker = func() Ticker { return ticker }
 	t.Cleanup(func() { s.Stop(); s.Wait() })
 
@@ -494,4 +494,52 @@ func TestDiscardedPartialIsNotTaken(t *testing.T) {
 		t.Errorf("returned %q from an in-flight pass, want nothing", text)
 	}
 	asr.release <- "completed after the stop"
+}
+
+func TestStreamerIgnoresTooLittleAudio(t *testing.T) {
+	asr := newBlockingTranscriber()
+	recorder := newPartialRecorder()
+	ticker := newManualTicker()
+
+	// Less audio than a word takes to say: whisper answers such buffers with
+	// stock phrases from its training data ("Thank you.", "you"), which is
+	// worse than showing nothing.
+	short := minPartialSamples(testSampleRate) - 1
+	s := NewStreamer(asr, func() ([]float32, bool) { return make([]float32, short), true },
+		recorder.record, time.Millisecond, testSampleRate,
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	s.newTicker = func() Ticker { return ticker }
+	t.Cleanup(func() { s.Stop(); asr.drain(); s.Wait() })
+
+	s.Start()
+	ticker.tick(t)
+
+	select {
+	case <-asr.entered:
+		t.Fatal("transcribed a buffer too short to hold speech")
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+func TestStreamerTranscribesOnceThereIsEnoughAudio(t *testing.T) {
+	asr := newBlockingTranscriber()
+	recorder := newPartialRecorder()
+	ticker := newManualTicker()
+
+	enough := minPartialSamples(testSampleRate)
+	s := NewStreamer(asr, func() ([]float32, bool) { return make([]float32, enough), true },
+		recorder.record, time.Millisecond, testSampleRate,
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	s.newTicker = func() Ticker { return ticker }
+	t.Cleanup(func() { s.Stop(); asr.drain(); s.Wait() })
+
+	s.Start()
+	ticker.tick(t)
+	asr.awaitEntry(t)
+	asr.release <- "real speech"
+	recorder.awaitUpdate(t)
+
+	if texts, _ := recorder.snapshot(); len(texts) != 1 {
+		t.Errorf("published %v, want the transcription", texts)
+	}
 }

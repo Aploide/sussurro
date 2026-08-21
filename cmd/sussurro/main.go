@@ -178,7 +178,8 @@ func run() {
 			}
 		}
 		pipe.SetStreamer(pipeline.NewStreamer(
-			asrEngine, pipe.SnapshotRecording, onPartial, cfg.Workflow.StreamingInterval(), log,
+			asrEngine, pipe.SnapshotRecording, onPartial,
+			cfg.Workflow.StreamingInterval(), cfg.Audio.SampleRate, log,
 		))
 		log.Info("Partial transcription enabled", "interval", cfg.Workflow.StreamingInterval())
 	}

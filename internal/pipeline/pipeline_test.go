@@ -304,7 +304,7 @@ func TestStopReusesPartialCoveringTheWholeRecording(t *testing.T) {
 	p := newTestPipeline(t, asr, llm, stubContext{info: &ctxProvider.ContextInfo{}})
 	p.SetResultConsumer(consumer)
 
-	streamer := NewStreamer(asr, staticSnapshot(48000), nil, time.Millisecond,
+	streamer := NewStreamer(asr, staticSnapshot(48000), nil, time.Millisecond, testSampleRate,
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 	p.SetStreamer(streamer)
 
@@ -340,7 +340,7 @@ func TestStopRetranscribesWhenAudioArrivedAfterThePartial(t *testing.T) {
 	p.SetResultConsumer(consumer)
 
 	// The partial saw two seconds; the recording ended up holding four.
-	streamer := NewStreamer(asr, staticSnapshot(32000), nil, time.Millisecond,
+	streamer := NewStreamer(asr, staticSnapshot(32000), nil, time.Millisecond, testSampleRate,
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 	p.SetStreamer(streamer)
 	streamer.Start()
