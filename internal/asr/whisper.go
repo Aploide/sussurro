@@ -61,6 +61,27 @@ func NewEngine(modelPath string, threads int, language string, debug bool) (*Eng
 	}, nil
 }
 
+// SetDictionary primes the decoder with the user's vocabulary.
+//
+// whisper conditions on an initial prompt, so listing domain terms makes it
+// prefer them while decoding — "Base" over "bass" in a blockchain sentence,
+// and vice versa in a musical one. That judgement belongs here, where the
+// audio is: a post-hoc text substitution cannot weigh acoustics against
+// context, and cannot change word boundaries.
+//
+// Safe to call before use; takes effect on the next transcription.
+func (e *Engine) SetDictionary(terms []string) {
+	e.mutex.Lock()
+	defer e.mutex.Unlock()
+
+	if len(terms) == 0 {
+		return
+	}
+	// A comma-separated list is the form whisper's own examples use for
+	// vocabulary priming.
+	e.context.SetInitialPrompt(strings.Join(terms, ", "))
+}
+
 // Transcribe processes the audio samples and returns the text
 func (e *Engine) Transcribe(samples []float32) (string, error) {
 	e.mutex.Lock()

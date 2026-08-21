@@ -122,6 +122,12 @@ func run() {
 	}
 	defer llmEngine.Close()
 	llmEngine.SetDictionary(cfg.App.Dictionary)
+
+	// Prime the decoder with the same vocabulary. whisper weighs the prompt
+	// against the audio while decoding, so domain terms win where they fit
+	// and lose where they do not — correction at the point the words are
+	// chosen, rather than substitution after the fact.
+	asrEngine.SetDictionary(cfg.App.Dictionary)
 	llmEngine.SetExtendedPrompt(cfg.Models.LLM.ExtendedPrompt)
 
 	// Initialize Injector

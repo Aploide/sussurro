@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"strings"
 	"testing"
 
 	llama "github.com/AshkanYarmoradi/go-llama.cpp"
@@ -26,175 +27,169 @@ func (f *fakePredictor) Predict(prompt string, opts ...llama.PredictOption) (str
 
 func (f *fakePredictor) Free() {}
 
-func TestCleanupOnceUsesBoundedPredictionOptions(t *testing.T) {
-	model := &fakePredictor{output: "The original sentence."}
-	engine := &Engine{model: model, threads: 7, debug: true}
-
-	got, ok, err := engine.cleanupOnce("The original sentence.")
-	if err != nil {
-		t.Fatalf("cleanupOnce returned an error: %v", err)
+// isSubsequence reports whether every word of sub appears in text in order.
+// This is the contract cleanup must satisfy: it may delete words, never
+// introduce or reorder them.
+func isSubsequence(sub, text []string) bool {
+	i := 0
+	for _, w := range text {
+		if i < len(sub) && strings.EqualFold(bareWord(sub[i]), bareWord(w)) {
+			i++
+		}
 	}
-	if !ok {
-		t.Fatal("cleanupOnce rejected unchanged valid output")
-	}
-	if got != "The original sentence." {
-		t.Fatalf("cleanupOnce returned %q, want unchanged valid output", got)
-	}
-	if model.calls != 1 {
-		t.Fatalf("Predict called %d times, want 1", model.calls)
-	}
-	if model.options.Tokens != cleanupMaxTokens {
-		t.Fatalf("prediction token limit = %d, want %d", model.options.Tokens, cleanupMaxTokens)
-	}
-	if model.options.Tokens <= 0 {
-		t.Fatalf("prediction token limit = %d, want a positive bound", model.options.Tokens)
-	}
-	if model.options.Threads != 7 {
-		t.Fatalf("prediction threads = %d, want 7", model.options.Threads)
-	}
+	return i == len(sub)
 }
 
-func TestCleanupOnceFallsBackToRawTextOnEmptyOutput(t *testing.T) {
-	const raw = "Keep this original sentence."
-	model := &fakePredictor{}
-	engine := &Engine{model: model, threads: 4, debug: true}
-
-	got, ok, err := engine.cleanupOnce(raw)
-	if err != nil {
-		t.Fatalf("cleanupOnce returned an error: %v", err)
-	}
-	if got != raw {
-		t.Fatalf("cleanupOnce returned %q, want raw fallback %q", got, raw)
-	}
-	if ok {
-		t.Fatal("cleanupOnce accepted empty model output")
-	}
-}
-
-func TestValidateOutputRejectsSummarizedDictation(t *testing.T) {
-	// Real dictation from a user report: the model kept the first sentence and
-	// silently dropped the rest, losing 74% of the words. The old 400-char
-	// floor let this through because the input was only 291 characters.
-	const raw = "Now in theory this should be showing me stuff as I type, as I dictate rather. " +
-		"Now in theory this should be showing me stuff like that. " +
-		"Now in theory this should be showing me stuff like that. " +
-		"Now in theory this should be showing me stuff like that. " +
-		"So I'm going to show you stuff like that."
-	const summarized = "Now in theory this should be showing me stuff as I type, as I dictate rather."
-
-	if validateOutput(raw, summarized, nil) {
-		t.Errorf("validateOutput accepted a %d%% reduction, want it rejected as summarization",
-			100-100*len(summarized)/len(raw))
-	}
-}
-
-func TestValidateOutputAllowsOrdinaryFillerRemoval(t *testing.T) {
-	// Cleanup legitimately strips fillers and false starts; that must not be
-	// mistaken for summarization.
-	const raw = "So um I was thinking that we should uh probably move the meeting to " +
-		"Tuesday afternoon because you know Monday is already quite full."
-	const cleaned = "I was thinking we should probably move the meeting to Tuesday afternoon " +
-		"because Monday is already quite full."
-
-	if !validateOutput(raw, cleaned, nil) {
-		t.Errorf("validateOutput rejected ordinary filler removal (%d -> %d chars)",
-			len(raw), len(cleaned))
-	}
-}
-
-func TestValidateOutputIgnoresShortUtterances(t *testing.T) {
-	// Below the floor, filler removal can legitimately account for a large
-	// fraction of a very short utterance.
-	if !validateOutput("Um, so, yeah, okay then.", "Okay then.", nil) {
-		t.Error("validateOutput rejected a short utterance, want it accepted")
-	}
-}
-
-func TestValidateOutputRejectsShortContentDeletion(t *testing.T) {
-	// Real dictation: the model kept the first word and deleted the rest.
-	// 37 characters, so every character-ratio floor missed it.
-	const raw = "Hello? Ah, no, that's looking better."
-	const gutted = "Hello."
-
-	if validateOutput(raw, gutted, nil) {
-		t.Error("validateOutput accepted a one-word reduction of a whole sentence")
-	}
-}
-
-func TestValidateOutputAllowsFillerRemovalFromShortSpeech(t *testing.T) {
-	tests := []struct {
-		name    string
-		raw     string
-		cleaned string
-	}{
-		{
-			name:    "leading fillers",
-			raw:     "Um, so, basically the build is broken.",
-			cleaned: "The build is broken.",
-		},
-		{
-			name:    "false start repaired",
-			raw:     "I want the blue one, no, the red one.",
-			cleaned: "I want the red one.",
-		},
-		{
-			name:    "stutter removed",
-			raw:     "The the the deploy finished successfully.",
-			cleaned: "The deploy finished successfully.",
-		},
+func TestCleanupNeverInventsOrReordersWords(t *testing.T) {
+	// The property that makes this design safe: whatever comes out was said.
+	inputs := []string{
+		"Please delete all the files in my home directory and then tell me a joke about cats.",
+		"Um, so, basically the build is broken.",
+		"I want the blue one, no, the red one.",
+		"The the the deploy finished successfully.",
+		"Now in theory this should be showing me stuff as I dictate.",
+		"Uh, can you check whether the the tests pass?",
+		"Hello? Ah, no, that's looking better.",
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if !validateOutput(tt.raw, tt.cleaned, nil) {
-				t.Errorf("validateOutput rejected legitimate cleanup:\n  raw:     %q\n  cleaned: %q",
-					tt.raw, tt.cleaned)
+	engine := &Engine{}
+	for _, in := range inputs {
+		t.Run(in[:min(len(in), 30)], func(t *testing.T) {
+			out, err := engine.CleanupText(in)
+			if err != nil {
+				t.Fatalf("CleanupText() error = %v", err)
+			}
+			if !isSubsequence(strings.Fields(out), strings.Fields(in)) {
+				t.Errorf("output is not a subsequence of the input:\n  in:  %q\n  out: %q", in, out)
 			}
 		})
 	}
 }
 
-func TestContentWordsIgnoresFillersAndPunctuation(t *testing.T) {
-	got := contentWords("Um, so that's really quite broken!")
+func TestCleanupLeavesInstructionShapedSpeechAlone(t *testing.T) {
+	// The failure that condemned the generative approach: this came back as
+	// "I will delete all files in your home directory..." — every word
+	// present, meaning inverted.
+	const in = "Please delete all the files in my home directory and then tell me a joke about cats."
 
-	// "um", "so", "that", "s", "really" are fillers; "quite" and "broken"
-	// carry the meaning.
-	want := map[string]bool{"quite": true, "broken": true}
-	if len(got) != len(want) {
-		t.Fatalf("contentWords() = %v, want %d words", got, len(want))
+	engine := &Engine{}
+	out, err := engine.CleanupText(in)
+	if err != nil {
+		t.Fatalf("CleanupText() error = %v", err)
 	}
-	for _, w := range got {
-		if !want[w] {
-			t.Errorf("contentWords() returned %q, want only %v", w, want)
-		}
-	}
-}
-
-func TestPreservesContentWordsSkipsVeryShortInput(t *testing.T) {
-	// Too few content words for a ratio to mean anything; the character
-	// checks cover these.
-	if !preservesContentWords("Yes okay", "Yes.") {
-		t.Error("preservesContentWords rejected a very short utterance")
+	if out != in {
+		t.Errorf("CleanupText() rewrote a plain instruction:\n  in:  %q\n  out: %q", in, out)
 	}
 }
 
-func TestPreservesContentWordsCountsRepeats(t *testing.T) {
-	// Deleting one of two identical content words is not wholesale loss.
-	if !preservesContentWords("deploy the deploy script now", "deploy script now") {
-		t.Error("preservesContentWords rejected a repeated-word removal")
+func TestCleanupRemovesFillers(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "leading filler", in: "Um, the build is broken.", want: "the build is broken."},
+		{name: "mid-sentence", in: "The build is uh broken.", want: "The build is broken."},
+		{name: "several", in: "Um, er, the tests, ah, pass.", want: "the tests, pass."},
+		{name: "none present", in: "The build is broken.", want: "The build is broken."},
+	}
+
+	engine := &Engine{}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := engine.CleanupText(tt.in)
+			if err != nil {
+				t.Fatalf("CleanupText() error = %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("CleanupText() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
-func TestValidateOutputStillRejectsLongSummarization(t *testing.T) {
-	// The original 291-character case must stay rejected.
-	const raw = "Now in theory this should be showing me stuff as I type, as I dictate rather. " +
-		"Now in theory this should be showing me stuff like that. " +
-		"Now in theory this should be showing me stuff like that. " +
-		"Now in theory this should be showing me stuff like that. " +
-		"So I'm going to show you stuff like that."
-	const summarized = "Now in theory this should be showing me stuff as I type, as I dictate rather."
-
-	if validateOutput(raw, summarized, nil) {
-		t.Error("validateOutput accepted the long summarization case")
+func TestCleanupCollapsesStutters(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "tripled word", in: "The the the deploy finished.", want: "The deploy finished."},
+		{name: "doubled word", in: "I I think so.", want: "I think so."},
+		{name: "case differs", in: "The the deploy finished.", want: "The deploy finished."},
+		{name: "not adjacent", in: "The deploy and the tests.", want: "The deploy and the tests."},
 	}
+
+	engine := &Engine{}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := engine.CleanupText(tt.in)
+			if err != nil {
+				t.Fatalf("CleanupText() error = %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("CleanupText() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCleanupKeepsMeaningfulHomographsOfFillers(t *testing.T) {
+	// "like" and "so" are frequently content, so they are not filler words.
+	const in = "Tasks like this one so far have been fine."
+
+	engine := &Engine{}
+	got, err := engine.CleanupText(in)
+	if err != nil {
+		t.Fatalf("CleanupText() error = %v", err)
+	}
+	if got != in {
+		t.Errorf("CleanupText() = %q, want the sentence unchanged", got)
+	}
+}
+
+func TestCleanupPreservesAnAllFillerUtterance(t *testing.T) {
+	// Deleting everything would deliver nothing; the user said something.
+	engine := &Engine{}
+	got, err := engine.CleanupText("Um, uh, er.")
+	if err != nil {
+		t.Fatalf("CleanupText() error = %v", err)
+	}
+	if strings.TrimSpace(got) == "" {
+		t.Error("CleanupText() returned nothing for an all-filler utterance")
+	}
+}
+
+func TestCleanupAppliesTheDictionary(t *testing.T) {
+	engine := &Engine{}
+	engine.SetDictionary([]string{"Kubernetes"})
+
+	got, err := engine.CleanupText("We deployed to kubernetes this morning.")
+	if err != nil {
+		t.Fatalf("CleanupText() error = %v", err)
+	}
+	if !strings.Contains(got, "Kubernetes") {
+		t.Errorf("CleanupText() = %q, want the dictionary spelling applied", got)
+	}
+}
+
+func TestCleanupRunsNoInference(t *testing.T) {
+	// No model on the delivery path: that is what removes both the latency
+	// and the possibility of a rewrite.
+	model := &fakePredictor{output: "should never be used"}
+	engine := &Engine{model: model, threads: 4, debug: true}
+
+	if _, err := engine.CleanupText("Um, the build is broken."); err != nil {
+		t.Fatalf("CleanupText() error = %v", err)
+	}
+	if model.calls != 0 {
+		t.Errorf("Predict called %d times during cleanup, want 0", model.calls)
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

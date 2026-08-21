@@ -2,7 +2,6 @@ package llm
 
 import (
 	"fmt"
-	"log/slog"
 	"os"
 	"regexp"
 	"strings"
@@ -103,31 +102,33 @@ const antiSummarizationFloor = 80
 // go-llama.cpp can produce no output instead of selecting its default.
 const cleanupMaxTokens = 512
 
-// CleanupText processes the raw transcription to remove artifacts and fix
-// grammar. Long transcripts are cleaned chunk-by-chunk so no content can be
-// dropped globally; each chunk falls back to its raw text if the model
-// misbehaves.
+// CleanupText tidies a raw transcription without rewriting it.
+//
+// It deletes fillers and stutters, applies the personal dictionary, and lays
+// out dictated enumerations. Every word in the result was spoken by the user:
+// the transform can remove words and correct the spelling of known terms, but
+// cannot introduce, reorder, or rephrase anything.
+//
+// This replaces a pass that handed the dictation to the LLM and delivered
+// whatever came back. That could not meet the contract: a chat-tuned model
+// given text as prompt cannot distinguish text to tidy from instructions to
+// obey, and it demonstrably reattributed a user's words. No output-side
+// validator fixes that, because the failure is indistinguishable from a
+// legitimate rewrite.
+//
+// Context-sensitive correction still happens — in whisper, during decoding,
+// where the audio is. Each streaming pass re-decodes the whole buffer and
+// revises earlier words as later context arrives, which is why word counts
+// and boundaries can change between passes.
 func (e *Engine) CleanupText(rawText string) (string, error) {
-	target := cleanupChunkTarget
-	if e.extendedPrompt {
-		target = cleanupChunkTargetExtended
-	}
-	chunks := splitIntoChunks(rawText, target)
-
-	parts := make([]string, 0, len(chunks))
-	for _, chunk := range chunks {
-		parts = append(parts, strings.TrimSpace(e.cleanupRecursive(chunk, 0)))
-	}
-	result := strings.TrimSpace(strings.Join(parts, " "))
-	if result == "" {
-		result = rawText
+	cleaned := removeFillers(rawText)
+	if strings.TrimSpace(cleaned) == "" {
+		// Deleting everything means the utterance was pure hesitation;
+		// deliver what was said rather than nothing.
+		cleaned = rawText
 	}
 
-	// Personal dictionary: deterministic spelling correction, independent of
-	// whether (and how well) the model cooperated. Then deterministic list
-	// layout for dictated enumerations — LLMs apply layout instructions
-	// inconsistently, so it is done in code instead.
-	return listify(e.applyDictionary(result)), nil
+	return listify(e.applyDictionary(cleaned)), nil
 }
 
 // reOrdinal matches a sentence-leading spoken enumeration marker.
@@ -231,30 +232,6 @@ func capitalizeFirst(s string) string {
 	return strings.ToUpper(string(r[0])) + string(r[1:])
 }
 
-// cleanupRecursive cleans one chunk; if the model's output fails validation,
-// the chunk is bisected at sentence boundaries and each half retried — the
-// model is reliable on short inputs and degrades on long ones. A chunk that
-// cannot be reduced further falls back to its raw text, so content is never
-// lost or invented.
-func (e *Engine) cleanupRecursive(chunk string, depth int) string {
-	cleaned, ok, err := e.cleanupOnce(chunk)
-	if err == nil && ok && strings.TrimSpace(cleaned) != "" {
-		return cleaned
-	}
-
-	if depth < 4 {
-		sentences := splitSentences(chunk)
-		if len(sentences) > 1 {
-			mid := len(sentences) / 2
-			left := e.cleanupRecursive(strings.Join(sentences[:mid], " "), depth+1)
-			right := e.cleanupRecursive(strings.Join(sentences[mid:], " "), depth+1)
-			return strings.TrimSpace(left) + " " + strings.TrimSpace(right)
-		}
-	}
-
-	return chunk
-}
-
 // splitSentences splits text into sentences, keeping each terminator (and
 // any trailing quotes/parens) with its sentence.
 func splitSentences(text string) []string {
@@ -277,37 +254,6 @@ func splitSentences(text string) []string {
 		sentences = append(sentences, rest)
 	}
 	return sentences
-}
-
-// splitIntoChunks splits text into chunks of roughly targetLen characters,
-// only breaking at sentence boundaries (. ! ?) so each chunk is coherent.
-func splitIntoChunks(text string, targetLen int) []string {
-	text = strings.TrimSpace(text)
-	if len(text) <= targetLen {
-		return []string{text}
-	}
-
-	sentences := splitSentences(text)
-	if len(sentences) == 0 {
-		return []string{text}
-	}
-
-	var chunks []string
-	var cur strings.Builder
-	for _, s := range sentences {
-		if cur.Len() > 0 && cur.Len()+len(s)+1 > targetLen {
-			chunks = append(chunks, cur.String())
-			cur.Reset()
-		}
-		if cur.Len() > 0 {
-			cur.WriteByte(' ')
-		}
-		cur.WriteString(s)
-	}
-	if cur.Len() > 0 {
-		chunks = append(chunks, cur.String())
-	}
-	return chunks
 }
 
 // defaultSystemPrompt is the prompt the bundled qwen3-sussurro fine-tune was
@@ -358,63 +304,6 @@ DO NOT:
 
 Output ONLY the cleaned transcription text, nothing else.`
 
-// cleanupOnce runs a single LLM cleanup call on one chunk of text. The bool
-// result reports whether the model's output passed validation; when false the
-// returned string is the raw input.
-func (e *Engine) cleanupOnce(rawText string) (string, bool, error) {
-	system := defaultSystemPrompt
-	if e.extendedPrompt {
-		dictBlock := ""
-		if len(e.dictionary) > 0 {
-			dictBlock = fmt.Sprintf("\nPERSONAL DICTIONARY - when the text contains a misheard version of any of these terms, replace it with the exact spelling given here: %s\n",
-				strings.Join(e.dictionary, ", "))
-		}
-		system = fmt.Sprintf(extendedSystemPromptFmt, dictBlock)
-	}
-
-	// ChatML template (Qwen 3)
-	prompt := fmt.Sprintf(`<|im_start|>system
-%s
-/nothink<|im_end|>
-<|im_start|>user
-%s<|im_end|>
-<|im_start|>assistant
-`, system, rawText)
-
-	// We use Predict with strict options
-	var cleaned string
-	var err error
-
-	if !e.debug {
-		cleanup := logger.SuppressStderr()
-		defer cleanup()
-	}
-
-	cleaned, err = e.model.Predict(prompt, cleanupPredictOptions(e.threads)...)
-
-	if err != nil {
-		return "", false, fmt.Errorf("prediction failed: %w", err)
-	}
-
-	cleaned = stripModelArtifacts(cleaned)
-
-	slog.Debug("LLM raw output (pre-validation)", "output", cleaned)
-
-	// Empty output means the model produced nothing usable (e.g. only a <think> block).
-	if cleaned == "" {
-		slog.Debug("LLM returned empty output, falling back to raw")
-		return rawText, false, nil
-	}
-
-	// Anti-Hallucination Check
-	if !validateOutput(rawText, cleaned, e.dictionary) {
-		slog.Debug("validateOutput rejected, falling back to raw")
-		return rawText, false, nil
-	}
-
-	return cleaned, true, nil
-}
-
 // hallucinationMarkers are prompt-shaped strings the model sometimes emits
 // when it starts a new turn instead of stopping. Everything from the first
 // marker onwards is discarded.
@@ -442,16 +331,6 @@ func stripModelArtifacts(out string) string {
 	return strings.TrimSpace(out)
 }
 
-func cleanupPredictOptions(threads int) []llama.PredictOption {
-	return []llama.PredictOption{
-		llama.SetTokens(cleanupMaxTokens),
-		llama.SetThreads(threads),
-		llama.SetTemperature(0.1), // Low temperature for deterministic output
-		llama.SetTopP(0.9),
-		llama.SetStopWords("<|im_end|>"),
-	}
-}
-
 // fillerWords are the words cleanup is explicitly told to remove, plus the
 // function words that disappear when a false start is repaired. Losing these
 // is the job working correctly; losing anything else is content loss.
@@ -467,25 +346,6 @@ var fillerWords = map[string]bool{
 	"t": true, "re": true, "ve": true, "ll": true, "d": true, "m": true,
 }
 
-// contentWords returns the meaning-carrying words of a phrase, lowercased and
-// stripped of punctuation.
-func contentWords(text string) []string {
-	var out []string
-	for _, w := range strings.Fields(strings.ToLower(text)) {
-		w = strings.Trim(w, ".,!?;:\"'()-—…")
-		// Contractions split on the apostrophe so "that's" contributes
-		// "that" and "s", both fillers, rather than one opaque token.
-		for _, part := range strings.Split(w, "'") {
-			part = strings.TrimSpace(part)
-			if part == "" || fillerWords[part] {
-				continue
-			}
-			out = append(out, part)
-		}
-	}
-	return out
-}
-
 // contentRetention is the fraction of content words that must survive cleanup.
 // Repairing a false start legitimately drops the abandoned half, so this
 // cannot demand everything; it only catches wholesale deletion.
@@ -495,149 +355,6 @@ const contentRetention = 0.5
 // dropped word swings the ratio wildly, and the character checks already
 // cover the degenerate cases.
 const minContentWords = 3
-
-// preservesContentWords reports whether enough of the raw text's meaning
-// survived. Words the model corrected in spelling still count, so the
-// comparison is by count rather than by set membership.
-func preservesContentWords(raw, cleaned string) bool {
-	rawWords := contentWords(raw)
-	if len(rawWords) < minContentWords {
-		return true
-	}
-
-	kept := 0
-	remaining := make(map[string]int, len(rawWords))
-	for _, w := range rawWords {
-		remaining[w]++
-	}
-	for _, w := range contentWords(cleaned) {
-		if remaining[w] > 0 {
-			remaining[w]--
-			kept++
-		}
-	}
-
-	return float64(kept) >= float64(len(rawWords))*contentRetention
-}
-
-func validateOutput(raw, cleaned string, dictionary []string) bool {
-	// 1. Length Check
-	// If cleaned is significantly longer than raw (more than 2x), it's likely a hallucination
-	// unless raw is very short.
-	if len(raw) > 10 && len(cleaned) > len(raw)*2 {
-		return false
-	}
-
-	// 1b. Anti-summarization backstop: cleanup removes fillers, not content.
-	// If a dictation came back much shorter than it went in, the model
-	// summarized it — better to deliver the raw text in full.
-	//
-	// The floor used to be 400 characters, which let a 291-character
-	// dictation lose 74% of its words unchallenged: repeated sentences are
-	// exactly what the model likes to collapse, and they are also common in
-	// real speech. Filler removal rarely takes more than a third, so anything
-	// past that on a sentence-length input is treated as summarization.
-	if len(raw) > antiSummarizationFloor && len(cleaned)*3 < len(raw)*2 {
-		return false
-	}
-
-	// 1c. Content-word check. A character ratio is a blunt instrument on short
-	// input: "Hello? Ah, no, that's looking better." coming back as "Hello."
-	// is 84% deleted, but sits under any floor that does not also reject
-	// legitimate filler removal.
-	//
-	// Cleanup is licensed to drop fillers and false starts, never the words
-	// carrying the meaning. So count how many content words survived rather
-	// than how many characters did.
-	if !preservesContentWords(raw, cleaned) {
-		return false
-	}
-
-	// 2. Pattern Check for Common Hallucinations
-	lowerCleaned := strings.ToLower(cleaned)
-	invalidPrefixes := []string{
-		"the user", "input:", "output:", "rewrite", "corrected text:",
-		"here is", "sure, i can", "i'm sorry", "assistant:",
-	}
-	for _, prefix := range invalidPrefixes {
-		if strings.HasPrefix(lowerCleaned, prefix) {
-			return false
-		}
-	}
-
-	// 3. Semantic Content Check (Anti-Hallucination)
-	// The model should freely REMOVE words (that's the point of cleanup), but should
-	// not ADD content that wasn't in the raw text. Check for invented words instead.
-	rawLower := strings.ToLower(raw)
-	cleanedWords := strings.Fields(strings.ToLower(cleaned))
-
-	stopWords := map[string]bool{
-		"umm": true, "ah": true, "uh": true, "like": true, "so": true,
-		"just": true, "a": true, "an": true, "the": true,
-	}
-
-	// Dictionary terms are corrected spellings, so they legitimately differ
-	// from what the ASR heard — never count them as invented.
-	dictWords := map[string]bool{}
-	for _, term := range dictionary {
-		for _, w := range strings.Fields(strings.ToLower(term)) {
-			dictWords[strings.Trim(w, ".,!?-")] = true
-		}
-	}
-
-	isListMarker := func(w string) bool {
-		// "1.", "2)", "-", "*" style tokens produced by list formatting.
-		w = strings.Trim(w, ".)-*")
-		if w == "" {
-			return true
-		}
-		for _, r := range w {
-			if r < '0' || r > '9' {
-				return false
-			}
-		}
-		return true
-	}
-
-	inventedCount := 0
-	totalCleanedSignificant := 0
-
-	for _, w := range cleanedWords {
-		if isListMarker(w) {
-			continue
-		}
-		w = strings.Trim(w, ".,!?-")
-		if w == "" || stopWords[w] || dictWords[w] {
-			continue
-		}
-		totalCleanedSignificant++
-		if !strings.Contains(rawLower, w) {
-			inventedCount++
-		}
-	}
-
-	// If >30% of cleaned words were not in raw, likely hallucination
-	if totalCleanedSignificant > 0 && float64(inventedCount)/float64(totalCleanedSignificant) > 0.3 {
-		return false
-	}
-
-	// 4. Edge anchors (anti-truncation / anti-continuation): the model
-	// sometimes drops the opening or final sentences, or wanders off into an
-	// invented continuation that displaces the real ending. Require that the
-	// raw text's first and last significant words still appear near the
-	// corresponding edge of the cleaned text.
-	rawWords := strings.Fields(rawLower)
-	if len(rawWords) >= 12 {
-		if !edgeAnchored(rawWords, cleanedWords, stopWords, false) {
-			return false // ending lost
-		}
-		if !edgeAnchored(rawWords, cleanedWords, stopWords, true) {
-			return false // opening lost
-		}
-	}
-
-	return true
-}
 
 // edgeAnchored picks up to 4 significant words from one edge of the raw text
 // and checks that at least 2 of them appear within a window at the same edge
