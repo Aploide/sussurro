@@ -26,11 +26,11 @@
 /* Transcript panel geometry. Live text needs room to wrap, so the window
    widens and grows downward while text is showing, then returns to the
    capsule when it is cleared. */
-#define PANEL_WIDTH      520
-#define PANEL_PAD_X       18
-#define PANEL_PAD_Y       14
-#define PANEL_TEXT_SIZE   15
-#define PANEL_STATUS_SIZE 11
+#define PANEL_WIDTH      620
+#define PANEL_PAD_X       22
+#define PANEL_PAD_Y       18
+#define PANEL_TEXT_SIZE   17
+#define PANEL_STATUS_SIZE 12
 #define PANEL_MAX_HEIGHT 320
 #define OVERLAY_RADIUS    26.0
 #define ITEM_COUNT         7

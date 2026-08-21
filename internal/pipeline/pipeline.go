@@ -243,17 +243,36 @@ func (p *Pipeline) StopRecording() bool {
 	p.notifyState(session.StateTranscribing)
 
 	// Stop streaming before the final pass so partial inference cannot delay
-	// it or publish text belonging to the session just ended.
-	p.stopStreaming()
+	// it or publish text belonging to the session just ended. The last
+	// partial comes back with it: if it already covered every sample, the
+	// final pass would spend seconds reproducing a string we already have.
+	partial, partialSamples, hasPartial := p.takeStreamingPartial()
 
 	// Process the captured audio in a separate goroutine to not block
 	// Make a copy of the buffer
 	bufferCopy := make([]float32, len(p.audioBuffer))
 	copy(bufferCopy, p.audioBuffer)
 
+	if hasPartial && partialSamples >= len(bufferCopy) {
+		p.log.Debug("Reusing final partial transcription",
+			"samples", partialSamples, "text", partial)
+		p.wg.Add(1)
+		go p.completeFromPartial(partial)
+		return true
+	}
+
 	p.wg.Add(1)
 	go p.processSegment(bufferCopy)
 	return true
+}
+
+// takeStreamingPartial ends the streaming session and returns its last
+// published partial. Safe when streaming is disabled.
+func (p *Pipeline) takeStreamingPartial() (text string, samples int, ok bool) {
+	if p.streamer == nil {
+		return "", 0, false
+	}
+	return p.streamer.StopAndTakePartial()
 }
 
 func (p *Pipeline) captureLoop() {
@@ -360,6 +379,33 @@ func (p *Pipeline) processSegment(samples []float32) {
 		return
 	}
 
+	p.finishSegment(text, start)
+}
+
+// completeFromPartial delivers text a streaming pass already produced,
+// skipping the redundant final ASR run. Everything after recognition — word
+// count, context, cleanup, publication — is identical to processSegment,
+// because it is the same code.
+func (p *Pipeline) completeFromPartial(text string) {
+	defer p.wg.Done()
+	defer func() {
+		if r := recover(); r != nil {
+			p.log.Error("Recovered from panic in completeFromPartial", "error", r)
+		}
+		p.mu.Lock()
+		p.isTranscribing = false
+		p.mu.Unlock()
+		p.notifyState(session.StateIdle)
+		if p.onCompletion != nil {
+			p.onCompletion()
+		}
+	}()
+
+	p.finishSegment(text, time.Now())
+}
+
+// finishSegment turns a recognised transcription into a published result.
+func (p *Pipeline) finishSegment(text string, start time.Time) {
 	// Check word count
 	// If detected less than 4 words, avoid transcribing completely (treat as false positive)
 	// We do this after transcription as we need the text to count words

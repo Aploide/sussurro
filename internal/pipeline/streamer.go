@@ -56,6 +56,13 @@ type Streamer struct {
 
 	mu      sync.Mutex
 	running bool
+	// lastText is the most recent published partial, and lastSamples the
+	// number of audio samples it was computed from. Together they let the
+	// final pass be skipped when a partial already covered the whole
+	// recording.
+	lastText    string
+	lastSamples int
+	lastGen     uint64
 	// wake signals the worker that a pass is due. Capacity 1 is what
 	// coalesces ticks: a pending wake absorbs any number of further ticks.
 	wake chan struct{}
@@ -97,6 +104,8 @@ func (s *Streamer) Start() uint64 {
 
 	generation := s.generation.Add(1)
 	s.running = true
+	s.lastText = ""
+	s.lastSamples = 0
 	s.wake = make(chan struct{}, 1)
 	s.stop = make(chan struct{})
 
@@ -111,16 +120,37 @@ func (s *Streamer) Start() uint64 {
 // in-flight inference, so final transcription is never delayed by a partial
 // pass; the abandoned result is discarded by its generation check.
 func (s *Streamer) Stop() {
+	s.stopAndTake()
+}
+
+// stopAndTake ends the session and returns the last partial it had produced,
+// with the number of samples that partial covered. The result is captured
+// before the generation is bumped, which is the only moment it is still
+// valid: bumping invalidates every in-flight and completed partial.
+func (s *Streamer) stopAndTake() (text string, samples int, ok bool) {
 	s.mu.Lock()
 	if !s.running {
 		s.mu.Unlock()
-		return
+		return "", 0, false
 	}
 	s.running = false
+
+	if s.lastText != "" && s.lastGen == s.generation.Load() {
+		text, samples, ok = s.lastText, s.lastSamples, true
+	}
+
 	// Bumping the generation invalidates any result still being computed.
 	s.generation.Add(1)
 	close(s.stop)
 	s.mu.Unlock()
+	return text, samples, ok
+}
+
+// StopAndTakePartial ends the session and hands back the last partial it
+// published, so a caller holding the complete audio can skip a redundant
+// final pass when that partial already covered all of it.
+func (s *Streamer) StopAndTakePartial() (text string, samples int, ok bool) {
+	return s.stopAndTake()
 }
 
 // Wait blocks until the goroutines of every stopped session have exited. It is
@@ -198,6 +228,12 @@ func (s *Streamer) runPass(generation uint64) {
 		s.log.Debug("Discarding stale partial transcription", "generation", generation)
 		return
 	}
+	s.mu.Lock()
+	s.lastText = text
+	s.lastSamples = len(samples)
+	s.lastGen = generation
+	s.mu.Unlock()
+
 	if s.onPartial != nil {
 		s.onPartial(generation, text)
 	}

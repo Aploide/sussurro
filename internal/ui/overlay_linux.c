@@ -194,11 +194,25 @@ static void reposition_overlay(GtkWidget *win, int width, int height)
 
 /* Builds the Pango layout for the transcript text.
    cairo_show_text cannot wrap, so live dictation needs a real text layout. */
+/* Returns the display's font scale relative to the 96dpi baseline Pango
+   assumes. Xft.dpi is what the rest of the desktop is sized by, so ignoring
+   it makes the panel text visibly smaller than every other application. */
+static double panel_font_scale(void)
+{
+    GdkScreen *screen = gdk_screen_get_default();
+    if (!screen) return 1.0;
+
+    double dpi = gdk_screen_get_resolution(screen);
+    if (dpi <= 0) return 1.0;   /* unset: Pango's own default applies */
+    return dpi / 96.0;
+}
+
 static PangoLayout *panel_text_layout(cairo_t *cr, OverlayData *od)
 {
     PangoLayout *layout = pango_cairo_create_layout(cr);
     PangoFontDescription *font = pango_font_description_from_string("Sans");
-    pango_font_description_set_absolute_size(font, PANEL_TEXT_SIZE * PANGO_SCALE);
+    pango_font_description_set_absolute_size(
+        font, PANEL_TEXT_SIZE * panel_font_scale() * PANGO_SCALE);
     pango_layout_set_font_description(layout, font);
     pango_font_description_free(font);
 
@@ -234,7 +248,8 @@ static int draw_panel(cairo_t *cr, OverlayData *od, gboolean paint)
     if (od->status && od->status[0]) {
         status_layout = pango_cairo_create_layout(cr);
         PangoFontDescription *sf = pango_font_description_from_string("Sans");
-        pango_font_description_set_absolute_size(sf, PANEL_STATUS_SIZE * PANGO_SCALE);
+        pango_font_description_set_absolute_size(
+            sf, PANEL_STATUS_SIZE * panel_font_scale() * PANGO_SCALE);
         pango_layout_set_font_description(status_layout, sf);
         pango_font_description_free(sf);
         pango_layout_set_text(status_layout, od->status, -1);

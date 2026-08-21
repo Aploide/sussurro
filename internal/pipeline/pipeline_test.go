@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aploide/sussurro/internal/audio"
 	ctxProvider "github.com/aploide/sussurro/internal/context"
@@ -287,5 +288,96 @@ func TestSnapshotRecordingCopiesBuffer(t *testing.T) {
 	p.audioBuffer = append(p.audioBuffer, 0.4)
 	if len(snapshot) != 3 {
 		t.Error("appending to the live buffer changed an earlier snapshot")
+	}
+}
+
+// staticSnapshot returns a fixed-size buffer, standing in for captured audio.
+func staticSnapshot(samples int) SnapshotFunc {
+	return func() ([]float32, bool) { return make([]float32, samples), true }
+}
+
+func TestStopReusesPartialCoveringTheWholeRecording(t *testing.T) {
+	asr := &stubTranscriber{text: "the streamed text here"}
+	llm := &stubCleaner{text: "The streamed text here."}
+	consumer := &recordingConsumer{}
+
+	p := newTestPipeline(t, asr, llm, stubContext{info: &ctxProvider.ContextInfo{}})
+	p.SetResultConsumer(consumer)
+
+	streamer := NewStreamer(asr, staticSnapshot(48000), nil, time.Millisecond,
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	p.SetStreamer(streamer)
+
+	// A partial that already saw every sample the recording holds.
+	streamer.Start()
+	streamer.runPass(streamer.Generation())
+
+	p.isRecording = true
+	p.audioBuffer = make([]float32, 48000)
+	if !p.StopRecording() {
+		t.Fatal("StopRecording() = false, want the recording stopped")
+	}
+	p.wg.Wait()
+
+	if len(consumer.results) != 1 {
+		t.Fatalf("got %d results, want 1", len(consumer.results))
+	}
+	// One ASR call: the partial. The final pass must have been skipped.
+	if asr.calls != 1 {
+		t.Errorf("Transcribe called %d times, want 1 (partial reused)", asr.calls)
+	}
+	if got := consumer.results[0].Raw; got != "the streamed text here" {
+		t.Errorf("Raw = %q, want the streamed text", got)
+	}
+}
+
+func TestStopRetranscribesWhenAudioArrivedAfterThePartial(t *testing.T) {
+	asr := &stubTranscriber{text: "the streamed text here"}
+	llm := &stubCleaner{text: "The streamed text here."}
+	consumer := &recordingConsumer{}
+
+	p := newTestPipeline(t, asr, llm, stubContext{info: &ctxProvider.ContextInfo{}})
+	p.SetResultConsumer(consumer)
+
+	// The partial saw two seconds; the recording ended up holding four.
+	streamer := NewStreamer(asr, staticSnapshot(32000), nil, time.Millisecond,
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	p.SetStreamer(streamer)
+	streamer.Start()
+	streamer.runPass(streamer.Generation())
+
+	p.isRecording = true
+	p.audioBuffer = make([]float32, 64000)
+	if !p.StopRecording() {
+		t.Fatal("StopRecording() = false, want the recording stopped")
+	}
+	p.wg.Wait()
+
+	// Reusing here would silently drop the last two seconds of speech.
+	if asr.calls != 2 {
+		t.Errorf("Transcribe called %d times, want 2 (partial plus final pass)", asr.calls)
+	}
+}
+
+func TestStopTranscribesNormallyWithoutAStreamer(t *testing.T) {
+	asr := &stubTranscriber{text: "the quick brown fox"}
+	llm := &stubCleaner{text: "The quick brown fox."}
+	consumer := &recordingConsumer{}
+
+	p := newTestPipeline(t, asr, llm, stubContext{info: &ctxProvider.ContextInfo{}})
+	p.SetResultConsumer(consumer)
+
+	p.isRecording = true
+	p.audioBuffer = make([]float32, 48000)
+	if !p.StopRecording() {
+		t.Fatal("StopRecording() = false, want the recording stopped")
+	}
+	p.wg.Wait()
+
+	if len(consumer.results) != 1 {
+		t.Fatalf("got %d results, want 1", len(consumer.results))
+	}
+	if asr.calls != 1 {
+		t.Errorf("Transcribe called %d times, want 1", asr.calls)
 	}
 }

@@ -414,3 +414,84 @@ func TestStreamerRestartAfterStop(t *testing.T) {
 		t.Fatalf("partials = %v, want one %q", texts, "second session")
 	}
 }
+
+func TestStopAndTakePartialReturnsTheLastResult(t *testing.T) {
+	asr := newBlockingTranscriber()
+	recorder := newPartialRecorder()
+	s, ticker := newTestStreamer(t, asr, recorder.record)
+
+	s.Start()
+	ticker.tick(t)
+	asr.awaitEntry(t)
+	asr.release <- "the transcribed text"
+	recorder.awaitUpdate(t)
+
+	text, samples, ok := s.StopAndTakePartial()
+	if !ok {
+		t.Fatal("StopAndTakePartial() ok = false, want the last partial")
+	}
+	if text != "the transcribed text" {
+		t.Errorf("text = %q, want the last partial", text)
+	}
+	// The stub snapshot returns one second of audio.
+	if samples != 16000 {
+		t.Errorf("samples = %d, want the count the partial covered", samples)
+	}
+}
+
+func TestStopAndTakePartialWithNoPartial(t *testing.T) {
+	asr := newBlockingTranscriber()
+	s, _ := newTestStreamer(t, asr, nil)
+
+	s.Start()
+	if _, _, ok := s.StopAndTakePartial(); ok {
+		t.Error("ok = true with no partial produced, want false")
+	}
+}
+
+func TestStopAndTakePartialWhenNotRunning(t *testing.T) {
+	asr := newBlockingTranscriber()
+	s, _ := newTestStreamer(t, asr, nil)
+
+	if _, _, ok := s.StopAndTakePartial(); ok {
+		t.Error("ok = true for a streamer that never started, want false")
+	}
+}
+
+func TestPartialDoesNotCarryIntoTheNextSession(t *testing.T) {
+	asr := newBlockingTranscriber()
+	recorder := newPartialRecorder()
+	s, ticker := newTestStreamer(t, asr, recorder.record)
+
+	s.Start()
+	ticker.tick(t)
+	asr.awaitEntry(t)
+	asr.release <- "text from the first session"
+	recorder.awaitUpdate(t)
+	s.Stop()
+
+	// A new recording must not inherit the previous one's text: delivering
+	// it would put words the user never said into their document.
+	s.Start()
+	if text, _, ok := s.StopAndTakePartial(); ok {
+		t.Errorf("second session returned %q from the first, want nothing", text)
+	}
+}
+
+func TestDiscardedPartialIsNotTaken(t *testing.T) {
+	asr := newBlockingTranscriber()
+	recorder := newPartialRecorder()
+	s, ticker := newTestStreamer(t, asr, recorder.record)
+
+	s.Start()
+	ticker.tick(t)
+	asr.awaitEntry(t)
+
+	// Stop while the pass is in flight: its result is discarded by
+	// generation, so it must not surface as a reusable partial either.
+	text, _, ok := s.StopAndTakePartial()
+	if ok {
+		t.Errorf("returned %q from an in-flight pass, want nothing", text)
+	}
+	asr.release <- "completed after the stop"
+}
