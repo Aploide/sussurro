@@ -402,6 +402,13 @@ static GdkFilterReturn x11_event_filter(GdkXEvent *xevent, GdkEvent *event, gpoi
             if (od->hk_pressed) {
                 od->hk_pressed = FALSE;
                 if (od->up_cb) od->up_cb();
+            } else {
+                /* Belt and braces: detectable auto-repeat should mean this
+                   never happens, but a release with no matching press has
+                   previously left a recording running to max_duration. Ending
+                   it costs nothing when there is nothing to end. */
+                g_debug("sussurro: release with no active press; ending anyway");
+                if (od->up_cb) od->up_cb();
             }
             return GDK_FILTER_REMOVE;
         }
@@ -589,6 +596,20 @@ void overlay_install_hotkey(GtkWidget *win, const char *trigger,
 
     Display *xdpy  = gdk_x11_display_get_xdisplay(display);
     Window   xroot = DefaultRootWindow(xdpy);
+
+    /* Without this, X11 auto-repeat synthesises a KeyRelease immediately
+       followed by a KeyPress for as long as the key is held. Those synthetic
+       releases are indistinguishable from a real one, so a genuine release
+       arriving between a repeat's release and its press is discarded as
+       spurious — the recording then runs to max_duration. Detectable
+       auto-repeat suppresses the synthetic releases outright, which is
+       exactly what a push-to-talk grab wants. */
+    Bool detectable = False;
+    XkbSetDetectableAutoRepeat(xdpy, True, &detectable);
+    if (!detectable) {
+        g_warning("sussurro: detectable auto-repeat unavailable; "
+                  "push-to-talk release may be missed while a key repeats");
+    }
 
     unsigned int mods    = parse_x11_mods(trigger);
     KeySym       keysym  = parse_x11_keysym(trigger);
