@@ -452,6 +452,74 @@ func cleanupPredictOptions(threads int) []llama.PredictOption {
 	}
 }
 
+// fillerWords are the words cleanup is explicitly told to remove, plus the
+// function words that disappear when a false start is repaired. Losing these
+// is the job working correctly; losing anything else is content loss.
+var fillerWords = map[string]bool{
+	"um": true, "umm": true, "uh": true, "ah": true, "er": true, "erm": true,
+	"hmm": true, "mmm": true, "oh": true, "well": true, "okay": true, "ok": true,
+	"like": true, "so": true, "just": true, "really": true, "actually": true,
+	"basically": true, "literally": true, "sort": true, "kind": true,
+	"mean": true, "know": true, "right": true, "yeah": true, "yes": true,
+	"no": true, "not": true, "a": true, "an": true, "the": true, "of": true,
+	"and": true, "or": true, "but": true, "that": true, "this": true,
+	"is": true, "it": true, "i": true, "you": true, "to": true, "s": true,
+	"t": true, "re": true, "ve": true, "ll": true, "d": true, "m": true,
+}
+
+// contentWords returns the meaning-carrying words of a phrase, lowercased and
+// stripped of punctuation.
+func contentWords(text string) []string {
+	var out []string
+	for _, w := range strings.Fields(strings.ToLower(text)) {
+		w = strings.Trim(w, ".,!?;:\"'()-—…")
+		// Contractions split on the apostrophe so "that's" contributes
+		// "that" and "s", both fillers, rather than one opaque token.
+		for _, part := range strings.Split(w, "'") {
+			part = strings.TrimSpace(part)
+			if part == "" || fillerWords[part] {
+				continue
+			}
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+// contentRetention is the fraction of content words that must survive cleanup.
+// Repairing a false start legitimately drops the abandoned half, so this
+// cannot demand everything; it only catches wholesale deletion.
+const contentRetention = 0.5
+
+// minContentWords is the shortest input worth checking. Below it a single
+// dropped word swings the ratio wildly, and the character checks already
+// cover the degenerate cases.
+const minContentWords = 3
+
+// preservesContentWords reports whether enough of the raw text's meaning
+// survived. Words the model corrected in spelling still count, so the
+// comparison is by count rather than by set membership.
+func preservesContentWords(raw, cleaned string) bool {
+	rawWords := contentWords(raw)
+	if len(rawWords) < minContentWords {
+		return true
+	}
+
+	kept := 0
+	remaining := make(map[string]int, len(rawWords))
+	for _, w := range rawWords {
+		remaining[w]++
+	}
+	for _, w := range contentWords(cleaned) {
+		if remaining[w] > 0 {
+			remaining[w]--
+			kept++
+		}
+	}
+
+	return float64(kept) >= float64(len(rawWords))*contentRetention
+}
+
 func validateOutput(raw, cleaned string, dictionary []string) bool {
 	// 1. Length Check
 	// If cleaned is significantly longer than raw (more than 2x), it's likely a hallucination
@@ -470,6 +538,18 @@ func validateOutput(raw, cleaned string, dictionary []string) bool {
 	// real speech. Filler removal rarely takes more than a third, so anything
 	// past that on a sentence-length input is treated as summarization.
 	if len(raw) > antiSummarizationFloor && len(cleaned)*3 < len(raw)*2 {
+		return false
+	}
+
+	// 1c. Content-word check. A character ratio is a blunt instrument on short
+	// input: "Hello? Ah, no, that's looking better." coming back as "Hello."
+	// is 84% deleted, but sits under any floor that does not also reject
+	// legitimate filler removal.
+	//
+	// Cleanup is licensed to drop fillers and false starts, never the words
+	// carrying the meaning. So count how many content words survived rather
+	// than how many characters did.
+	if !preservesContentWords(raw, cleaned) {
 		return false
 	}
 
