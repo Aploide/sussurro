@@ -3,6 +3,7 @@ package ui
 import (
 	_ "embed"
 	"fmt"
+	"math"
 	"strings"
 	"unsafe"
 
@@ -37,10 +38,7 @@ type settingsWindow struct {
 func newSettingsWindow(mgr *Manager) *settingsWindow {
 	w := webview.New(false)
 	w.SetTitle("Sussurro Settings")
-	// Sized in device pixels: on a 1.33-scaled display 580 became only 435
-	// CSS px, narrower than the layout is built for. Wider keeps the content
-	// comfortable once the webview applies display scaling.
-	w.SetSize(820, 780, webview.HintNone)
+	applySettingsSize(w)
 
 	sw := &settingsWindow{w: w, mgr: mgr}
 
@@ -91,4 +89,61 @@ func (sw *settingsWindow) Run() {
 // Terminate stops the webview event loop.
 func (sw *settingsWindow) Terminate() {
 	sw.w.Terminate()
+}
+
+// Content requirements of the settings page, in CSS pixels. Both were
+// measured from the rendered page rather than chosen by eye: the width is the
+// point below which controls overflow their rows, and the height is the
+// tallest tab panel. See sussurro-xvj.33.
+const (
+	settingsContentWidth  = 793
+	settingsContentHeight = 408
+	// settingsChrome covers the tab strip, window padding, and title bar,
+	// which sit outside the measured panel height.
+	settingsChrome = 120
+
+	// maxSettingsWidth and maxSettingsHeight keep the window on a small
+	// laptop display (1366x768) even at high scaling, where the scaled
+	// requirement would otherwise exceed the screen.
+	maxSettingsWidth  = 1300
+	maxSettingsHeight = 740
+)
+
+// applySettingsSize sizes the settings window so its CSS viewport matches what
+// the content needs on this display.
+//
+// webview sizes in device pixels, but the page lays out in CSS pixels, and
+// fractional display scaling divides one into the other. Sizing by a fixed
+// device-pixel number therefore under-sizes the content on any scaled display:
+// at 1.33 scaling the previous 820px window gave the page only 616 CSS px,
+// cropping controls that need 793.
+//
+// HintMin additionally prevents the user shrinking the window below the width
+// its controls need, which is the state the cropping bug reported.
+func applySettingsSize(w webview.WebView) {
+	scale := windowScale()
+	if scale < 1 {
+		// A sub-1 scale would shrink the window below the content's needs.
+		scale = 1
+	}
+
+	width := scaleDimension(settingsContentWidth, scale, maxSettingsWidth)
+	height := scaleDimension(settingsContentHeight+settingsChrome, scale, maxSettingsHeight)
+
+	w.SetSize(width, height, webview.HintMin)
+	w.SetSize(width, height, webview.HintNone)
+}
+
+// scaleDimension converts a CSS-pixel requirement into device pixels, capped
+// so the window still fits a small display.
+//
+// It rounds up: rounding to nearest can land a pixel short of the requirement
+// once the browser divides the size back down, which is enough to start
+// cropping a control that fits exactly.
+func scaleDimension(css int, scale float64, max int) int {
+	scaled := int(math.Ceil(float64(css) * scale))
+	if scaled > max {
+		return max
+	}
+	return scaled
 }

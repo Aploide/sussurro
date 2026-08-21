@@ -52,3 +52,12 @@ func interceptSettingsClose(win unsafe.Pointer) {
 	})
 	prevSettingsProc, _, _ = procSetWindowLongPtrW.Call(uintptr(win), gwlpWndProc, cb)
 }
+
+// windowScale reports the display's content scaling factor.
+//
+// Windows applies DPI scaling to window geometry itself when the process is
+// DPI-aware, so content and window sizes already agree and no correction is
+// needed. Returning 1 keeps the cross-platform caller simple.
+func windowScale() float64 {
+	return 1.0
+}

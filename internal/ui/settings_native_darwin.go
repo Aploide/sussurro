@@ -53,3 +53,11 @@ func hideWebviewWindow(win unsafe.Pointer) {
 func interceptSettingsClose(win unsafe.Pointer) {
 	C.intercept_close(win)
 }
+
+// windowScale reports the display's content scaling factor.
+//
+// macOS sizes windows in points and handles Retina scaling below that, so a
+// window sized in points already yields the matching CSS viewport.
+func windowScale() float64 {
+	return 1.0
+}
