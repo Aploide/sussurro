@@ -75,6 +75,8 @@ func (model ViewModel) Visible() bool {
 // CompactModel builds the immediate-mode view for a lifecycle state. This is
 // what upstream already showed, expressed as a model.
 func CompactModel(state AppState) ViewModel {
+	// Transcript is deliberately empty: this clears any live text still on
+	// screen, so the panel collapses back to the capsule.
 	return ViewModel{State: state, Mode: ViewCompact, Status: compactStatus(state)}
 }
 

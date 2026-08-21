@@ -52,8 +52,10 @@ func TestLegacyConfigKeepsImmediateDefaults(t *testing.T) {
 	if cfg.Workflow.ReviewEnabled() {
 		t.Error("ReviewEnabled() = true, want false for a legacy config")
 	}
-	if cfg.Workflow.Streaming.Enabled {
-		t.Error("Streaming.Enabled = true, want false by default")
+	// Streaming is on by default: showing text while the user speaks is the
+	// point of the feature, and passes are sub-second on an accelerated host.
+	if !cfg.Workflow.Streaming.Enabled {
+		t.Error("Streaming.Enabled = false, want true by default")
 	}
 	if cfg.Workflow.Input.Backend != InputAuto {
 		t.Errorf("Input.Backend = %q, want %q", cfg.Workflow.Input.Backend, InputAuto)
@@ -87,8 +89,8 @@ func TestShippedDefaultConfigLoads(t *testing.T) {
 	if cfg.Workflow.Mode != ModeImmediate {
 		t.Errorf("Mode = %q, want shipped defaults to stay immediate", cfg.Workflow.Mode)
 	}
-	if cfg.Workflow.Streaming.Enabled {
-		t.Error("shipped defaults enable streaming, want disabled")
+	if !cfg.Workflow.Streaming.Enabled {
+		t.Error("shipped defaults disable streaming, want enabled")
 	}
 }
 

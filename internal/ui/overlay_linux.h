@@ -22,6 +22,16 @@
 /* ---- Geometry ---- */
 #define OVERLAY_WIDTH    220
 #define OVERLAY_HEIGHT    52
+
+/* Transcript panel geometry. Live text needs room to wrap, so the window
+   widens and grows downward while text is showing, then returns to the
+   capsule when it is cleared. */
+#define PANEL_WIDTH      520
+#define PANEL_PAD_X       18
+#define PANEL_PAD_Y       14
+#define PANEL_TEXT_SIZE   15
+#define PANEL_STATUS_SIZE 11
+#define PANEL_MAX_HEIGHT 320
 #define OVERLAY_RADIUS    26.0
 #define ITEM_COUNT         7
 
@@ -86,5 +96,10 @@ void overlay_install_context_menu(GtkWidget *win,
                                   MenuQuitCB quit_cb);
 
 /* Show / hide */
+/* Sets the transcript text and status line shown in the expanded panel.
+   Either may be NULL or empty. Safe to call from any thread. */
+void overlay_set_transcript_async(GtkWidget *win, const char *text,
+                                  const char *status, int provisional);
+
 void overlay_show(GtkWidget *win);
 void overlay_hide(GtkWidget *win);

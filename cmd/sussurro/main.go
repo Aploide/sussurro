@@ -153,13 +153,22 @@ func run() {
 	flow := buildWorkflow(cfg, pipe, llmEngine, pasteBackend, presentToUI.Present, log)
 	input := flow.dispatch
 
-	// Streaming stays off unless the config opts in. Partial text reaches the
-	// review controller when one is running, and the log otherwise.
+	// Partial text goes to the overlay in both modes. Review mode routes it
+	// through the session controller, which owns the workflow state; immediate
+	// mode has no controller, so it presents directly. Logging it instead —
+	// which is what this did — makes the whole feature invisible.
 	if cfg.Workflow.Streaming.Enabled {
 		onPartial := flow.partial
 		if onPartial == nil {
 			onPartial = func(generation uint64, text string) {
 				log.Debug("Partial transcription", "generation", generation, "text", text)
+				presentToUI.Present(ui.ViewModel{
+					State:      session.StateRecording,
+					Transcript: text,
+					Partial:    true,
+					Status:     "Listening",
+					Mode:       ui.ViewExpanded,
+				})
 			}
 		}
 		pipe.SetStreamer(pipeline.NewStreamer(

@@ -26,7 +26,13 @@ WHISPER_COMMIT ?= 764482c3175d9c3bc6089c1ec84df7d1b9537d83
 GO_LLAMA_COMMIT ?= b2c101738f26f466f1a30317d50a88ce7c0ada12
 
 # Detect number of CPU cores for parallel builds
-NPROCS := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)
+# Build parallelism. Defaults to 60% of the cores so a rebuild leaves the
+# machine usable — these builds are long, and saturating every core makes the
+# desktop unresponsive for their duration. This is a default, not a cap:
+# override with e.g. BUILD_JOBS=24 to use everything.
+NCORES    := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)
+BUILD_JOBS ?= $(shell n=$$(( $(NCORES) * 3 / 5 )); [ $$n -lt 1 ] && n=1; echo $$n)
+NPROCS    := $(BUILD_JOBS)
 
 # Detect OS and architecture for platform-specific builds
 UNAME_S := $(shell uname -s)
@@ -251,6 +257,7 @@ else ifeq ($(UNAME_S),Darwin)
 else
 	@echo "  Layer shell  : $(HAS_LAYER_SHELL)$(if $(LAYER_SHELL_PC), ($(LAYER_SHELL_PC)))"
 	@echo "  Vulkan       : $(HAS_VULKAN)"
+	@echo "  Build jobs   : $(BUILD_JOBS) of $(NCORES) cores"
 	@echo "  Build tags   : $(UI_TAGS)"
 	PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_UI)" \
 	CGO_CFLAGS="$(LAYER_CFLAGS) $(WV_CFLAGS)" \

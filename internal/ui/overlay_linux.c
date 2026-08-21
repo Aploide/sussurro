@@ -1,4 +1,5 @@
 #include "overlay_linux.h"
+#include <pango/pangocairo.h>
 
 /* ------------------------------------------------------------------ */
 /* Internal data structure                                             */
@@ -23,6 +24,13 @@ struct OverlayData {
 
     /* Shimmer phase for transcribing text */
     double       shimmer_phase;
+
+    /* Live transcript shown in the expanded panel. Owned by this struct and
+       only touched on the GTK main thread. */
+    char        *transcript;
+    char        *status;
+    gboolean     provisional;   /* text is still being revised */
+    int          panel_height;  /* 0 when showing the capsule */
 
     /* Animation timer source id, 0 when stopped. The timer only runs while
        the overlay is mapped: a hidden capsule must cost nothing. */
@@ -158,6 +166,118 @@ static void draw_transcribing_text(cairo_t *cr, OverlayData *od)
     cairo_reset_clip(cr);
 }
 
+/* Keeps the overlay bottom-centred on the primary monitor at the given size.
+   The window changes size as the transcript grows, so the position has to be
+   recomputed rather than set once at creation.
+
+   Under gtk-layer-shell the compositor owns placement and this is a no-op. */
+static void reposition_overlay(GtkWidget *win, int width, int height)
+{
+#ifdef HAVE_GTK_LAYER_SHELL
+    (void)win; (void)width; (void)height;
+#else
+    GdkDisplay *display = gdk_display_get_default();
+    GdkMonitor *monitor = gdk_display_get_primary_monitor(display);
+    if (!monitor) monitor = gdk_display_get_monitor(display, 0);
+    GdkRectangle geo = {0, 0, 1920, 1080}; /* safe fallback */
+    if (monitor) gdk_monitor_get_geometry(monitor, &geo);
+
+    int x = geo.x + (geo.width - width) / 2;
+    int y = geo.y + geo.height - height - 24;
+    gtk_window_move(GTK_WINDOW(win), x, y);
+#endif
+}
+
+/* ------------------------------------------------------------------ */
+/* Transcript panel                                                     */
+/* ------------------------------------------------------------------ */
+
+/* Builds the Pango layout for the transcript text.
+   cairo_show_text cannot wrap, so live dictation needs a real text layout. */
+static PangoLayout *panel_text_layout(cairo_t *cr, OverlayData *od)
+{
+    PangoLayout *layout = pango_cairo_create_layout(cr);
+    PangoFontDescription *font = pango_font_description_from_string("Sans");
+    pango_font_description_set_absolute_size(font, PANEL_TEXT_SIZE * PANGO_SCALE);
+    pango_layout_set_font_description(layout, font);
+    pango_font_description_free(font);
+
+    pango_layout_set_width(layout, (PANEL_WIDTH - 2 * PANEL_PAD_X) * PANGO_SCALE);
+    pango_layout_set_wrap(layout, PANGO_WRAP_WORD_CHAR);
+    pango_layout_set_text(layout, od->transcript ? od->transcript : "", -1);
+    return layout;
+}
+
+/* Rounded rectangle path for the expanded panel. */
+static void panel_path(cairo_t *cr, double w, double h)
+{
+    const double r = 12.0;
+    cairo_new_sub_path(cr);
+    cairo_arc(cr, w - r, r,     r, -G_PI / 2, 0);
+    cairo_arc(cr, w - r, h - r, r, 0,          G_PI / 2);
+    cairo_arc(cr, r,     h - r, r, G_PI / 2,   G_PI);
+    cairo_arc(cr, r,     r,     r, G_PI,       3 * G_PI / 2);
+    cairo_close_path(cr);
+}
+
+/* Draws the transcript panel. Returns the height it needs, so the caller can
+   size the window to the text. */
+static int draw_panel(cairo_t *cr, OverlayData *od, gboolean paint)
+{
+    PangoLayout *layout = panel_text_layout(cr, od);
+
+    int text_w = 0, text_h = 0;
+    pango_layout_get_pixel_size(layout, &text_w, &text_h);
+
+    int status_h = 0;
+    PangoLayout *status_layout = NULL;
+    if (od->status && od->status[0]) {
+        status_layout = pango_cairo_create_layout(cr);
+        PangoFontDescription *sf = pango_font_description_from_string("Sans");
+        pango_font_description_set_absolute_size(sf, PANEL_STATUS_SIZE * PANGO_SCALE);
+        pango_layout_set_font_description(status_layout, sf);
+        pango_font_description_free(sf);
+        pango_layout_set_text(status_layout, od->status, -1);
+
+        int sw = 0;
+        pango_layout_get_pixel_size(status_layout, &sw, &status_h);
+        status_h += 6; /* gap above the status line */
+    }
+
+    int height = PANEL_PAD_Y * 2 + text_h + status_h;
+    if (height > PANEL_MAX_HEIGHT) height = PANEL_MAX_HEIGHT;
+
+    if (paint) {
+        panel_path(cr, PANEL_WIDTH, height);
+        cairo_set_source_rgba(cr, 0.12, 0.12, 0.12, 0.94);
+        cairo_fill_preserve(cr);
+        cairo_set_source_rgba(cr, 1, 1, 1, 0.10);
+        cairo_set_line_width(cr, 1.0);
+        cairo_stroke(cr);
+
+        /* Provisional text is dimmed: it is still being revised, and the
+           user should be able to tell settled text from text that may
+           still change under them. */
+        if (od->provisional) {
+            cairo_set_source_rgba(cr, 1, 1, 1, 0.72);
+        } else {
+            cairo_set_source_rgba(cr, 1, 1, 1, 0.95);
+        }
+        cairo_move_to(cr, PANEL_PAD_X, PANEL_PAD_Y);
+        pango_cairo_show_layout(cr, layout);
+
+        if (status_layout) {
+            cairo_set_source_rgba(cr, 1, 1, 1, 0.45);
+            cairo_move_to(cr, PANEL_PAD_X, PANEL_PAD_Y + text_h + 6);
+            pango_cairo_show_layout(cr, status_layout);
+        }
+    }
+
+    if (status_layout) g_object_unref(status_layout);
+    g_object_unref(layout);
+    return height;
+}
+
 /* ------------------------------------------------------------------ */
 /* Draw callback                                                       */
 /* ------------------------------------------------------------------ */
@@ -171,6 +291,12 @@ static gboolean on_draw(GtkWidget *widget, cairo_t *cr, gpointer data)
     cairo_set_source_rgba(cr, 0, 0, 0, 0);
     cairo_paint(cr);
     cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+
+    /* With live text to show, the capsule gives way to the transcript panel. */
+    if (od->transcript && od->transcript[0]) {
+        draw_panel(cr, od, TRUE);
+        return FALSE;
+    }
 
     draw_pill_background(cr);
     draw_pill_border(cr);
@@ -404,14 +530,7 @@ GtkWidget *overlay_create(void)
        re-positioning, no moving — the window sits exactly where we put it,
        regardless of how the process was started. */
     {
-        GdkDisplay  *display = gdk_display_get_default();
-        GdkMonitor  *monitor = gdk_display_get_primary_monitor(display);
-        if (!monitor) monitor = gdk_display_get_monitor(display, 0);
-        GdkRectangle geo = {0, 0, 1920, 1080}; /* safe fallback */
-        if (monitor) gdk_monitor_get_geometry(monitor, &geo);
-        int x = geo.x + (geo.width  - OVERLAY_WIDTH)  / 2;
-        int y = geo.y +  geo.height - OVERLAY_HEIGHT - 24;
-        gtk_window_move(GTK_WINDOW(win), x, y);
+        reposition_overlay(win, OVERLAY_WIDTH, OVERLAY_HEIGHT);
 
         /* Realize creates the underlying GdkWindow without mapping (showing)
            it, so override-redirect can be set before the WM ever sees the
@@ -615,6 +734,70 @@ static void overlay_set_visible_async(GtkWidget *win, gboolean visible)
     arg->win   = win;
     arg->state = visible ? 1 : 0;
     gdk_threads_add_idle(idle_set_visible, arg);
+}
+
+/* Argument for a queued transcript update. */
+typedef struct {
+    GtkWidget *win;
+    char      *text;
+    char      *status;
+    int        provisional;
+} IdleTranscriptArg;
+
+/* Applies a transcript update on the GTK main thread, resizing the window to
+   fit the text. */
+static gboolean idle_set_transcript(gpointer data)
+{
+    IdleTranscriptArg *arg = (IdleTranscriptArg *)data;
+    OverlayData *od = (OverlayData *)g_object_get_data(G_OBJECT(arg->win), "overlay-data");
+    if (!od) goto done;
+
+    g_free(od->transcript);
+    g_free(od->status);
+    od->transcript  = arg->text   ? g_strdup(arg->text)   : NULL;
+    od->status      = arg->status ? g_strdup(arg->status) : NULL;
+    od->provisional = arg->provisional ? TRUE : FALSE;
+
+    if (od->transcript && od->transcript[0]) {
+        /* Measure against a throwaway surface: the height depends on how the
+           text wraps, which only Pango can tell us. */
+        cairo_surface_t *probe = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
+        cairo_t *cr = cairo_create(probe);
+        int height = draw_panel(cr, od, FALSE);
+        cairo_destroy(cr);
+        cairo_surface_destroy(probe);
+
+        if (height != od->panel_height) {
+            od->panel_height = height;
+            gtk_widget_set_size_request(od->drawing_area, PANEL_WIDTH, height);
+            gtk_window_resize(GTK_WINDOW(arg->win), PANEL_WIDTH, height);
+            reposition_overlay(arg->win, PANEL_WIDTH, height);
+        }
+    } else if (od->panel_height != 0) {
+        od->panel_height = 0;
+        gtk_widget_set_size_request(od->drawing_area, OVERLAY_WIDTH, OVERLAY_HEIGHT);
+        gtk_window_resize(GTK_WINDOW(arg->win), OVERLAY_WIDTH, OVERLAY_HEIGHT);
+        reposition_overlay(arg->win, OVERLAY_WIDTH, OVERLAY_HEIGHT);
+    }
+
+    gtk_widget_queue_draw(od->drawing_area);
+
+done:
+    g_free(arg->text);
+    g_free(arg->status);
+    g_free(arg);
+    return G_SOURCE_REMOVE;
+}
+
+void overlay_set_transcript_async(GtkWidget *win, const char *text,
+                                  const char *status, int provisional)
+{
+    IdleTranscriptArg *arg = g_new0(IdleTranscriptArg, 1);
+    arg->win         = win;
+    arg->text        = text   ? g_strdup(text)   : NULL;
+    arg->status      = status ? g_strdup(status) : NULL;
+    arg->provisional = provisional;
+    gdk_threads_add_idle(idle_set_transcript, arg);
 }
 
 void overlay_show(GtkWidget *win)

@@ -55,7 +55,7 @@ const (
 // upstream's pre-review behavior so existing configs are unaffected.
 const (
 	DefaultInteractionMode   = ModeImmediate
-	DefaultStreamingEnabled  = false
+	DefaultStreamingEnabled  = true
 	DefaultStreamingInterval = "750ms"
 	DefaultInputBackend      = InputAuto
 	DefaultDeliveryBackend   = DeliveryAuto

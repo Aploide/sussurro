@@ -48,8 +48,10 @@ workflow:
   # review:    hold the text for inspection, editing, and explicit delivery.
   mode: "immediate"
   streaming:
-    # Show partial transcriptions while recording. Costs extra CPU.
-    enabled: false
+    # Show partial transcriptions on the overlay while you speak. Each pass
+    # re-transcribes the audio so far, so text is revised as context grows.
+    # Needs GPU acceleration to keep up; set false on CPU-only hosts.
+    enabled: true
     # Minimum gap between partial transcription passes (100ms-10s).
     interval: "750ms"
   input:

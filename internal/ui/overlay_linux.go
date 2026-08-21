@@ -22,6 +22,7 @@ static MenuQuitCB         menuQuitCB(void)         { return (MenuQuitCB)goQuit; 
 */
 import "C"
 import (
+	"log/slog"
 	"os"
 	"unsafe"
 )
@@ -124,6 +125,26 @@ func nativeOverlayState(state AppState) (C.int, bool) {
 	default:
 		return 0, false
 	}
+}
+
+// Present implements Presenter: it renders the review/streaming view model,
+// showing live transcript text in the expanded panel.
+func (o *linuxOverlay) Present(model ViewModel) {
+	slog.Debug("overlay Present", "transcript_len", len(model.Transcript),
+		"partial", model.Partial, "mode", model.Mode)
+	o.SetState(model.State)
+
+	ctext := C.CString(model.Transcript)
+	defer C.free(unsafe.Pointer(ctext))
+	cstatus := C.CString(model.Status)
+	defer C.free(unsafe.Pointer(cstatus))
+
+	provisional := C.int(0)
+	if model.Partial {
+		provisional = 1
+	}
+
+	C.overlay_set_transcript_async((*C.GtkWidget)(o.win), ctext, cstatus, provisional)
 }
 
 func (o *linuxOverlay) PushRMS(rms float32) {

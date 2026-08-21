@@ -86,7 +86,7 @@ func TestShippedDefaultsMatchTheDocumentedDefaults(t *testing.T) {
 			t.Errorf("configs/default.yaml does not contain %q", want)
 		}
 	}
-	if !strings.Contains(shipped, "enabled: false") {
-		t.Error("configs/default.yaml does not ship streaming disabled")
+	if !strings.Contains(shipped, "enabled: true") {
+		t.Error("configs/default.yaml does not ship streaming enabled")
 	}
 }
