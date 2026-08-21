@@ -77,15 +77,30 @@ func (model ViewModel) Visible() bool {
 func CompactModel(state AppState) ViewModel {
 	// Transcript is deliberately empty: this clears any live text still on
 	// screen, so the panel collapses back to the capsule.
-	return ViewModel{State: state, Mode: ViewCompact, Status: compactStatus(state)}
+	return ViewModel{State: state, Mode: ViewCompact, Status: compactStatus(state, false)}
 }
 
-// compactStatus describes an immediate-mode state.
-func compactStatus(state AppState) string {
+// StreamingCompactModel is CompactModel for a session showing live text. The
+// two differ only in what the finalising state is called, which depends on
+// whether the user has already been reading a transcript.
+func StreamingCompactModel(state AppState) ViewModel {
+	return ViewModel{State: state, Mode: ViewCompact, Status: compactStatus(state, true)}
+}
+
+// compactStatus describes an immediate-mode state. streaming reports whether
+// live text has been on screen during the recording.
+func compactStatus(state AppState, streaming bool) string {
 	switch state {
 	case session.StateRecording:
 		return "Listening"
 	case session.StateTranscribing:
+		// With streaming on, text has been on screen throughout, so this pass
+		// completes a transcription the user can already read: "Finalizing".
+		// With streaming off nothing has been shown yet, and transcription is
+		// literally what is starting, so the plainer word is the honest one.
+		if streaming {
+			return "Finalizing"
+		}
 		return "Transcribing"
 	case session.StateCleaningUp:
 		return "Cleaning up"
@@ -142,7 +157,7 @@ func reviewStatus(state session.ReviewState) string {
 	case session.ReviewRecording:
 		return "Listening"
 	case session.ReviewFinalizing:
-		return "Transcribing"
+		return "Finalizing"
 	case session.ReviewReady:
 		return "Tap to deliver, hold to edit, Esc to cancel"
 	case session.ReviewEditing:

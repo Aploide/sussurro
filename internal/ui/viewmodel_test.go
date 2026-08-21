@@ -31,6 +31,8 @@ func TestCompactModelPreservesImmediateBehavior(t *testing.T) {
 	}{
 		{state: session.StateIdle, status: ""},
 		{state: session.StateRecording, status: "Listening"},
+		// Without streaming nothing has been shown yet, so transcription is
+		// literally what is starting.
 		{state: session.StateTranscribing, status: "Transcribing"},
 	}
 
@@ -366,5 +368,30 @@ func TestManagerDropsUpdatesWhenSaturated(t *testing.T) {
 	}
 	if queued := len(manager.stateChangeCh); queued != 2 {
 		t.Errorf("queued %d models, want the channel capacity 2", queued)
+	}
+}
+
+// TestStatusDependsOnWhetherTextWasShown covers the distinction added for
+// sussurro-xvj.34. "Finalizing" is only truthful when live text has already
+// been on screen: it completes a transcript the user is reading. With nothing
+// shown, transcription is genuinely what is starting.
+func TestStatusDependsOnWhetherTextWasShown(t *testing.T) {
+	plain := CompactModel(session.StateTranscribing)
+	if plain.Status != "Transcribing" {
+		t.Errorf("CompactModel status = %q, want %q", plain.Status, "Transcribing")
+	}
+
+	streaming := StreamingCompactModel(session.StateTranscribing)
+	if streaming.Status != "Finalizing" {
+		t.Errorf("StreamingCompactModel status = %q, want %q", streaming.Status, "Finalizing")
+	}
+
+	// Cleanup is named the same either way: it describes the work itself,
+	// not what preceded it.
+	if got := CompactModel(session.StateCleaningUp).Status; got != "Cleaning up" {
+		t.Errorf("cleanup status = %q, want %q", got, "Cleaning up")
+	}
+	if got := StreamingCompactModel(session.StateCleaningUp).Status; got != "Cleaning up" {
+		t.Errorf("streaming cleanup status = %q, want %q", got, "Cleaning up")
 	}
 }

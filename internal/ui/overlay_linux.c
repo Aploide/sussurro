@@ -133,7 +133,12 @@ static void draw_recording_bars(cairo_t *cr, OverlayData *od)
 
 /* The capsule's label for a working state. Kept beside the enum it switches
  * on so a new state cannot silently inherit the wrong word, which is how
- * cleanup came to be labelled "transcribing". */
+ * cleanup came to be labelled "transcribing".
+ *
+ * The capsule draws only when there is no transcript panel, so nothing has
+ * been shown to the user yet and "transcribing" is accurate here. The panel
+ * says "Finalizing" instead, because there the user is already reading text
+ * that this pass is completing rather than producing. */
 static const char *working_label(int state)
 {
     return state == OVERLAY_STATE_CLEANING_UP ? "cleaning up" : "transcribing";

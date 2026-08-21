@@ -253,7 +253,7 @@ func TestPhaseKeepsTextOnScreen(t *testing.T) {
 		state  session.State
 		status string
 	}{
-		{session.StateTranscribing, "Transcribing"},
+		{session.StateTranscribing, "Finalizing"},
 		{session.StateCleaningUp, "Cleaning up"},
 	}
 
@@ -279,7 +279,9 @@ func TestPhaseKeepsTextOnScreen(t *testing.T) {
 				}
 				// The label must name the work actually running: the reuse
 				// path performs no recognition, so "Transcribing" there is
-				// simply false.
+				// simply false. With text on screen the finalising pass is
+				// completing a transcript the user is already reading, which
+				// is why it reads "Finalizing" rather than "Transcribing".
 				if model.Status != phase.status {
 					t.Errorf("Status = %q, want %q", model.Status, phase.status)
 				}
@@ -473,5 +475,27 @@ func TestCleaningUpGetsItsOwnNativeState(t *testing.T) {
 	if transcribing == cleaning {
 		t.Error("cleaning up shares the transcribing native state; the capsule " +
 			"would draw the transcribing label during cleanup")
+	}
+}
+
+// TestPhaseWithoutTextSaysTranscribing covers the other half of the
+// distinction: with no partial on screen, nothing has been shown yet, so
+// transcription is genuinely what is starting.
+func TestPhaseWithoutTextSaysTranscribing(t *testing.T) {
+	manager := &Manager{
+		stateChangeCh: make(chan ViewModel, 8),
+		overlay:       &presentingOverlay{},
+	}
+
+	manager.OnPhase(session.StateTranscribing, "")
+
+	select {
+	case model := <-manager.stateChangeCh:
+		if model.Status != "Transcribing" {
+			t.Errorf("Status = %q with no text shown, want %q",
+				model.Status, "Transcribing")
+		}
+	default:
+		t.Fatal("OnPhase queued nothing")
 	}
 }

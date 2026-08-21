@@ -720,7 +720,7 @@ func (p *Pipeline) takeFinalText() string {
 func phaseMessage(state session.State) string {
 	switch state {
 	case session.StateTranscribing:
-		return "Transcribing..."
+		return "Finalizing..."
 	case session.StateCleaningUp:
 		return "Cleaning up..."
 	default:
