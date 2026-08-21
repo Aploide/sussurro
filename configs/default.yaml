@@ -16,7 +16,11 @@ audio:
   channels: 1
   bit_depth: 16
   buffer_size: 1024
-  max_duration: "60s"
+  # Safety cap that bounds memory, not an expected limit. At 16 kHz mono
+  # float32 this is roughly 38 MB. Reaching it stops the recording mid
+  # sentence, so it is set well beyond normal dictation; the overlay shows
+  # the buffer filling as it approaches.
+  max_duration: "10m"
 
 models:
   asr:

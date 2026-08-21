@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -553,5 +554,59 @@ func TestStopRecordingReportsElapsed(t *testing.T) {
 	// A stop with nothing recording must report that, not invent a session.
 	if p.stopRecordingBecause(StopReleased) {
 		t.Error("stopRecordingBecause returned true when not recording")
+	}
+}
+
+// TestBufferFillReportsProgress covers sussurro-xvj.42: the cap truncates
+// speech mid sentence, so the UI needs to see it coming.
+func TestBufferFillReportsProgress(t *testing.T) {
+	asr := &stubTranscriber{text: "the quick brown fox"}
+	llm := &stubCleaner{text: "The quick brown fox."}
+	p := newTestPipeline(t, asr, llm, stubContext{info: &ctxProvider.ContextInfo{}})
+
+	p.maxSamples.Store(1000)
+	p.audioBuffer = make([]float32, 250)
+
+	fill, bounded := p.BufferFill()
+	if !bounded {
+		t.Fatal("BufferFill() reported no limit, want a bounded buffer")
+	}
+	if fill != 0.25 {
+		t.Errorf("fill = %v, want 0.25", fill)
+	}
+}
+
+// TestBufferFillIsUnboundedWhenInfinite checks an unlimited recording reports
+// no meaningful fill, so the UI shows no indicator rather than one pinned at
+// zero forever.
+func TestBufferFillIsUnboundedWhenInfinite(t *testing.T) {
+	asr := &stubTranscriber{text: "the quick brown fox"}
+	llm := &stubCleaner{text: "The quick brown fox."}
+	p := newTestPipeline(t, asr, llm, stubContext{info: &ctxProvider.ContextInfo{}})
+
+	p.maxSamples.Store(math.MaxInt32)
+	p.audioBuffer = make([]float32, 4096)
+
+	if _, bounded := p.BufferFill(); bounded {
+		t.Error("BufferFill() reported a limit for an infinite recording")
+	}
+}
+
+// TestBufferFillClampsAtFull keeps the fraction usable as a bar width even if
+// the buffer briefly exceeds the cap before the stop takes effect.
+func TestBufferFillClampsAtFull(t *testing.T) {
+	asr := &stubTranscriber{text: "the quick brown fox"}
+	llm := &stubCleaner{text: "The quick brown fox."}
+	p := newTestPipeline(t, asr, llm, stubContext{info: &ctxProvider.ContextInfo{}})
+
+	p.maxSamples.Store(100)
+	p.audioBuffer = make([]float32, 250)
+
+	fill, bounded := p.BufferFill()
+	if !bounded {
+		t.Fatal("BufferFill() reported no limit")
+	}
+	if fill != 1 {
+		t.Errorf("fill = %v, want it clamped to 1", fill)
 	}
 }

@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"log/slog"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -79,6 +80,10 @@ type Pipeline struct {
 	// indistinguishable in the log from a normal one.
 	recordingStart time.Time
 
+	// maxSamples is the recording cap in samples, published so the UI can
+	// show how close the buffer is to it. Written once at capture start,
+	// before any reader exists, then only read.
+	maxSamples atomic.Int64
 	// droppedFrames counts audio frames discarded because the consumer could
 	// not keep up. Written from the realtime audio thread, so it is atomic
 	// and never guarded by mu.
@@ -457,7 +462,7 @@ func (p *Pipeline) captureLoop() {
 	// Calculate max samples based on configuration
 	var maxSamples int
 	if strings.ToLower(p.maxDuration) == "infinite" || p.maxDuration == "0" {
-		maxSamples = 1<<31 - 1 // Effectively infinite
+		maxSamples = math.MaxInt32 // Effectively infinite
 		p.log.Debug("Max recording duration set to infinite")
 	} else {
 		// Default to 30s if not specified or invalid
@@ -474,6 +479,7 @@ func (p *Pipeline) captureLoop() {
 		maxSamples = int(float64(d.Seconds()) * float64(p.vadParams.SampleRate))
 		p.log.Debug("Max recording duration set", "duration", d, "max_samples", maxSamples)
 	}
+	p.maxSamples.Store(int64(maxSamples))
 
 	for {
 		select {
@@ -700,4 +706,27 @@ func phaseMessage(state session.State) string {
 	default:
 		return state.String()
 	}
+}
+
+// BufferFill reports how full the recording buffer is, from 0 to 1, and
+// whether a meaningful limit exists.
+//
+// The cap bounds memory rather than marking an expected limit, but reaching
+// it truncates speech mid sentence, so the UI needs to be able to warn before
+// that happens. An infinite cap reports false: there is nothing to fill.
+func (p *Pipeline) BufferFill() (float64, bool) {
+	max := p.maxSamples.Load()
+	if max <= 0 || max == math.MaxInt32 {
+		return 0, false
+	}
+
+	p.mu.Lock()
+	used := len(p.audioBuffer)
+	p.mu.Unlock()
+
+	fill := float64(used) / float64(max)
+	if fill > 1 {
+		fill = 1
+	}
+	return fill, true
 }
