@@ -98,8 +98,11 @@ void overlay_install_context_menu(GtkWidget *win,
 /* Show / hide */
 /* Sets the transcript text and status line shown in the expanded panel.
    Either may be NULL or empty. Safe to call from any thread. */
-void overlay_set_transcript_async(GtkWidget *win, const char *text,
-                                  const char *status, int provisional);
+/* Applies state, transcript and status in a single main-thread callback.
+   Setting them through separate calls lets the GTK loop draw between the two,
+   showing a state that no longer matches the text beside it. */
+void overlay_present_async(GtkWidget *win, int state, const char *text,
+                           const char *status, int provisional);
 
 void overlay_show(GtkWidget *win);
 void overlay_hide(GtkWidget *win);

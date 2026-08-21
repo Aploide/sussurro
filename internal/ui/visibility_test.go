@@ -273,3 +273,66 @@ func TestTranscribingKeepsTextOnScreen(t *testing.T) {
 		t.Fatal("OnTranscribing queued nothing")
 	}
 }
+
+func TestFinishedTextIsShownBeforeHiding(t *testing.T) {
+	overlay := &presentingOverlay{}
+	manager := &Manager{overlay: overlay}
+	manager.trayReady.Store(true)
+
+	manager.render(ViewModel{
+		State:      session.StateIdle,
+		Transcript: "the complete transcription",
+		Status:     "Done",
+		Mode:       ViewExpanded,
+	})
+
+	// The finished text must go on screen immediately. Deferring the draw as
+	// well as the hide meant the user never saw the last words at all.
+	models := overlay.presented()
+	if len(models) == 0 {
+		t.Fatal("nothing was presented; the finished text was never drawn")
+	}
+	if models[0].Transcript != "the complete transcription" {
+		t.Errorf("first presented model = %q, want the finished text", models[0].Transcript)
+	}
+
+	waitFor(t, func() bool {
+		shown := overlay.presented()
+		return len(shown) > 1 && shown[len(shown)-1].Transcript == ""
+	}, "the overlay never cleared the text after the linger")
+}
+
+func TestFinishedTextStaysForTheFullLinger(t *testing.T) {
+	overlay := &presentingOverlay{}
+	manager := &Manager{overlay: overlay}
+	manager.trayReady.Store(true)
+
+	manager.render(ViewModel{
+		State:      session.StateIdle,
+		Transcript: "final words",
+		Mode:       ViewExpanded,
+	})
+
+	// Half a linger in, the text must still be there: the second is measured
+	// from when it was displayed, not from when the key was released.
+	time.Sleep(hideLinger / 2)
+	models := overlay.presented()
+	if models[len(models)-1].Transcript != "final words" {
+		t.Errorf("text cleared after %v, want it held for the full linger", hideLinger/2)
+	}
+}
+
+func TestOnFinishedCarriesTheText(t *testing.T) {
+	manager := &Manager{stateChangeCh: make(chan ViewModel, 4)}
+
+	manager.OnFinished("what was actually transcribed")
+
+	select {
+	case model := <-manager.stateChangeCh:
+		if model.Transcript != "what was actually transcribed" {
+			t.Errorf("Transcript = %q, want the finished text", model.Transcript)
+		}
+	default:
+		t.Fatal("OnFinished queued nothing")
+	}
+}

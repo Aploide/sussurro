@@ -48,6 +48,9 @@ type Pipeline struct {
 	uiNotifier     StateNotifier  // optional; nil means no UI
 	resultConsumer ResultConsumer // optional; nil discards results
 	streamer       *Streamer      // optional; nil disables partial transcription
+	// finalText holds the transcription just produced, so completion can
+	// display it rather than only reporting that the session ended.
+	finalText string
 
 	// Channels for data flow
 	audioChan chan []float32
@@ -293,9 +296,27 @@ func (p *Pipeline) notifyTranscribing(partial string) {
 }
 
 // TranscribingNotifier is the optional extension a notifier implements to
-// keep provisional text visible while the final pass runs.
+// keep transcript text visible across the states that carry it.
 type TranscribingNotifier interface {
+	// OnTranscribing keeps provisional text visible while the final pass runs.
 	OnTranscribing(partial string)
+	// OnFinished hands over the completed text so the UI can display it
+	// before it stops showing anything. Without this the overlay only ever
+	// learns that the session ended, never what it produced.
+	OnFinished(text string)
+}
+
+// notifyFinished announces the completed transcription, carrying the text so
+// it can be shown before the overlay goes away.
+func (p *Pipeline) notifyFinished(text string) {
+	if p.uiNotifier == nil {
+		return
+	}
+	if holder, ok := p.uiNotifier.(TranscribingNotifier); ok && text != "" {
+		holder.OnFinished(text)
+		return
+	}
+	p.uiNotifier.OnStateChange(session.StateIdle)
 }
 
 // reusableTailSamples is how much unseen audio a partial may have missed and
@@ -389,7 +410,7 @@ func (p *Pipeline) processSegment(samples []float32) {
 		p.mu.Lock()
 		p.isTranscribing = false
 		p.mu.Unlock()
-		p.notifyState(session.StateIdle)
+		p.notifyFinished(p.takeFinalText())
 		if p.onCompletion != nil {
 			p.onCompletion()
 		}
@@ -435,7 +456,7 @@ func (p *Pipeline) completeFromPartial(text string) {
 		p.mu.Lock()
 		p.isTranscribing = false
 		p.mu.Unlock()
-		p.notifyState(session.StateIdle)
+		p.notifyFinished(p.takeFinalText())
 		if p.onCompletion != nil {
 			p.onCompletion()
 		}
@@ -446,6 +467,10 @@ func (p *Pipeline) completeFromPartial(text string) {
 
 // finishSegment turns a recognised transcription into a published result.
 func (p *Pipeline) finishSegment(text string, start time.Time) {
+	// Recorded so the completion notifier can show what was produced rather
+	// than only that the session ended.
+	defer func() { p.setFinalText(text) }()
+
 	// Check word count
 	// If detected less than 4 words, avoid transcribing completely (treat as false positive)
 	// We do this after transcription as we need the text to count words
@@ -526,4 +551,21 @@ func (p *Pipeline) publish(result Result) {
 		return
 	}
 	consumer.OnResult(result)
+}
+
+// setFinalText records the transcription just produced.
+func (p *Pipeline) setFinalText(text string) {
+	p.mu.Lock()
+	p.finalText = text
+	p.mu.Unlock()
+}
+
+// takeFinalText returns and clears the last transcription, so a session that
+// produced nothing does not display the previous one's text.
+func (p *Pipeline) takeFinalText() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	text := p.finalText
+	p.finalText = ""
+	return text
 }

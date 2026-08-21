@@ -381,3 +381,56 @@ func TestStopTranscribesNormallyWithoutAStreamer(t *testing.T) {
 		t.Errorf("Transcribe called %d times, want 1", asr.calls)
 	}
 }
+
+// finishNotifier records the state notifications a pipeline emits, including
+// the optional text-carrying ones.
+type finishNotifier struct {
+	states   []session.State
+	finished []string
+	partials []string
+}
+
+func (n *finishNotifier) OnStateChange(state session.State) { n.states = append(n.states, state) }
+func (n *finishNotifier) OnRMSData(float32)                 {}
+func (n *finishNotifier) OnTranscribing(partial string)     { n.partials = append(n.partials, partial) }
+func (n *finishNotifier) OnFinished(text string)            { n.finished = append(n.finished, text) }
+
+func TestCompletionCarriesTheFinalText(t *testing.T) {
+	asr := &stubTranscriber{text: "the quick brown fox"}
+	llm := &stubCleaner{text: "The quick brown fox."}
+	notifier := &finishNotifier{}
+
+	p := newTestPipeline(t, asr, llm, stubContext{info: &ctxProvider.ContextInfo{}})
+	p.SetResultConsumer(&recordingConsumer{})
+	p.uiNotifier = notifier
+
+	run(p, samplesFor(3))
+
+	// Without the text, the overlay learns only that the session ended and
+	// hides without ever showing what was produced.
+	if len(notifier.finished) != 1 {
+		t.Fatalf("OnFinished called %d times, want 1", len(notifier.finished))
+	}
+	if notifier.finished[0] != "The quick brown fox." {
+		t.Errorf("OnFinished text = %q, want the delivered text", notifier.finished[0])
+	}
+}
+
+func TestCompletionWithNoResultCarriesNoText(t *testing.T) {
+	// A recording that produced nothing must not display the previous one's
+	// text on the way out.
+	asr := &stubTranscriber{text: "too short"}
+	llm := &stubCleaner{text: "unused"}
+	notifier := &finishNotifier{}
+
+	p := newTestPipeline(t, asr, llm, stubContext{info: &ctxProvider.ContextInfo{}})
+	p.SetResultConsumer(&recordingConsumer{})
+	p.uiNotifier = notifier
+
+	run(p, samplesFor(3))
+
+	if len(notifier.finished) != 0 {
+		t.Errorf("OnFinished called with %q for a rejected result, want no text",
+			notifier.finished)
+	}
+}

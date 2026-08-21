@@ -775,6 +775,7 @@ static void overlay_set_visible_async(GtkWidget *win, gboolean visible)
 /* Argument for a queued transcript update. */
 typedef struct {
     GtkWidget *win;
+    int        state;
     char      *text;
     char      *status;
     int        provisional;
@@ -787,6 +788,11 @@ static gboolean idle_set_transcript(gpointer data)
     IdleTranscriptArg *arg = (IdleTranscriptArg *)data;
     OverlayData *od = (OverlayData *)g_object_get_data(G_OBJECT(arg->win), "overlay-data");
     if (!od) goto done;
+
+    /* State and text are applied together: updating them through separate
+       idle callbacks let a draw land between the two, briefly showing the
+       transcribing capsule in place of text that was already on screen. */
+    od->state = arg->state;
 
     g_free(od->transcript);
     g_free(od->status);
@@ -825,11 +831,12 @@ done:
     return G_SOURCE_REMOVE;
 }
 
-void overlay_set_transcript_async(GtkWidget *win, const char *text,
-                                  const char *status, int provisional)
+void overlay_present_async(GtkWidget *win, int state, const char *text,
+                           const char *status, int provisional)
 {
     IdleTranscriptArg *arg = g_new0(IdleTranscriptArg, 1);
     arg->win         = win;
+    arg->state       = state;
     arg->text        = text   ? g_strdup(text)   : NULL;
     arg->status      = status ? g_strdup(status) : NULL;
     arg->provisional = provisional;

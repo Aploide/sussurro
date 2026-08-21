@@ -124,12 +124,24 @@ func (m *Manager) render(model ViewModel) {
 		return
 	}
 
-	// Draw the final state, then hide after the linger.
+	// Show the finished text first, then hide after the linger. Deferring the
+	// draw as well as the hide meant the complete transcription was never
+	// displayed: the overlay simply waited, then vanished.
+	//
+	// The linger is measured from this moment — when the final text goes on
+	// screen — not from when the key was released, because the final pass
+	// runs in between and would otherwise consume most of the second.
+	visible := model
+	visible.Mode = ViewExpanded
+	present(m.overlay, visible, trayReady)
+
+	hidden := model
+	hidden.Transcript = ""
 	m.hideTimer = time.AfterFunc(hideLinger, func() {
 		m.hideMu.Lock()
 		m.hideTimer = nil
 		m.hideMu.Unlock()
-		present(m.overlay, model, trayReady)
+		present(m.overlay, hidden, trayReady)
 	})
 	m.hideMu.Unlock()
 }
@@ -178,6 +190,18 @@ func (m *Manager) OnTranscribing(partial string) {
 		Transcript: partial,
 		Partial:    true,
 		Status:     "Transcribing",
+		Mode:       ViewExpanded,
+	})
+}
+
+// OnFinished implements pipeline.TranscribingNotifier: it shows the completed
+// transcription so the user can read what was produced. render() displays it,
+// then hides the overlay a second later.
+func (m *Manager) OnFinished(text string) {
+	m.Present(ViewModel{
+		State:      session.StateIdle,
+		Transcript: text,
+		Status:     "Done",
 		Mode:       ViewExpanded,
 	})
 }

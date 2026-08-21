@@ -22,7 +22,6 @@ static MenuQuitCB         menuQuitCB(void)         { return (MenuQuitCB)goQuit; 
 */
 import "C"
 import (
-	"log/slog"
 	"os"
 	"unsafe"
 )
@@ -130,9 +129,10 @@ func nativeOverlayState(state AppState) (C.int, bool) {
 // Present implements Presenter: it renders the review/streaming view model,
 // showing live transcript text in the expanded panel.
 func (o *linuxOverlay) Present(model ViewModel) {
-	slog.Debug("overlay Present", "transcript_len", len(model.Transcript),
-		"partial", model.Partial, "mode", model.Mode)
-	o.SetState(model.State)
+	nativeState, ok := nativeOverlayState(model.State)
+	if !ok {
+		return
+	}
 
 	ctext := C.CString(model.Transcript)
 	defer C.free(unsafe.Pointer(ctext))
@@ -144,7 +144,10 @@ func (o *linuxOverlay) Present(model ViewModel) {
 		provisional = 1
 	}
 
-	C.overlay_set_transcript_async((*C.GtkWidget)(o.win), ctext, cstatus, provisional)
+	// One call, not a SetState followed by a transcript update: separate
+	// idle callbacks let the GTK loop draw between them, which is how the
+	// transcribing capsule appeared in place of text already on screen.
+	C.overlay_present_async((*C.GtkWidget)(o.win), nativeState, ctext, cstatus, provisional)
 }
 
 func (o *linuxOverlay) PushRMS(rms float32) {
