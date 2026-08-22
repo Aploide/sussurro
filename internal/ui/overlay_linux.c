@@ -179,11 +179,19 @@ static void draw_control_row(cairo_t *cr, OverlayData *od,
     double row_top   = panel_h - PANEL_PAD_Y - ROW_HEIGHT;
     double centre_y  = row_top + ROW_HEIGHT / 2.0;
 
-    /* The waveform slot carries a status word instead once recording has
-       stopped. The waveform means nothing when no audio is arriving, and the
-       slot is free exactly when a label is wanted: it says the overlay is
-       working rather than hung, and confirms the copy. */
-    if (od->status && od->status[0]) {
+    /* State decides first, and RECORDING always wins.
+     *
+     * The waveform is the only live confirmation that audio is being captured,
+     * so nothing may displace it while recording is running. Testing the status
+     * string ahead of the state let any label — including one a caller had not
+     * cleared — blank the waveform mid-dictation (sussurro-xvj.61).
+     *
+     * Once recording stops the waveform means nothing, and the slot carries a
+     * status word instead: it says the overlay is working rather than hung, and
+     * confirms the copy. */
+    if (od->state == OVERLAY_STATE_RECORDING) {
+        draw_recording_bars(cr, od, PANEL_PAD_X, wave_w, centre_y);
+    } else if (od->status && od->status[0]) {
         draw_row_status(cr, od, PANEL_PAD_X, wave_w, centre_y);
     } else if (od->state == OVERLAY_STATE_IDLE) {
         draw_idle_dots(cr, od, PANEL_PAD_X, wave_w, centre_y);

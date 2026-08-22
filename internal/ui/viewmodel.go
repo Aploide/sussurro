@@ -157,13 +157,16 @@ func lifecycleFor(state session.ReviewState) AppState {
 func reviewStatus(state session.ReviewState) string {
 	switch state {
 	case session.ReviewRecording:
-		return "Listening"
+		// No label while capturing: the waveform occupies this slot and shows
+		// the same thing, live. compactStatus does likewise.
+		return ""
 	case session.ReviewFinalizing:
 		return "Finalizing"
 	case session.ReviewReady:
 		return "Tap to deliver, hold to edit, Esc to cancel"
 	case session.ReviewEditing:
-		return "Listening for an edit"
+		// Also capturing, so the waveform speaks for it.
+		return ""
 	case session.ReviewApplyingEdit:
 		return "Applying edit"
 	case session.ReviewDelivering:
