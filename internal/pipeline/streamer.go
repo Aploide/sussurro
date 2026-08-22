@@ -238,11 +238,22 @@ func (s *Streamer) runPass(generation uint64) {
 		return
 	}
 
+	// Each partial re-transcribes the whole buffer from the start, so this
+	// duration grows with the dictation while the interval between passes
+	// stays fixed. Logged at info because it is the only visible measure of
+	// that cost: asr_duration reports the final pass alone (sussurro-xvj.60).
+	passStart := time.Now()
 	text, err := s.transcribe.Transcribe(samples)
+	passDuration := time.Since(passStart)
 	if err != nil {
 		s.log.Debug("Partial transcription failed", "error", err)
 		return
 	}
+	s.log.Info("Partial pass",
+		"duration", passDuration.Round(time.Millisecond),
+		"audio", (time.Duration(len(samples)) * time.Second /
+			time.Duration(s.sampleRate)).Round(time.Millisecond),
+		"samples", len(samples))
 	// Strip before publishing: a partial that is nothing but a marker has no
 	// text in it, and showing one in the overlay is the reported defect.
 	text = StripNonSpeechMarkers(text)
