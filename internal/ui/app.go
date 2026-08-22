@@ -40,10 +40,10 @@ type Manager struct {
 	// where taking that lock is what stalled capture in sussurro-xvj.36.
 	fillSource func() (float64, bool)
 
-	// trayReady reports whether the system tray has appeared. Until it does,
-	// the overlay stays visible even when idle: its right-click menu is the
-	// documented fallback route to Settings and Quit, and some desktops never
-	// host an SNI item at all. Hiding it there would leave no way in.
+	// trayReady reports whether the system tray has appeared. Some desktops
+	// never host an SNI item, and there the overlay's right-click menu is the
+	// only route to Settings and Quit, so it is shown when no tray registers
+	// within trayGracePeriod and stays visible even when idle.
 	trayReady atomic.Bool
 
 	// hideTimer defers hiding the overlay so finished text can be read.
@@ -52,6 +52,10 @@ type Manager struct {
 
 	// hideLingerOverride shortens the linger in tests. Zero means hideLinger.
 	hideLingerOverride time.Duration
+
+	// trayGraceOverride shortens the tray grace period in tests. Zero means
+	// trayGracePeriod.
+	trayGraceOverride time.Duration
 }
 
 // NewManager constructs the Manager.  Call Run() to start the event loop.
@@ -89,13 +93,18 @@ func (m *Manager) Run() {
 		func() { m.Quit() },
 	)
 
-	// 5. The overlay is created unmapped. Show it until the tray confirms
-	//    itself, so a desktop that never hosts an SNI item still has the
-	//    right-click menu as a way into Settings and Quit.
-	m.render(CompactModel(session.StateIdle))
-
-	// 6. System tray (runs its own goroutine internally on Linux via DBus).
+	// 5. System tray (runs its own goroutine internally on Linux via DBus).
 	go m.runTray()
+
+	// 6. The overlay is created unmapped and stays that way while the tray is
+	//    given a chance to appear. Only if it does not does the overlay come
+	//    up as the fallback route to Settings and Quit, for desktops that host
+	//    no SNI item at all.
+	//
+	//    Showing it immediately and hiding it on tray registration was the
+	//    earlier arrangement, and it flashed the overlay on every startup for
+	//    however long the tray took to answer over DBus.
+	m.scheduleTrayFallback()
 
 	// 7. Goroutine that forwards state/RMS from pipeline to the overlay.
 	go m.processUpdates()
@@ -173,14 +182,43 @@ func (m *Manager) render(model ViewModel) {
 	m.hideMu.Unlock()
 }
 
+// trayGracePeriod is how long the tray is given to register before the overlay
+// comes up as the fallback route to Settings and Quit.
+//
+// Long enough that a working tray always wins the race, so the overlay is never
+// shown on a desktop that has one; short enough that a desktop without one is
+// not left unreachable for an uncomfortable stretch.
+const trayGracePeriod = 3 * time.Second
+
+// scheduleTrayFallback shows the overlay if the tray has not registered by the
+// end of the grace period, and does nothing at all if it has.
+func (m *Manager) scheduleTrayFallback() {
+	grace := trayGracePeriod
+	if m.trayGraceOverride > 0 {
+		grace = m.trayGraceOverride
+	}
+	time.AfterFunc(grace, m.showFallbackIfNoTray)
+}
+
+// showFallbackIfNoTray puts the overlay up when no tray has registered, since
+// its right-click menu is then the only route to Settings and Quit. A tray
+// that did register means the overlay is not needed and stays hidden.
+func (m *Manager) showFallbackIfNoTray() {
+	if m.trayReady.Load() {
+		return
+	}
+	m.publish(CompactModel(session.StateIdle))
+}
+
 // markTrayReady records that the tray is hosting Sussurro, which releases the
 // overlay to hide when idle.
 func (m *Manager) markTrayReady() {
 	if m.trayReady.Swap(true) {
 		return
 	}
-	// The overlay is showing only as a fallback, so take it down now rather
-	// than waiting for the next state change.
+	// The overlay may already be up as the fallback, if the tray took longer
+	// than the grace period. Re-render so it comes down now rather than at the
+	// next state change.
 	m.render(CompactModel(session.StateIdle))
 }
 
