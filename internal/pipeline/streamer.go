@@ -2,9 +2,12 @@ package pipeline
 
 import (
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/aploide/sussurro/internal/asr"
 )
 
 // SnapshotFunc returns a copy of the audio captured so far in the current
@@ -64,6 +67,12 @@ type Streamer struct {
 	lastText    string
 	lastSamples int
 	lastGen     uint64
+	// settledText is the transcript of audio behind the window, and
+	// settledUntil the point in the recording it covers. Settled text is never
+	// transcribed again: it conditions the decoder as a prompt, so it costs no
+	// inference and cannot change under the user.
+	settledText  string
+	settledUntil time.Duration
 	// wake signals the worker that a pass is due. Capacity 1 is what
 	// coalesces ticks: a pending wake absorbs any number of further ticks.
 	wake chan struct{}
@@ -92,6 +101,136 @@ func NewStreamer(
 		sampleRate: sampleRate,
 		log:        log,
 	}
+}
+
+// partialWindow is how much recent audio each partial pass transcribes.
+//
+// Handing whisper the whole recording made each pass cost roughly 25-30ms per
+// second of accumulated audio, so a fixed tick interval produced work quadratic
+// in dictation length: 0.365s per pass early in a dictation against 1.270s
+// late, 3.5x, and 45.8s of inference for 54.9s of speech (sussurro-xvj.60).
+// Bounding the audio makes the per-pass cost constant instead.
+//
+// Fifteen seconds holds several sentences, so the decoder has substantial
+// acoustic context rather than starting cold at a splice point, which is what
+// made the tail-splicing in sussurro-xvj.22 invent words at the boundary. Text
+// settled before the window is carried as a decoder prompt.
+const partialWindow = 15 * time.Second
+
+// settleMargin is how far behind the window's start a segment must end before
+// its text is settled.
+//
+// Whisper's segment timestamps are approximate, and a segment ending near the
+// boundary may be reported slightly differently on the next pass. Settling only
+// what is clear of the boundary by this margin keeps a word from being frozen
+// on one pass and re-recognised on the next.
+const settleMargin = 2 * time.Second
+
+// samplesDuration converts a sample count to the time it represents.
+func samplesDuration(samples, sampleRate int) time.Duration {
+	if sampleRate <= 0 {
+		return 0
+	}
+	return time.Duration(samples) * time.Second / time.Duration(sampleRate)
+}
+
+// durationSamples converts a duration to a sample count.
+func durationSamples(d time.Duration, sampleRate int) int {
+	if sampleRate <= 0 || d <= 0 {
+		return 0
+	}
+	return int(d.Seconds() * float64(sampleRate))
+}
+
+// windowStartFor returns where a partial pass should begin transcribing.
+//
+// The window begins exactly where the settled text ends, and is never moved
+// ahead of it: audio between the two would be transcribed by nobody, which is
+// how an earlier offset-only attempt silently dropped speech from long
+// dictations. The window therefore grows beyond partialWindow whenever
+// settling lags, and that pass simply costs more; the cost is bounded again as
+// soon as the next segment settles.
+func windowStartFor(settledUntil time.Duration) time.Duration {
+	if settledUntil < 0 {
+		return 0
+	}
+	return settledUntil
+}
+
+// settleSegments picks the segments whose audio lies behind the window and can
+// therefore be frozen.
+//
+// windowStart is where this pass's audio began in the recording, so segment
+// timestamps (which are relative to that audio) are shifted by it. A segment
+// settles when it ends before cutoff less a margin, which keeps a word sitting
+// on the boundary from being frozen on one pass and re-recognised on the next.
+//
+// Returns the settled text, the point up to which it now covers, and whether
+// anything settled at all.
+func settleSegments(
+	segments []asr.Segment,
+	windowStart, cutoff time.Duration,
+	sampleRate int,
+) (string, time.Duration, bool) {
+	if cutoff <= 0 || len(segments) == 0 {
+		return "", 0, false
+	}
+
+	limit := cutoff - settleMargin
+	if limit <= 0 {
+		return "", 0, false
+	}
+
+	var settled []asr.Segment
+	until := windowStart
+	for _, seg := range segments {
+		end := windowStart + seg.End
+		if end > limit {
+			break // Segments are in order, so nothing later settles either.
+		}
+		settled = append(settled, seg)
+		until = end
+	}
+
+	if len(settled) == 0 {
+		return "", 0, false
+	}
+	return asr.JoinSegments(settled), until, true
+}
+
+// joinTranscript appends text to a settled prefix, keeping a single space
+// between them and tolerating either being empty.
+func joinTranscript(prefix, text string) string {
+	prefix = strings.TrimSpace(prefix)
+	text = strings.TrimSpace(text)
+	switch {
+	case prefix != "" && text != "":
+		return prefix + " " + text
+	case prefix != "":
+		return prefix
+	default:
+		return text
+	}
+}
+
+// recognise transcribes the window, using timestamps and decoder context when
+// the engine supports them and falling back to a plain transcription when it
+// does not.
+func (s *Streamer) recognise(audio []float32, preceding string) ([]asr.Segment, error) {
+	if seg, ok := s.transcribe.(segmentingTranscriber); ok {
+		return seg.SegmentsWithContext(audio, preceding)
+	}
+
+	text, err := s.transcribe.Transcribe(audio)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(text) == "" {
+		return nil, nil
+	}
+	// Without timestamps nothing can settle, so the whole window is reported
+	// as one span and the next pass simply re-transcribes it.
+	return []asr.Segment{{Text: strings.TrimSpace(text)}}, nil
 }
 
 // minPartialSamples is the least audio worth transcribing. Below this whisper
@@ -238,26 +377,44 @@ func (s *Streamer) runPass(generation uint64) {
 		return
 	}
 
-	// Each partial re-transcribes the whole buffer from the start, so this
-	// duration grows with the dictation while the interval between passes
-	// stays fixed. Logged at info because it is the only visible measure of
-	// that cost: asr_duration reports the final pass alone (sussurro-xvj.60).
+	s.mu.Lock()
+	settledText, settledUntil := s.settledText, s.settledUntil
+	s.mu.Unlock()
+
+	// The window starts where the settled text ends, and never spans more than
+	// partialWindow, so per-pass cost is bounded however long the dictation
+	// runs. Everything before it is carried as a decoder prompt rather than
+	// transcribed again.
+	total := samplesDuration(len(samples), s.sampleRate)
+	windowStart := windowStartFor(settledUntil)
+	offset := durationSamples(windowStart, s.sampleRate)
+	if offset < 0 || offset > len(samples) {
+		offset = 0
+		windowStart = 0
+	}
+	audio := samples[offset:]
+	if len(audio) < minPartialSamples(s.sampleRate) {
+		return
+	}
+
 	passStart := time.Now()
-	text, err := s.transcribe.Transcribe(samples)
+	segments, err := s.recognise(audio, settledText)
 	passDuration := time.Since(passStart)
 	if err != nil {
 		s.log.Debug("Partial transcription failed", "error", err)
 		return
 	}
+
+	windowText := StripNonSpeechMarkers(asr.JoinSegments(segments))
+	full := joinTranscript(settledText, windowText)
+
 	s.log.Info("Partial pass",
 		"duration", passDuration.Round(time.Millisecond),
-		"audio", (time.Duration(len(samples)) * time.Second /
-			time.Duration(s.sampleRate)).Round(time.Millisecond),
-		"samples", len(samples))
-	// Strip before publishing: a partial that is nothing but a marker has no
-	// text in it, and showing one in the overlay is the reported defect.
-	text = StripNonSpeechMarkers(text)
-	if text == "" {
+		"window", samplesDuration(len(audio), s.sampleRate).Round(time.Millisecond),
+		"total", total.Round(time.Millisecond),
+		"settled", settledUntil.Round(time.Millisecond))
+
+	if full == "" {
 		return
 	}
 
@@ -267,13 +424,23 @@ func (s *Streamer) runPass(generation uint64) {
 		s.log.Debug("Discarding stale partial transcription", "generation", generation)
 		return
 	}
+
 	s.mu.Lock()
-	s.lastText = text
+	s.lastText = full
 	s.lastSamples = len(samples)
 	s.lastGen = generation
+	// Settle the segments whose audio is clear of the window's start. Their
+	// timestamps are relative to the window, so they are offset back onto the
+	// recording's own timeline before comparing.
+	if newText, newUntil, ok := settleSegments(
+		segments, windowStart, total-partialWindow, s.sampleRate,
+	); ok {
+		s.settledText = joinTranscript(settledText, newText)
+		s.settledUntil = newUntil
+	}
 	s.mu.Unlock()
 
 	if s.onPartial != nil {
-		s.onPartial(generation, text)
+		s.onPartial(generation, full)
 	}
 }

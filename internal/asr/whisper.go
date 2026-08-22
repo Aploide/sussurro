@@ -6,10 +6,39 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aploide/sussurro/internal/logger"
 	"github.com/ggerganov/whisper.cpp/bindings/go/pkg/whisper"
 )
+
+// Segment is a span of recognised speech with the times it covers, measured
+// from the start of the audio handed to the recogniser.
+//
+// The timestamps are what allow a streaming caller to tell which words belong
+// to audio that has scrolled out of a window and can therefore be treated as
+// settled. Joining segments into a plain string discards that, which is why
+// windowing could not be implemented correctly against Transcribe alone
+// (sussurro-xvj.60).
+type Segment struct {
+	Text  string
+	Start time.Duration
+	End   time.Duration
+}
+
+// JoinSegments renders segments as a single transcription.
+//
+// Each segment's text is already trimmed, so a single space between them keeps
+// words apart without introducing doubled spacing.
+func JoinSegments(segments []Segment) string {
+	parts := make([]string, 0, len(segments))
+	for _, seg := range segments {
+		if seg.Text != "" {
+			parts = append(parts, seg.Text)
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, " "))
+}
 
 // Engine handles the Whisper model and transcription
 type Engine struct {
@@ -17,6 +46,10 @@ type Engine struct {
 	context whisper.Context
 	mutex   sync.Mutex
 	debug   bool
+
+	// dictionary is retained rather than only pushed into the context, so a
+	// per-call prompt can be composed from it plus preceding transcript text.
+	dictionary []string
 }
 
 // NewEngine initializes the Whisper model from a file path
@@ -77,9 +110,84 @@ func (e *Engine) SetDictionary(terms []string) {
 	if len(terms) == 0 {
 		return
 	}
+	e.dictionary = terms
 	// A comma-separated list is the form whisper's own examples use for
 	// vocabulary priming.
 	e.context.SetInitialPrompt(strings.Join(terms, ", "))
+}
+
+// TranscribeWithContext transcribes samples while conditioning the decoder on
+// text that came before them.
+//
+// The context is passed as whisper's initial prompt, which biases decoding
+// without being decoded itself. That is what lets a streaming pass transcribe
+// only a recent window of audio and still produce text consistent with
+// everything said earlier: the earlier words inform the decoder, but cost no
+// inference and cannot be revised (sussurro-xvj.60).
+//
+// The prompt is advisory. whisper may still decode against it, and it truncates
+// the prompt to n_text_ctx/2 (224 tokens), so a long preceding transcript is cut
+// by the model. Dictionary terms are placed first to survive that truncation.
+func (e *Engine) TranscribeWithContext(samples []float32, preceding string) (string, error) {
+	// The prompt is set on the shared whisper context, so it must not be
+	// changed by another caller between being set and being used. The lock is
+	// therefore held across the whole operation, exactly as Transcribe does.
+	e.mutex.Lock()
+	defer e.mutex.Unlock()
+
+	if prompt := composePrompt(e.dictionary, preceding); prompt != "" {
+		e.context.SetInitialPrompt(prompt)
+		// Leave the dictionary-only prompt behind for callers that supply no
+		// context of their own.
+		defer func() {
+			if len(e.dictionary) > 0 {
+				e.context.SetInitialPrompt(strings.Join(e.dictionary, ", "))
+			}
+		}()
+	}
+
+	return e.transcribeLocked(samples)
+}
+
+// SegmentsWithContext transcribes samples and returns the recognised segments
+// with their timestamps, conditioning the decoder on preceding text.
+//
+// This is the form a streaming caller needs: the timestamps say which words
+// belong to which audio, so text whose audio has left the window can be settled
+// exactly, with neither a gap nor a duplicated overlap.
+func (e *Engine) SegmentsWithContext(samples []float32, preceding string) ([]Segment, error) {
+	e.mutex.Lock()
+	defer e.mutex.Unlock()
+
+	if prompt := composePrompt(e.dictionary, preceding); prompt != "" {
+		e.context.SetInitialPrompt(prompt)
+		defer func() {
+			if len(e.dictionary) > 0 {
+				e.context.SetInitialPrompt(strings.Join(e.dictionary, ", "))
+			}
+		}()
+	}
+
+	return e.segmentsLocked(samples)
+}
+
+// composePrompt builds the initial prompt from vocabulary and preceding text.
+//
+// Dictionary terms lead: whisper truncates the prompt from the front of its
+// budget, and the terms are the part the user explicitly asked to be
+// recognised, so they must not be the part that is dropped.
+func composePrompt(dictionary []string, preceding string) string {
+	terms := strings.Join(dictionary, ", ")
+	preceding = strings.TrimSpace(preceding)
+
+	switch {
+	case terms != "" && preceding != "":
+		return terms + ". " + preceding
+	case terms != "":
+		return terms
+	default:
+		return preceding
+	}
 }
 
 // Transcribe processes the audio samples and returns the text
@@ -87,8 +195,23 @@ func (e *Engine) Transcribe(samples []float32) (string, error) {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
+	return e.transcribeLocked(samples)
+}
+
+// transcribeLocked is the body of Transcribe. Callers must hold e.mutex.
+func (e *Engine) transcribeLocked(samples []float32) (string, error) {
+	segments, err := e.segmentsLocked(samples)
+	if err != nil {
+		return "", err
+	}
+	return JoinSegments(segments), nil
+}
+
+// segmentsLocked runs recognition and returns its segments. Callers must hold
+// e.mutex.
+func (e *Engine) segmentsLocked(samples []float32) ([]Segment, error) {
 	if len(samples) == 0 {
-		return "", nil
+		return nil, nil
 	}
 
 	if !e.debug {
@@ -97,24 +220,29 @@ func (e *Engine) Transcribe(samples []float32) (string, error) {
 	}
 
 	if err := e.context.Process(samples, nil, nil, nil); err != nil {
-		return "", fmt.Errorf("transcription failed: %w", err)
+		return nil, fmt.Errorf("transcription failed: %w", err)
 	}
 
-	// Iterate through segments to build the full text.
-	// Each segment is trimmed before joining with a space to prevent words
-	// from merging at segment boundaries (e.g. "wentto" instead of "went to").
-	var parts []string
+	var segments []Segment
 	for {
 		segment, err := e.context.NextSegment()
 		if err != nil {
 			break // End of segments
 		}
-		if t := strings.TrimSpace(segment.Text); t != "" {
-			parts = append(parts, t)
+		// Trimmed here so joining cannot merge words across a boundary
+		// (e.g. "wentto" instead of "went to").
+		text := strings.TrimSpace(segment.Text)
+		if text == "" {
+			continue
 		}
+		segments = append(segments, Segment{
+			Text:  text,
+			Start: segment.Start,
+			End:   segment.End,
+		})
 	}
 
-	return strings.TrimSpace(strings.Join(parts, " ")), nil
+	return segments, nil
 }
 
 // Close releases resources

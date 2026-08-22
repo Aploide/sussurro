@@ -3,6 +3,7 @@ package pipeline
 import (
 	"strings"
 
+	"github.com/aploide/sussurro/internal/asr"
 	ctxProvider "github.com/aploide/sussurro/internal/context"
 )
 
@@ -42,6 +43,18 @@ func (fn ResultConsumerFunc) OnResult(result Result) { fn(result) }
 // this interface lets the result path be tested without model files.
 type transcriber interface {
 	Transcribe(samples []float32) (string, error)
+}
+
+// segmentingTranscriber is the optional extension for engines that can report
+// where each span of recognised speech sits in the audio, and can condition
+// decoding on text preceding it.
+//
+// Timestamps are what make a sliding window correct: they say which words
+// belong to audio that has scrolled out of the window and can be settled, so
+// the window advances with neither a gap nor a duplicated overlap. Engines
+// without this fall back to transcribing the whole buffer (sussurro-xvj.60).
+type segmentingTranscriber interface {
+	SegmentsWithContext(samples []float32, preceding string) ([]asr.Segment, error)
 }
 
 // cleaner post-processes raw transcriptions.
