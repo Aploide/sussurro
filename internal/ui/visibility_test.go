@@ -147,7 +147,7 @@ func TestOverlayStaysUpUntilTheTrayAppears(t *testing.T) {
 
 func TestMarkTrayReadyTakesTheFallbackDown(t *testing.T) {
 	overlay := &visibilityOverlay{}
-	manager := &Manager{overlay: overlay}
+	manager := &Manager{overlay: overlay, hideLingerOverride: testLinger}
 
 	manager.render(CompactModel(session.StateIdle))
 	if !overlay.shown() {
@@ -161,10 +161,16 @@ func TestMarkTrayReadyTakesTheFallbackDown(t *testing.T) {
 		"overlay still shown after the tray appeared")
 }
 
+// testLinger is short enough that tests do not spend real seconds asleep, but
+// long enough to stay above scheduling jitter on a loaded machine. The three
+// tests below waited on the production one-second value, which was most of the
+// time this package took to run.
+const testLinger = 20 * time.Millisecond
+
 // waitFor polls until condition holds, failing with msg on timeout.
 func waitFor(t *testing.T, condition func() bool, msg string) {
 	t.Helper()
-	deadline := time.Now().Add(hideLinger + 2*time.Second)
+	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if condition() {
 			return
@@ -176,7 +182,7 @@ func waitFor(t *testing.T, condition func() bool, msg string) {
 
 func TestMarkTrayReadyIsIdempotent(t *testing.T) {
 	overlay := &visibilityOverlay{}
-	manager := &Manager{overlay: overlay}
+	manager := &Manager{overlay: overlay, hideLingerOverride: testLinger}
 
 	manager.markTrayReady()
 	before := len(overlay.history())
@@ -190,7 +196,7 @@ func TestMarkTrayReadyIsIdempotent(t *testing.T) {
 
 func TestRecordingShowsEvenBeforeTheTrayAppears(t *testing.T) {
 	overlay := &visibilityOverlay{}
-	manager := &Manager{overlay: overlay}
+	manager := &Manager{overlay: overlay, hideLingerOverride: testLinger}
 
 	manager.render(CompactModel(session.StateRecording))
 	if !overlay.shown() {
@@ -200,7 +206,7 @@ func TestRecordingShowsEvenBeforeTheTrayAppears(t *testing.T) {
 
 func TestVisibilityIsRaceFree(t *testing.T) {
 	overlay := &visibilityOverlay{}
-	manager := &Manager{overlay: overlay}
+	manager := &Manager{overlay: overlay, hideLingerOverride: testLinger}
 
 	var wg sync.WaitGroup
 	for i := 0; i < 50; i++ {
@@ -214,7 +220,7 @@ func TestVisibilityIsRaceFree(t *testing.T) {
 
 func TestOverlayLingersBeforeHiding(t *testing.T) {
 	overlay := &visibilityOverlay{}
-	manager := &Manager{overlay: overlay}
+	manager := &Manager{overlay: overlay, hideLingerOverride: testLinger}
 	manager.trayReady.Store(true)
 
 	manager.render(CompactModel(session.StateRecording))
@@ -235,14 +241,14 @@ func TestOverlayLingersBeforeHiding(t *testing.T) {
 
 func TestNewDictationCancelsAPendingHide(t *testing.T) {
 	overlay := &visibilityOverlay{}
-	manager := &Manager{overlay: overlay}
+	manager := &Manager{overlay: overlay, hideLingerOverride: testLinger}
 	manager.trayReady.Store(true)
 
 	manager.render(CompactModel(session.StateIdle))
 	manager.render(CompactModel(session.StateRecording))
 
 	// The previous dictation's linger must not hide the new one mid-flow.
-	time.Sleep(hideLinger + 200*time.Millisecond)
+	time.Sleep(testLinger + 50*time.Millisecond)
 	if !overlay.shown() {
 		t.Error("a pending hide fired during a new recording")
 	}
@@ -297,7 +303,7 @@ func TestPhaseKeepsTextOnScreen(t *testing.T) {
 
 func TestFinishedTextIsShownBeforeHiding(t *testing.T) {
 	overlay := &presentingOverlay{}
-	manager := &Manager{overlay: overlay}
+	manager := &Manager{overlay: overlay, hideLingerOverride: testLinger}
 	manager.trayReady.Store(true)
 
 	manager.render(ViewModel{
@@ -325,7 +331,7 @@ func TestFinishedTextIsShownBeforeHiding(t *testing.T) {
 
 func TestFinishedTextStaysForTheFullLinger(t *testing.T) {
 	overlay := &presentingOverlay{}
-	manager := &Manager{overlay: overlay}
+	manager := &Manager{overlay: overlay, hideLingerOverride: testLinger}
 	manager.trayReady.Store(true)
 
 	manager.render(ViewModel{
@@ -334,12 +340,12 @@ func TestFinishedTextStaysForTheFullLinger(t *testing.T) {
 		Mode:       ViewExpanded,
 	})
 
-	// Half a linger in, the text must still be there: the second is measured
+	// Half a linger in, the text must still be there: the linger is measured
 	// from when it was displayed, not from when the key was released.
-	time.Sleep(hideLinger / 2)
+	time.Sleep(testLinger / 2)
 	models := overlay.presented()
 	if models[len(models)-1].Transcript != "final words" {
-		t.Errorf("text cleared after %v, want it held for the full linger", hideLinger/2)
+		t.Errorf("text cleared after %v, want it held for the full linger", testLinger/2)
 	}
 }
 

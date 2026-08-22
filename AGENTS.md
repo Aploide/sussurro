@@ -94,17 +94,50 @@ Treat this section as a starting point rather than a working recipe, and
 verify audio actually reached the pipeline — `Recording stopped` logs a
 `samples=` count, and `samples=0` means it did not.
 
-## Running the test suite
+## Running builds and the test suite
 
-Use `make test`, never a bare `go test`. The Makefile supplies the cgo link
-flags for whisper.cpp and go-llama.cpp, including the Vulkan libraries when
-that backend is built. A bare `go test` fails at link time with
-`undefined reference to wsp_ggml_backend_vk_reg` or `cannot find -lbinding`,
-which looks like a code error but is not.
+Use `make test` and `make build`, never a bare `go test` or `go build`. The
+Makefile supplies the cgo link flags for whisper.cpp and go-llama.cpp,
+including the Vulkan libraries when that backend is built. A bare `go build`
+fails at link time with `undefined reference to wsp_ggml_backend_vk_reg` or
+`cannot find -lbinding`, which looks like a code error but is not. (`go vet`
+does work standalone, and is a cheap syntax check that needs no link.)
 
-The suite is slow because it links large static libraries, and slower still
-while a build is running. Run it in the background and watch it rather than
-blocking.
+### Why they are slow, and what that means
+
+`make test` takes about **4m30s even when every Go test is cached**. Measured:
+
+```
+make test  2271.83s user  117.25s system  871% cpu  4:34.29 total
+```
+
+The Go tests are not the cost — they were all `(cached)` in that run. Both
+targets depend on `deps`, which runs `cmake` configure and a build check over
+whisper.cpp and go-llama.cpp unconditionally; the only guard skips the *clone*,
+not the build.
+
+This is a defect, tracked as `sussurro-2cp`, not a cost to absorb quietly. A
+build or test run over ~30 seconds means something is wrong with the Makefile
+or the suite, and is worth reporting rather than tolerating.
+
+### How to run them
+
+- **Never block on them.** Use `run_in_background: true`, or a `Monitor` when
+  you want progress events rather than a single completion. Blocking the turn
+  on a multi-minute build wastes the user's time.
+- **Never re-run to ask a second question.** Capture once with `tee` into
+  `tmp/`, then grep that file as many times as needed. Running `make build`
+  twice to grep two different things costs two full builds.
+- **Never discard or truncate the output.** No `> /dev/null`, and do not let
+  `tail -n` be your only look — a real error can appear anywhere in the log,
+  and third-party compile lines make naive `grep error` match noise. Filter to
+  this repository's own paths, e.g.
+  `grep -E "^internal/|^cmd/|\.go:[0-9]+" tmp/build.log`.
+- **One waiter per job.** Chain dependent steps inside a single background
+  command rather than spawning a separate poll loop for each; several shells
+  polling the same file is pure overhead.
+- **Always set a timeout** on background waits so a stalled job cannot hang
+  indefinitely.
 
 ## The settings page is embedded in the binary
 

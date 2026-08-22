@@ -49,6 +49,9 @@ type Manager struct {
 	// hideTimer defers hiding the overlay so finished text can be read.
 	hideMu    sync.Mutex
 	hideTimer *time.Timer
+
+	// hideLingerOverride shortens the linger in tests. Zero means hideLinger.
+	hideLingerOverride time.Duration
 }
 
 // NewManager constructs the Manager.  Call Run() to start the event loop.
@@ -106,6 +109,18 @@ func (m *Manager) Run() {
 // read what was delivered.
 const hideLinger = time.Second
 
+// lingerFor returns the linger this Manager should use.
+//
+// A variable rather than the constant directly, so tests can shrink it: three
+// of them slept against the full one-second value, which was most of the time
+// the ui package took to run. Production never sets it and gets hideLinger.
+func (m *Manager) lingerFor() time.Duration {
+	if m.hideLingerOverride > 0 {
+		return m.hideLingerOverride
+	}
+	return hideLinger
+}
+
 // render draws a model, keeping the overlay on screen while the tray has not
 // appeared so its context menu stays reachable.
 //
@@ -144,7 +159,7 @@ func (m *Manager) render(model ViewModel) {
 	}
 	m.overlay.Show()
 
-	m.hideTimer = time.AfterFunc(hideLinger, func() {
+	m.hideTimer = time.AfterFunc(m.lingerFor(), func() {
 		m.hideMu.Lock()
 		m.hideTimer = nil
 		m.hideMu.Unlock()

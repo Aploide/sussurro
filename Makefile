@@ -25,6 +25,17 @@ LLAMA_DIR := third_party/go-llama.cpp
 WHISPER_COMMIT ?= 764482c3175d9c3bc6089c1ec84df7d1b9537d83
 GO_LLAMA_COMMIT ?= b2c101738f26f466f1a30317d50a88ce7c0ada12
 
+# Stamp files marking a completed native build, so `deps` is a no-op once the
+# libraries exist. Each stamp is named after the commit it was built from, so
+# bumping a pin invalidates it and forces the rebuild that pin requires.
+#
+# Without these, every `make build` and `make test` reconfigured whisper.cpp and
+# ran `make clean` on go-llama.cpp before recompiling it from scratch, which
+# cost about four and a half minutes per invocation even when nothing had
+# changed at all.
+WHISPER_STAMP := $(WHISPER_DIR)/.stamp-$(WHISPER_COMMIT)
+LLAMA_STAMP   := $(LLAMA_DIR)/.stamp-$(GO_LLAMA_COMMIT)
+
 # Detect number of CPU cores for parallel builds
 # Build parallelism. Defaults to 50% of the cores so a rebuild leaves the
 # machine usable — these builds are long, and saturating every core makes the
@@ -176,7 +187,9 @@ BASE_LDFLAGS := -L$(WHISPER_DIR)/build/src -L$(WHISPER_DIR)/build/ggml/src \
 export C_INCLUDE_PATH
 export LIBRARY_PATH
 
-.PHONY: all build compat-pc run clean deps test
+# The stamp targets are deliberately absent: they are real files, and marking
+# them phony would defeat the guard entirely.
+.PHONY: all build compat-pc run clean clean-deps check-deps-artefacts deps test
 
 # Packages that link whisper need the same CGO_LDFLAGS as the binary: with
 # Vulkan enabled, a plain "go test ./..." cannot resolve the backend symbols.
@@ -189,7 +202,27 @@ test: deps compat-pc
 
 all: build build-transcribe
 
-deps:
+# deps is satisfied by the two stamps; when both exist and their pins are
+# unchanged, it does nothing at all.
+#
+# A stamp on its own would still be trusted if the library it vouches for had
+# been deleted, and the failure would surface as a confusing link error rather
+# than a rebuild. Checking for the artefacts here drops the stale stamps first,
+# so the rules below fire again.
+deps: check-deps-artefacts $(WHISPER_STAMP) $(LLAMA_STAMP)
+
+# Removes a stamp whose library has gone missing. Silent when all is well.
+check-deps-artefacts:
+	@if [ -f "$(WHISPER_STAMP)" ] && [ ! -f "$(WHISPER_DIR)/build/src/libwhisper.a" ]; then \
+		echo "whisper.cpp library missing; rebuilding"; \
+		rm -f $(WHISPER_STAMP); \
+	fi
+	@if [ -f "$(LLAMA_STAMP)" ] && [ ! -f "$(LLAMA_DIR)/libbinding.a" ]; then \
+		echo "go-llama.cpp library missing; rebuilding"; \
+		rm -f $(LLAMA_STAMP); \
+	fi
+
+$(WHISPER_STAMP):
 	@mkdir -p third_party
 	@if [ ! -d "$(WHISPER_DIR)" ]; then \
 		echo "Cloning whisper.cpp..."; \
@@ -220,6 +253,11 @@ ifeq ($(OS),Windows_NT)
 		done; \
 	done
 endif
+	@rm -f $(WHISPER_DIR)/.stamp-*
+	@touch $@
+
+$(LLAMA_STAMP):
+	@mkdir -p third_party
 	@if [ ! -d "$(LLAMA_DIR)" ]; then \
 		echo "Cloning go-llama.cpp..."; \
 		git clone --recursive https://github.com/AshkanYarmoradi/go-llama.cpp $(LLAMA_DIR); \
@@ -232,12 +270,18 @@ ifeq ($(OS),Windows_NT)
 	@./scripts/patch-llama-windows.sh
 endif
 	@echo "Building go-llama.cpp library..."
-	@$(MAKE) -C $(LLAMA_DIR) clean
+	@# No `make clean` here. It used to run unconditionally, deleting the whole
+	@# build tree and every object file before recompiling from scratch, which
+	@# was the bulk of a four and a half minute no-op build. The stamp is what
+	@# guarantees a rebuild when the pin moves; a wipe on every invocation is
+	@# not needed for that, and `clean` remains available for a forced one.
 ifeq ($(OS),Windows_NT)
 	@$(NICE) $(MAKE) -j $(NPROCS) -C $(LLAMA_DIR) libbinding.a BUILD_TYPE=$(BUILD_TYPE) CMAKE_ARGS="$(LLAMA_CMAKE_ARGS)"
 else
 	@$(NICE) $(MAKE) -j $(NPROCS) -C $(LLAMA_DIR) libbinding.a BUILD_TYPE=$(BUILD_TYPE)
 endif
+	@rm -f $(LLAMA_DIR)/.stamp-*
+	@touch $@
 
 # Create webkit2gtk-4.0 compatibility .pc when only 4.1 is installed
 compat-pc:
@@ -295,3 +339,12 @@ clean:
 	@rm -rf $(BUILD_DIR)
 	@rm -rf third_party
 	@rm -rf .build-compat
+
+# Force the native libraries to rebuild without re-cloning them. Dropping the
+# stamps is enough: the next `make build` or `make test` rebuilds whatever is
+# missing. Use this when a native build is suspected of being wrong, rather
+# than `clean`, which discards the clones and their submodules too.
+clean-deps:
+	@echo "Dropping native build stamps..."
+	@rm -f $(WHISPER_DIR)/.stamp-* $(LLAMA_DIR)/.stamp-*
+	@if [ -d "$(LLAMA_DIR)" ]; then $(MAKE) -C $(LLAMA_DIR) clean; fi
