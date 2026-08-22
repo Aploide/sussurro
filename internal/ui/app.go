@@ -47,8 +47,12 @@ type Manager struct {
 	trayReady atomic.Bool
 
 	// hideTimer defers hiding the overlay so finished text can be read.
-	hideMu    sync.Mutex
-	hideTimer *time.Timer
+	// overlayVisible tracks whether the overlay is currently up, so the linger
+	// can distinguish a dictation ending on screen from a hidden overlay that
+	// has nothing to linger over. Both are guarded by hideMu.
+	hideMu         sync.Mutex
+	hideTimer      *time.Timer
+	overlayVisible bool
 
 	// hideLingerOverride shortens the linger in tests. Zero means hideLinger.
 	hideLingerOverride time.Duration
@@ -145,7 +149,17 @@ func (m *Manager) render(model ViewModel) {
 		m.hideTimer = nil
 	}
 
-	if model.Visible() || !trayReady {
+	// The linger holds a finished dictation on screen long enough to read, so
+	// it applies when there is a result to read: either text in this model, or
+	// an overlay already up that is now going idle.
+	//
+	// An idle model with no text and a hidden overlay has nothing to linger
+	// over, and taking this path for it meant showing the overlay purely to
+	// hide it a second later. That is what flashed the overlay at startup,
+	// where markTrayReady renders exactly such a model (sussurro-xvj.62).
+	hasResult := model.Transcript != "" || m.overlayVisible
+	if model.Visible() || !trayReady || !hasResult {
+		m.overlayVisible = model.Visible() || !trayReady
 		m.hideMu.Unlock()
 		present(m.overlay, model, trayReady)
 		return
@@ -177,6 +191,9 @@ func (m *Manager) render(model ViewModel) {
 		// previous dictation.
 		cleared := model
 		cleared.Transcript = ""
+		m.hideMu.Lock()
+		m.overlayVisible = false
+		m.hideMu.Unlock()
 		present(m.overlay, cleared, trayReady)
 	})
 	m.hideMu.Unlock()
