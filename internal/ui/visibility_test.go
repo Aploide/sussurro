@@ -418,7 +418,7 @@ func TestClipboardOnlyDeliveryIsConfirmed(t *testing.T) {
 
 	select {
 	case model := <-manager.stateChangeCh:
-		if model.Status != "Copied to clipboard!" {
+		if model.Status != "Copied" {
 			t.Errorf("Status = %q, want the copy confirmed", model.Status)
 		}
 	default:

@@ -156,6 +156,10 @@ static void draw_recording_bars(cairo_t *cr, OverlayData *od,
     }
 }
 
+/* Defined below, after the font scaling it depends on. */
+static void draw_row_status(cairo_t *cr, OverlayData *od,
+                            double x, double w, double centre_y);
+
 /* Draws the overlay's permanent bottom row: waveform on the left, buffer-fill
  * gauge filling the rest.
  *
@@ -175,7 +179,13 @@ static void draw_control_row(cairo_t *cr, OverlayData *od,
     double row_top   = panel_h - PANEL_PAD_Y - ROW_HEIGHT;
     double centre_y  = row_top + ROW_HEIGHT / 2.0;
 
-    if (od->state == OVERLAY_STATE_IDLE) {
+    /* The waveform slot carries a status word instead once recording has
+       stopped. The waveform means nothing when no audio is arriving, and the
+       slot is free exactly when a label is wanted: it says the overlay is
+       working rather than hung, and confirms the copy. */
+    if (od->status && od->status[0]) {
+        draw_row_status(cr, od, PANEL_PAD_X, wave_w, centre_y);
+    } else if (od->state == OVERLAY_STATE_IDLE) {
         draw_idle_dots(cr, od, PANEL_PAD_X, wave_w, centre_y);
     } else {
         draw_recording_bars(cr, od, PANEL_PAD_X, wave_w, centre_y);
@@ -246,6 +256,34 @@ static int panel_max_height(void)
     return cap;
 }
 
+/* Draws the status word in the control row's left slot, vertically centred and
+ * left-aligned with the transcript text above it.
+ *
+ * The word is allowed to overrun its slot: "Finalizing" is wider than the
+ * waveform's 10%, and the gauge beside it is a bar with no content to collide
+ * with, so overlapping it slightly is preferable to truncating the word. */
+static void draw_row_status(cairo_t *cr, OverlayData *od,
+                            double x, double w, double centre_y)
+{
+    (void)w;
+
+    PangoLayout *layout = pango_cairo_create_layout(cr);
+    PangoFontDescription *font = pango_font_description_from_string("Sans");
+    pango_font_description_set_absolute_size(
+        font, PANEL_STATUS_SIZE * panel_font_scale() * PANGO_SCALE);
+    pango_layout_set_font_description(layout, font);
+    pango_font_description_free(font);
+    pango_layout_set_text(layout, od->status, -1);
+
+    int tw = 0, th = 0;
+    pango_layout_get_pixel_size(layout, &tw, &th);
+
+    cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.55);
+    cairo_move_to(cr, x, centre_y - th / 2.0);
+    pango_cairo_show_layout(cr, layout);
+    g_object_unref(layout);
+}
+
 static PangoLayout *panel_text_layout(cairo_t *cr, OverlayData *od)
 {
     PangoLayout *layout = pango_cairo_create_layout(cr);
@@ -282,25 +320,11 @@ static int draw_panel(cairo_t *cr, OverlayData *od, gboolean paint)
     int text_w = 0, text_h = 0;
     pango_layout_get_pixel_size(layout, &text_w, &text_h);
 
-    int status_h = 0;
-    PangoLayout *status_layout = NULL;
-    if (od->status && od->status[0]) {
-        status_layout = pango_cairo_create_layout(cr);
-        PangoFontDescription *sf = pango_font_description_from_string("Sans");
-        pango_font_description_set_absolute_size(
-            sf, PANEL_STATUS_SIZE * panel_font_scale() * PANGO_SCALE);
-        pango_layout_set_font_description(status_layout, sf);
-        pango_font_description_free(sf);
-        pango_layout_set_text(status_layout, od->status, -1);
-
-        int sw = 0;
-        pango_layout_get_pixel_size(status_layout, &sw, &status_h);
-        status_h += 6; /* gap above the status line */
-    }
-
     /* The control row is permanent, so it is part of the panel's height at
-       every size, including when there is no text at all. */
-    int height = PANEL_PAD_Y * 2 + text_h + status_h + (int)ROW_HEIGHT;
+       every size, including when there is no text at all. The status word
+       lives inside that row rather than on a line of its own, so it adds no
+       height here. */
+    int height = PANEL_PAD_Y * 2 + text_h + TEXT_ROW_GAP + (int)ROW_HEIGHT;
 
     /* Past the cap the panel stops growing. The text is then anchored to its
        END rather than its start: during dictation the newest words matter, and
@@ -335,25 +359,15 @@ static int draw_panel(cairo_t *cr, OverlayData *od, gboolean paint)
            its last line would run underneath the status text. */
         cairo_save(cr);
         cairo_rectangle(cr, 0, 0, PANEL_WIDTH,
-                        height - PANEL_PAD_Y - status_h - ROW_HEIGHT);
+                        height - PANEL_PAD_Y - ROW_HEIGHT - TEXT_ROW_GAP);
         cairo_clip(cr);
         cairo_move_to(cr, PANEL_PAD_X, PANEL_PAD_Y - text_offset);
         pango_cairo_show_layout(cr, layout);
         cairo_restore(cr);
 
-        if (status_layout) {
-            cairo_set_source_rgba(cr, 1, 1, 1, 0.45);
-            /* Positioned from the panel's bottom edge so it stays visible when
-               the text above it has scrolled. */
-            cairo_move_to(cr, PANEL_PAD_X,
-                          height - PANEL_PAD_Y - ROW_HEIGHT - (status_h - 6));
-            pango_cairo_show_layout(cr, status_layout);
-        }
-
         draw_control_row(cr, od, PANEL_WIDTH, height);
     }
 
-    if (status_layout) g_object_unref(status_layout);
     g_object_unref(layout);
     return height;
 }

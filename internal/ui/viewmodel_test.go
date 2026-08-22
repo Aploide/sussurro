@@ -30,7 +30,8 @@ func TestCompactModelPreservesImmediateBehavior(t *testing.T) {
 		status string
 	}{
 		{state: session.StateIdle, status: ""},
-		{state: session.StateRecording, status: "Listening"},
+		// The waveform occupies this slot while recording, so no word is shown.
+		{state: session.StateRecording, status: ""},
 		// Without streaming nothing has been shown yet, so transcription is
 		// literally what is starting.
 		{state: session.StateTranscribing, status: "Transcribing"},

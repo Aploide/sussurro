@@ -64,6 +64,9 @@
 #define ROW_WAVEFORM_FRACTION 0.10
 #define ROW_GAP               14.0
 #define ROW_HEIGHT            44.0
+/* Breathing room between the transcript and the control row below it. Text
+   sitting directly on the row read as cramped. */
+#define TEXT_ROW_GAP          14
 /* The overlay's resting height: the control row plus its padding, with no text.
    Text grows the panel upwards from here. */
 #define OVERLAY_REST_HEIGHT   (int)(ROW_HEIGHT + 2 * PANEL_PAD_Y)

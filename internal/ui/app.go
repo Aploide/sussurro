@@ -233,7 +233,9 @@ func (m *Manager) OnFinished(text string) {
 // rather than leaving the user unsure whether anything was delivered.
 func (m *Manager) completionStatus() string {
 	if m.cfg != nil && m.cfg.Workflow.ClipboardOnlyDelivery() {
-		return "Copied to clipboard!"
+		// Short enough to sit in the overlay's waveform slot, which is where
+		// status words are shown once recording has stopped.
+		return "Copied"
 	}
 	return "Done"
 }

@@ -92,7 +92,9 @@ func StreamingCompactModel(state AppState) ViewModel {
 func compactStatus(state AppState, streaming bool) string {
 	switch state {
 	case session.StateRecording:
-		return "Listening"
+		// No label while recording: the waveform occupies this slot and is a
+		// live animation, so a word saying the same thing adds nothing.
+		return ""
 	case session.StateTranscribing:
 		// With streaming on, text has been on screen throughout, so this pass
 		// completes a transcription the user can already read: "Finalizing".
