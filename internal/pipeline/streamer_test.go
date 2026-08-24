@@ -441,6 +441,99 @@ func TestStopAndTakePartialReturnsTheLastResult(t *testing.T) {
 	}
 }
 
+func TestStopAndTakeIsAtomicWithPartialCommit(t *testing.T) {
+	asr := newBlockingTranscriber()
+	recorder := newPartialRecorder()
+	s, ticker := newTestStreamer(t, asr, recorder.record)
+	atCommit := make(chan struct{})
+	releaseCommit := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseCommit) }) }
+	// A failed assertion must not leave the worker stuck at the barrier while
+	// newTestStreamer's cleanup waits for it.
+	t.Cleanup(release)
+	s.beforeCommit = func() {
+		close(atCommit)
+		<-releaseCommit
+	}
+
+	s.Start()
+	ticker.tick(t)
+	asr.awaitEntry(t)
+	asr.release <- "the complete late partial"
+
+	select {
+	case <-atCommit:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for partial commit")
+	}
+
+	// Stop wins immediately before commit. It must invalidate that pass both
+	// as retained state and as an overlay publication; otherwise finalization
+	// receives older text than the user sees.
+	if text, _, ok := s.StopAndTakePartial(); ok || text != "" {
+		t.Fatalf("StopAndTakePartial() = %q, %v; want no committed partial", text, ok)
+	}
+	release()
+	s.Wait()
+
+	if texts, _ := recorder.snapshot(); len(texts) != 0 {
+		t.Fatalf("published stopped partials %q, want none", texts)
+	}
+}
+
+func TestStopWaitsForPartialPublication(t *testing.T) {
+	asr := newBlockingTranscriber()
+	publishing := make(chan struct{})
+	releasePublication := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releasePublication) }) }
+
+	s, ticker := newTestStreamer(t, asr, func(uint64, string) {
+		close(publishing)
+		<-releasePublication
+	})
+	// Registered after newTestStreamer's cleanup so LIFO teardown releases
+	// this barrier before that cleanup waits for the worker.
+	t.Cleanup(release)
+	s.Start()
+	ticker.tick(t)
+	asr.awaitEntry(t)
+	asr.release <- "the committed partial"
+	select {
+	case <-publishing:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for partial publication")
+	}
+
+	type stoppedPartial struct {
+		text string
+		ok   bool
+	}
+	stopped := make(chan stoppedPartial, 1)
+	go func() {
+		text, _, ok := s.StopAndTakePartial()
+		stopped <- stoppedPartial{text: text, ok: ok}
+	}()
+
+	select {
+	case got := <-stopped:
+		t.Fatalf("StopAndTakePartial returned during publication: %+v", got)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	release()
+	select {
+	case got := <-stopped:
+		if !got.ok || got.text != "the committed partial" {
+			t.Fatalf("StopAndTakePartial = %+v, want the committed partial", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out stopping after partial publication")
+	}
+	s.Wait()
+}
+
 func TestStopAndTakePartialWithNoPartial(t *testing.T) {
 	asr := newBlockingTranscriber()
 	s, _ := newTestStreamer(t, asr, nil)

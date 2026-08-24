@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aploide/sussurro/internal/asr"
 	"github.com/aploide/sussurro/internal/audio"
@@ -72,11 +73,12 @@ type Pipeline struct {
 	// continues to order it against isTranscribing and audioBuffer.
 	isRecording     atomic.Bool
 	isTranscribing  bool // true while processSegment is running; blocks new recordings
+	stopped         bool // guarded by mu; prevents sessions starting after Stop begins
 	lowercaseOutput bool
 	skipLLMCleanup  bool
 	audioBuffer     []float32
 	audioBufferCap  int        // pre-computed capacity to avoid repeated slice growth
-	mu              sync.Mutex // Protects isTranscribing, lowercaseOutput, skipLLMCleanup, audioBuffer, and recordingStart
+	mu              sync.Mutex // Protects stopped, isTranscribing, output options, audioBuffer, and recordingStart
 	maxDuration     string
 
 	// recordingStart is when the current recording began, so a stop can
@@ -311,8 +313,15 @@ func (p *Pipeline) stopStreaming() {
 // Stop gracefully shuts down the pipeline
 func (p *Pipeline) Stop() {
 	p.log.Debug("Stopping pipeline")
+	// StopRecording and the duration-cap path register their final worker while
+	// holding this lock. Taking it before closing the capture loop guarantees
+	// Wait cannot observe zero before that registration (sussurro-3jn).
+	p.mu.Lock()
+	p.stopped = true
+	p.isRecording.Store(false)
 	p.stopStreaming()
 	close(p.stopChan)
+	p.mu.Unlock()
 	p.wg.Wait()
 	if p.streamer != nil {
 		p.streamer.Wait()
@@ -325,7 +334,7 @@ func (p *Pipeline) StartRecording() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if p.isRecording.Load() || p.isTranscribing {
+	if p.stopped || p.isRecording.Load() || p.isTranscribing {
 		return
 	}
 
@@ -366,9 +375,8 @@ func (p *Pipeline) StopRecording() bool {
 // not, which made sussurro-xvj.36 impossible to diagnose from a log.
 func (p *Pipeline) stopRecordingBecause(reason StopReason) bool {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	if !p.isRecording.Load() {
+		p.mu.Unlock()
 		return false
 	}
 
@@ -382,16 +390,25 @@ func (p *Pipeline) stopRecordingBecause(reason StopReason) bool {
 		"samples", len(p.audioBuffer),
 		"dropped_frames", p.droppedFrames.Load())
 
-	// Stop streaming before the final pass so partial inference cannot delay
-	// it or publish text belonging to the session just ended. The last
-	// partial comes back with it: if it already covered every sample, the
-	// final pass would spend seconds reproducing a string we already have.
-	partial, partialSamples, hasPartial := p.takeStreamingPartial()
-
-	// Process the captured audio in a separate goroutine to not block
-	// Make a copy of the buffer
 	bufferCopy := make([]float32, len(p.audioBuffer))
 	copy(bufferCopy, p.audioBuffer)
+	// Take the partial and register its replacement before unlocking. Stop
+	// takes the same lock before Wait, so it cannot discard the partial or
+	// close engines between this point and final worker registration.
+	partial, partialSamples, hasPartial := p.takeStreamingPartial()
+	p.wg.Add(1)
+	p.mu.Unlock()
+
+	p.finalizeRecording(bufferCopy, partial, partialSamples, hasPartial)
+	return true
+}
+
+// finalizeRecording dispatches the least work that can still produce a
+// complete transcript. Both user release and the maximum-duration stop pass
+// through here, so neither can discard the complete partial while
+// independently decoding the final buffer. Its worker is registered by the
+// caller while holding p.mu, before shutdown can begin waiting.
+func (p *Pipeline) finalizeRecording(bufferCopy []float32, partial string, partialSamples int, hasPartial bool) {
 
 	// Audio keeps arriving while a partial is running, so a completed partial
 	// has essentially never seen the whole buffer — measured 59200 samples
@@ -405,9 +422,8 @@ func (p *Pipeline) stopRecordingBecause(reason StopReason) bool {
 		// No ASR runs on this path, so announcing transcription would be a
 		// plain falsehood: the only remaining work is cleanup and delivery.
 		p.notifyPhase(session.StateCleaningUp, partial)
-		p.wg.Add(1)
 		go p.completeFromPartial(partial)
-		return true
+		return
 	}
 
 	p.log.Debug("Final pass needed",
@@ -415,9 +431,7 @@ func (p *Pipeline) stopRecordingBecause(reason StopReason) bool {
 	// Announce after taking the partial, so the state carries the text
 	// already on screen rather than blanking it.
 	p.notifyPhase(session.StateTranscribing, partial)
-	p.wg.Add(1)
-	go p.processSegment(bufferCopy)
-	return true
+	go p.processSegmentWithPartial(bufferCopy, partial)
 }
 
 // notifyPhase announces a post-recording phase, carrying the last partial so
@@ -534,34 +548,7 @@ func (p *Pipeline) captureLoop() {
 	for {
 		select {
 		case chunk := <-p.audioChan:
-			lockWait := time.Now()
-			p.mu.Lock()
-			p.warnIfSlow("acquiring the pipeline lock", lockWait)
-			if p.isRecording.Load() {
-				// Safety check: Auto-stop if recording gets too long (prevents OOM/Stuck state)
-				if len(p.audioBuffer) >= maxSamples {
-					p.log.Warn("Max recording duration reached, forcing stop",
-						"limit", p.maxDuration,
-						"reason", StopMaxDuration,
-						"elapsed", time.Since(p.recordingStart).Round(time.Millisecond),
-						"dropped_frames", p.droppedFrames.Load())
-					p.isRecording.Store(false)
-					p.isTranscribing = true
-					p.notifyState(session.StateTranscribing)
-					p.stopStreaming()
-
-					// Copy and process immediately
-					bufferCopy := make([]float32, len(p.audioBuffer))
-					copy(bufferCopy, p.audioBuffer)
-
-					// Launch processing in background
-					p.wg.Add(1)
-					go p.processSegment(bufferCopy)
-				} else {
-					p.audioBuffer = append(p.audioBuffer, chunk...)
-				}
-			}
-			p.mu.Unlock()
+			p.handleCapturedChunk(chunk, maxSamples)
 
 		case <-p.stopChan:
 			return
@@ -569,7 +556,48 @@ func (p *Pipeline) captureLoop() {
 	}
 }
 
+// handleCapturedChunk appends one capture callback or finalizes a buffer that
+// has reached its configured ceiling. Finalization happens after releasing the
+// pipeline lock: the streaming worker snapshots under the same lock.
+func (p *Pipeline) handleCapturedChunk(chunk []float32, maxSamples int) {
+	lockWait := time.Now()
+	p.mu.Lock()
+	p.warnIfSlow("acquiring the pipeline lock", lockWait)
+	if !p.isRecording.Load() {
+		p.mu.Unlock()
+		return
+	}
+	if len(p.audioBuffer) < maxSamples {
+		p.audioBuffer = append(p.audioBuffer, chunk...)
+		p.mu.Unlock()
+		return
+	}
+
+	p.log.Warn("Max recording duration reached, forcing stop",
+		"limit", p.maxDuration,
+		"reason", StopMaxDuration,
+		"elapsed", time.Since(p.recordingStart).Round(time.Millisecond),
+		"dropped_frames", p.droppedFrames.Load())
+	p.isRecording.Store(false)
+	p.isTranscribing = true
+	bufferCopy := make([]float32, len(p.audioBuffer))
+	copy(bufferCopy, p.audioBuffer)
+	partial, partialSamples, hasPartial := p.takeStreamingPartial()
+	p.wg.Add(1)
+	p.mu.Unlock()
+
+	p.finalizeRecording(bufferCopy, partial, partialSamples, hasPartial)
+}
+
 func (p *Pipeline) processSegment(samples []float32) {
+	p.processSegmentWithPartial(samples, "")
+}
+
+// processSegmentWithPartial runs the final whole-buffer pass while retaining
+// the last text already shown to the user. Whisper can regress on an
+// independent pass; a shorter result must not discard words that its previous
+// pass had already recognised.
+func (p *Pipeline) processSegmentWithPartial(samples []float32, partial string) {
 	defer p.wg.Done()
 	defer func() {
 		if r := recover(); r != nil {
@@ -609,22 +637,50 @@ func (p *Pipeline) processSegment(samples []float32) {
 
 	// 1. ASR: Transcribe Audio
 	text, err := p.asrEngine.Transcribe(samples)
+	asrDuration := time.Since(start)
 	if err != nil {
 		p.log.Error("ASR failed", "error", err)
+		if partial == "" {
+			return
+		}
+		// A failed independent pass must not turn text already recognised and
+		// shown to the user into an empty delivery (sussurro-3jn).
+		p.log.Warn("Final pass failed; preserving the last partial",
+			"partial_chars", utf8.RuneCountInString(strings.TrimSpace(partial)))
+		p.notifyPhase(session.StateCleaningUp, partial)
+		p.finishSegment(partial, partial, start, asrDuration)
 		return
 	}
-
-	asrDuration := time.Since(start)
 
 	// Whisper's non-speech annotations are not dictated text, so they are
 	// dropped before anything downstream can show or deliver them.
 	text = StripNonSpeechMarkers(text)
 
+	// The final pass is an independent decode and can regress despite seeing
+	// more audio. The log that prompted sussurro-3jn showed it ending
+	// mid-sentence while the last partial already held the missing words.
+	if finalPassShorter(text, partial) {
+		// Transcript bodies remain debug-only: warning-level logging must not
+		// expose a user's dictated text merely because recognition regressed.
+		p.log.Warn("Final pass shorter than the last partial; preserving partial",
+			"final_chars", utf8.RuneCountInString(strings.TrimSpace(text)),
+			"partial_chars", utf8.RuneCountInString(strings.TrimSpace(partial)))
+		text = partial
+	}
+
 	// Recognition is done; what follows is cleanup and delivery. Announce the
 	// change so the overlay stops claiming to transcribe.
 	p.notifyPhase(session.StateCleaningUp, text)
 
-	p.finishSegment(text, start, asrDuration)
+	p.finishSegment(text, partial, start, asrDuration)
+}
+
+// finalPassShorter enforces the delivery invariant from sussurro-3jn. A final
+// decode can correct words as well as lose them, but there is no reliable way
+// to distinguish those cases from text alone. Prefer the last result already
+// shown to the user rather than silently deleting any of it.
+func finalPassShorter(final, partial string) bool {
+	return utf8.RuneCountInString(strings.TrimSpace(final)) < utf8.RuneCountInString(strings.TrimSpace(partial))
 }
 
 // completeFromPartial delivers text a streaming pass already produced,
@@ -646,15 +702,18 @@ func (p *Pipeline) completeFromPartial(text string) {
 		}
 	}()
 
-	p.finishSegment(text, time.Now(), 0)
+	p.finishSegment(text, text, time.Now(), 0)
 }
 
 // finishSegment turns a recognised transcription into a published result.
+// minimumText is the last partial shown in the overlay, or empty when
+// streaming produced none. Cleanup may rewrite it, but must not make the
+// delivered result shorter than text the user already saw.
 //
 // asrDuration is how long recognition took, or zero on the partial-reuse path
 // where none ran, so the completion log can attribute the wait after speech
 // ends to a stage rather than reporting one opaque total.
-func (p *Pipeline) finishSegment(text string, start time.Time, asrDuration time.Duration) {
+func (p *Pipeline) finishSegment(text, minimumText string, start time.Time, asrDuration time.Duration) {
 
 	// A word-count floor used to sit here, discarding anything under four
 	// words as a false positive. That silently lost ordinary short dictations
@@ -707,6 +766,14 @@ func (p *Pipeline) finishSegment(text string, start time.Time, asrDuration time.
 		}
 	} else {
 		p.log.Debug("Skipping LLM cleanup (raw output enabled)")
+	}
+
+	if finalPassShorter(cleanedText, minimumText) {
+		p.log.Warn("Cleanup shorter than the last partial; preserving partial",
+			"cleaned_chars", utf8.RuneCountInString(strings.TrimSpace(cleanedText)),
+			"partial_chars", utf8.RuneCountInString(strings.TrimSpace(minimumText)))
+		cleanedText = minimumText
+		cleaned = false
 	}
 
 	p.mu.Lock()

@@ -27,6 +27,22 @@ func (s *stubTranscriber) Transcribe(samples []float32) (string, error) {
 	return s.text, s.err
 }
 
+type sequenceTranscriber struct {
+	texts []string
+	errs  []error
+	calls int
+}
+
+func (s *sequenceTranscriber) Transcribe([]float32) (string, error) {
+	call := s.calls
+	s.calls++
+	var err error
+	if call < len(s.errs) {
+		err = s.errs[call]
+	}
+	return s.texts[call], err
+}
+
 type stubCleaner struct {
 	text  string
 	err   error
@@ -39,6 +55,15 @@ func (s *stubCleaner) CleanupText(rawText string) (string, error) {
 		return "", s.err
 	}
 	return s.text, nil
+}
+
+type passthroughCleaner struct {
+	calls int
+}
+
+func (c *passthroughCleaner) CleanupText(text string) (string, error) {
+	c.calls++
+	return text, nil
 }
 
 type stubContext struct {
@@ -360,6 +385,146 @@ func TestStopRetranscribesWhenAudioArrivedAfterThePartial(t *testing.T) {
 	// Reusing here would silently drop the last two seconds of speech.
 	if asr.calls != 2 {
 		t.Errorf("Transcribe called %d times, want 2 (partial plus final pass)", asr.calls)
+	}
+}
+
+const completePartial = "the complete sentence includes all of these ending words"
+
+// primePartial runs one deterministic streaming pass without letting a real
+// ticker launch extra recognitions in the background.
+func primePartial(t *testing.T, p *Pipeline, asr transcriber) *Streamer {
+	t.Helper()
+	ticker := newManualTicker()
+	streamer := NewStreamer(asr, staticSnapshot(32000), nil, time.Millisecond, testSampleRate,
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	streamer.newTicker = func() Ticker { return ticker }
+	p.SetStreamer(streamer)
+	streamer.Start()
+	streamer.runPass(streamer.Generation())
+	t.Cleanup(func() {
+		streamer.Stop()
+		streamer.Wait()
+	})
+	return streamer
+}
+
+// TestFinalPassCannotTruncateTheLastPartial reproduces sussurro-3jn through
+// the real stop path. Whisper's final whole-buffer pass ended mid-sentence
+// even though the last streaming pass already held the complete text; blindly
+// preferring the final pass then discarded words the user had seen.
+func TestFinalPassCannotTruncateTheLastPartial(t *testing.T) {
+	asr := &sequenceTranscriber{texts: []string{completePartial, "the complete sentence includes"}}
+	cleaner := &stubCleaner{text: "the complete sentence includes"}
+	consumer := &recordingConsumer{}
+	p := newTestPipeline(t, asr, cleaner, stubContext{info: &ctxProvider.ContextInfo{}})
+	p.SetResultConsumer(consumer)
+	streamer := primePartial(t, p, asr)
+
+	// The partial saw two seconds but recording continued to four, forcing the
+	// final ASR path rather than the partial-reuse shortcut.
+	p.isRecording.Store(true)
+	p.audioBuffer = make([]float32, 64000)
+	if !p.StopRecording() {
+		t.Fatal("StopRecording() = false, want the recording stopped")
+	}
+	p.wg.Wait()
+	streamer.Wait()
+
+	if asr.calls != 2 {
+		t.Fatalf("Transcribe called %d times, want partial plus final", asr.calls)
+	}
+	if cleaner.calls != 1 {
+		t.Fatalf("CleanupText called %d times, want the normal cleanup path", cleaner.calls)
+	}
+	if len(consumer.results) != 1 {
+		t.Fatalf("got %d results, want 1", len(consumer.results))
+	}
+	if got := consumer.results[0]; got.Raw != completePartial || got.Text != completePartial || got.Cleaned {
+		t.Errorf("delivered Raw=%q Text=%q Cleaned=%v, want the complete last partial %q", got.Raw, got.Text, got.Cleaned, completePartial)
+	}
+}
+
+func TestFinalPassFailurePreservesTheLastPartial(t *testing.T) {
+	asr := &sequenceTranscriber{
+		texts: []string{completePartial, ""},
+		errs:  []error{nil, errors.New("decoder failed")},
+	}
+	consumer := &recordingConsumer{}
+	p := newTestPipeline(t, asr, &passthroughCleaner{}, stubContext{info: &ctxProvider.ContextInfo{}})
+	p.SetResultConsumer(consumer)
+	streamer := primePartial(t, p, asr)
+
+	p.isRecording.Store(true)
+	p.audioBuffer = make([]float32, 64000)
+	if !p.StopRecording() {
+		t.Fatal("StopRecording() = false, want the recording stopped")
+	}
+	p.wg.Wait()
+	streamer.Wait()
+
+	if len(consumer.results) != 1 || consumer.results[0].Raw != completePartial {
+		t.Fatalf("results = %+v, want the complete last partial", consumer.results)
+	}
+}
+
+func TestMaxDurationCannotTruncateTheLastPartial(t *testing.T) {
+	asr := &sequenceTranscriber{texts: []string{completePartial, "the complete sentence includes"}}
+	consumer := &recordingConsumer{}
+	p := newTestPipeline(t, asr, &passthroughCleaner{}, stubContext{info: &ctxProvider.ContextInfo{}})
+	p.SetResultConsumer(consumer)
+	streamer := primePartial(t, p, asr)
+
+	p.isRecording.Store(true)
+	p.audioBuffer = make([]float32, 64000)
+	p.handleCapturedChunk([]float32{1}, 64000)
+	p.wg.Wait()
+	streamer.Wait()
+
+	if p.isRecording.Load() {
+		t.Fatal("recording still active after reaching the maximum duration")
+	}
+	if asr.calls != 2 {
+		t.Fatalf("Transcribe called %d times, want partial plus final", asr.calls)
+	}
+	if len(consumer.results) != 1 || consumer.results[0].Raw != completePartial {
+		t.Fatalf("results = %+v, want the complete last partial", consumer.results)
+	}
+}
+
+func TestFinalPassShorter(t *testing.T) {
+	tests := []struct {
+		name    string
+		final   string
+		partial string
+		want    bool
+	}{
+		{name: "aligned suffix missing", final: "Hello world", partial: "hello, world! More words.", want: true},
+		{name: "suffix missing after correction", final: "why did it add a yep", partial: "why did it insert a yep at the beginning which wasn't there before", want: true},
+		{name: "empty final", final: "", partial: "speech was already recognised", want: true},
+		{name: "shorter correction", final: "I need this sentence", partial: "I I need this sentence", want: true},
+		{name: "longer final", final: "the final added words", partial: "the final", want: false},
+		{name: "same length correction", final: "choose final wording", partial: "retain prior wording", want: false},
+		{name: "no partial", final: "some result", partial: "", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := finalPassShorter(tt.final, tt.partial); got != tt.want {
+				t.Errorf("finalPassShorter(%q, %q) = %v, want %v", tt.final, tt.partial, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStartRecordingIsIgnoredAfterStop(t *testing.T) {
+	p := newTestPipeline(t, &stubTranscriber{}, &stubCleaner{}, stubContext{})
+	p.audioChan = make(chan []float32)
+	p.stopChan = make(chan struct{})
+
+	p.Stop()
+	p.StartRecording()
+
+	if p.isRecording.Load() {
+		t.Fatal("StartRecording restarted a stopped pipeline")
 	}
 }
 

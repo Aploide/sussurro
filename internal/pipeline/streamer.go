@@ -87,6 +87,10 @@ type Streamer struct {
 	wake chan struct{}
 	stop chan struct{}
 	wg   sync.WaitGroup
+
+	// beforeCommit is a test barrier for the narrow stop-versus-publish race.
+	// Production leaves it nil.
+	beforeCommit func()
 }
 
 // NewStreamer builds a partial transcription worker. The transcriber is called
@@ -728,7 +732,25 @@ func (s *Streamer) runPass(generation uint64) {
 		settledUntil, segments, windowStart, total, s.revisionSentences,
 	)
 
+	if s.beforeCommit != nil {
+		s.beforeCommit()
+	}
+
+	// Commit and generation validation must be atomic with stopAndTake. A
+	// check before taking the lock left a gap where Stop could capture an older
+	// partial and bump the generation, after which this pass still overwrote
+	// state and published newer text to the overlay (sussurro-3jn).
 	s.mu.Lock()
+	if !s.running || s.generation.Load() != generation {
+		s.mu.Unlock()
+		s.log.Debug("Discarding partial stopped before commit", "generation", generation)
+		return
+	}
+	// Keep the commit and its publication in one critical section. Otherwise
+	// StopAndTake can return the committed text and invalidate the generation,
+	// only for this callback to restore a Recording overlay afterwards.
+	// The deferred unlock also releases the mutex if a callback panics.
+	defer s.mu.Unlock()
 	s.lastText = full
 	s.lastSamples = len(samples)
 	s.lastGen = generation
@@ -743,7 +765,6 @@ func (s *Streamer) runPass(generation uint64) {
 			"next_window_start", nextStart.Round(time.Millisecond),
 			"settled_total", s.settledText)
 	}
-	s.mu.Unlock()
 
 	if s.onPartial != nil {
 		s.onPartial(generation, full)
