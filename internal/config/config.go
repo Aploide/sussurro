@@ -63,7 +63,7 @@ type LLMConfig struct {
 	Threads     int    `mapstructure:"threads"`
 	// ExtendedPrompt enables richer cleanup instructions (no-summarization
 	// contract, list formatting, prompt-level dictionary). Leave false for
-	// the bundled qwen3-sussurro fine-tune, which only behaves with the
+	// the bundled qwen3-sussurro model, which only behaves with the
 	// prompt it was trained on; set true when pointing path at a general
 	// instruct model.
 	ExtendedPrompt bool `mapstructure:"extended_prompt"`

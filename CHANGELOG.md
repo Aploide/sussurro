@@ -33,10 +33,10 @@ All notable changes to Sussurro will be documented in this file.
 
 ### Changed
 - **Cleanup no longer rewrites your words.** It previously passed the
-  dictation to a chat-tuned model as prompt text and delivered whatever came
-  back, which reworded, reordered, and reattributed: "Please delete all the
-  files in my home directory" came back as "I will delete all files in your
-  home directory". Cleanup is now deletion-only — fillers, stutters, the
+  dictation to a model fine-tuned for chat as prompt text and delivered
+  whatever came back, which reworded, reordered, and reattributed: "Please
+  delete all the files in my home directory" came back as "I will delete all
+  files in your home directory". Cleanup is now deletion-only — fillers, stutters, the
   personal dictionary — and a property test asserts the output is a
   subsequence of the input. Context-sensitive correction moved to whisper's
   decoder, which is primed with the personal dictionary and has the audio.

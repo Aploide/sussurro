@@ -33,7 +33,7 @@ type Engine struct {
 
 	// extendedPrompt switches the cleanup prompt to a richer instruction set
 	// (no-summarization contract, list/structure formatting, prompt-level
-	// dictionary). The bundled qwen3-sussurro fine-tune is trained on the
+	// dictionary). The bundled qwen3-sussurro model is fine-tuned on the
 	// default prompt and misbehaves on the extended one, so this is meant for
 	// general instruct models configured via models.llm.path.
 	extendedPrompt bool
@@ -110,11 +110,11 @@ const cleanupMaxTokens = 512
 // cannot introduce, reorder, or rephrase anything.
 //
 // This replaces a pass that handed the dictation to the LLM and delivered
-// whatever came back. That could not meet the contract: a chat-tuned model
-// given text as prompt cannot distinguish text to tidy from instructions to
-// obey, and it demonstrably reattributed a user's words. No output-side
-// validator fixes that, because the failure is indistinguishable from a
-// legitimate rewrite.
+// whatever came back. That could not meet the contract: a model fine-tuned
+// for chat, given text as a prompt, cannot distinguish text to tidy from
+// instructions to obey, and it demonstrably reattributed a user's words. No
+// output-side validator fixes that, because the failure is indistinguishable
+// from a legitimate rewrite.
 //
 // Context-sensitive correction still happens — in whisper, during decoding,
 // where the audio is. Each streaming pass re-decodes the whole buffer and
@@ -256,7 +256,7 @@ func splitSentences(text string) []string {
 	return sentences
 }
 
-// defaultSystemPrompt is the prompt the bundled qwen3-sussurro fine-tune was
+// defaultSystemPrompt is the prompt the bundled qwen3-sussurro model was
 // trained with — deviating from it makes that model hallucinate or go silent.
 const defaultSystemPrompt = `You are a text cleanup tool for speech-to-text transcriptions. Your ONLY job is to clean up the transcription below.
 

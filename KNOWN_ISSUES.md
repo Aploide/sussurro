@@ -46,7 +46,7 @@ unaffected by everything here.
   backends have not been run against a real compositor. `auto` falls back to
   clipboard paste, which is the tested path.
 - **Voice editing quality depends on the model**: the bundled
-  `qwen3-sussurro` fine-tune is trained for cleanup, not instruction-following.
+  `qwen3-sussurro` model is fine-tuned for cleanup, not instruction-following.
   Edits fall back to the original text when the model returns nothing usable,
   so a poor edit is safe but may simply do nothing. A general instruct model
   configured via `models.llm.path` handles instructions better.
