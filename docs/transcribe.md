@@ -76,7 +76,7 @@ sussurro-transcribe -i <audio-file> [options]
 ### Flags
 
 | Flag | Default | Description |
-|------|---------|-------------|
+| ------ | --------- | ------------- |
 | `-i <file>` | *(required)* | Input audio file — any format ffmpeg supports (MP3, WAV, M4A, OGG, FLAC, …) |
 | `-o <file>` | stdout | Write transcription to a file instead of printing to stdout |
 | `-clean` | off | Run LLM cleanup on the raw Whisper output (removes filler words, fixes self-corrections) |
@@ -114,7 +114,10 @@ sussurro-transcribe -i voice-note.ogg | wc -w
 3. **LLM cleanup** (optional, `-clean`) — The raw Whisper text is passed to the LLM engine (`internal/llm`). The model removes filler words, handles self-corrections, and produces clean, readable text.
 4. **Output** — The final text is written to stdout or to the file specified with `-o`.
 
-The binary reads `~/.sussurro/config.yaml` for model paths, thread counts, and language settings, so no extra configuration is required once Sussurro is already set up.
+The binary reads `~/.sussurro/config.yaml` for model paths, thread counts, and
+language settings, so no extra configuration is required once Sussurro is
+already set up. When upgrading an older configuration, it automatically
+downloads the small Silero voice-activity model before the first transcription.
 
 ---
 
@@ -126,6 +129,8 @@ The binary reads `~/.sussurro/config.yaml` for model paths, thread counts, and l
 models:
   asr:
     path: ~/.sussurro/models/whisper-large-v3-turbo.bin
+    vad_path: ~/.sussurro/models/ggml-silero-v6.2.0.bin
+    vad_threshold: 0.01
     threads: 4
     language: auto          # overridden by -lang flag
   llm:
@@ -152,18 +157,23 @@ Any format that `ffmpeg` can decode works: MP3, WAV, FLAC, M4A, AAC, OGG, Opus, 
 ## Troubleshooting
 
 ### `ffmpeg: command not found`
+
 Install `ffmpeg` — see the Prerequisites section above.
 
 ### `Error: failed to load config`
+
 Run `sussurro` at least once to generate `~/.sussurro/config.yaml`, or point to a config file with `-config`.
 
 ### `Error: failed to initialize ASR engine`
+
 The Whisper model file is missing or the path in `config.yaml` is wrong. Run `sussurro --whisper` to download models, or update the `models.asr.path` field in your config.
 
 ### `Warning: LLM cleanup failed, using raw transcription`
+
 The LLM model is unavailable (missing file, out of memory, etc.). The raw Whisper transcription is still returned — `-clean` degrades gracefully.
 
 ### Output is empty or very short
+
 - The audio may be too quiet or silent. Check the file plays back correctly.
 - Try `-lang en` (or the actual language) instead of `auto` for short clips.
 - Add `-debug` to see what Whisper receives and outputs.

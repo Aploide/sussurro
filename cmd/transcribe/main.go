@@ -12,6 +12,7 @@ import (
 	"github.com/aploide/sussurro/internal/config"
 	"github.com/aploide/sussurro/internal/llm"
 	"github.com/aploide/sussurro/internal/logger"
+	"github.com/aploide/sussurro/internal/setup"
 	"github.com/aploide/sussurro/internal/version"
 )
 
@@ -53,6 +54,12 @@ func main() {
 		logger.Init(cfg.App.LogLevel)
 	}
 
+	vadPath := cfg.Models.ASR.ResolvedVADPath()
+	if err := setup.EnsureVADModel(vadPath, os.Stderr); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to provision voice activity model: %v\n", err)
+		os.Exit(1)
+	}
+
 	// Convert audio to 16kHz mono f32le PCM via ffmpeg
 	samples, err := audioToSamples(*inputFile)
 	if err != nil {
@@ -78,6 +85,10 @@ func main() {
 		os.Exit(1)
 	}
 	defer asrEngine.Close()
+	if err := asrEngine.EnableVAD(vadPath, cfg.Models.ASR.VADThreshold); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to initialize voice activity detection: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Transcribe
 	text, err := asrEngine.Transcribe(samples)

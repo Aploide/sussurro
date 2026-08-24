@@ -31,6 +31,8 @@ audio:
 models:
   asr:
     path: "models/ggml-base.bin"
+    vad_path: "models/ggml-silero-v6.2.0.bin"
+    vad_threshold: 0.01
     type: "whisper"
     threads: 4
     language: "en"

@@ -71,12 +71,15 @@ audio:
 
 ### Model Settings
 
-Sussurro requires two models: one for ASR and one for LLM cleanup.
+Sussurro uses a Whisper ASR model, a small Silero voice-activity model, and an
+LLM cleanup model.
 
 ```yaml
 models:
   asr:
     path: "/home/you/.sussurro/models/ggml-small.bin"
+    vad_path: "/home/you/.sussurro/models/ggml-silero-v6.2.0.bin"
+    vad_threshold: 0.01 # Increase toward 1.0 if non-speech passes the VAD
     type: "whisper"
     threads: 4
     language: "en"   # BCP-47 code passed to Whisper; "auto" for auto-detection
@@ -87,7 +90,15 @@ models:
     threads: 4
 ```
 
-Use absolute paths for model files. The first run setup writes a config file with absolute paths based on your home directory.
+Use absolute paths for model files. The first run setup writes a config file
+with absolute paths based on your home directory. `vad_path` selects the Silero
+model that keeps silence and non-speech noise out of Whisper; this prevents
+stock subtitle phrases from appearing at the end of dictations. Existing
+configs may omit it—the default is
+`~/.sussurro/models/ggml-silero-v6.2.0.bin`. `vad_threshold` is Silero's
+speech-probability cutoff from 0 to 1. The measured default (`0.01`) preserves
+very quiet speech; raise it in environments where speech-like background noise
+passes the VAD.
 
 #### Whisper ASR Models
 

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,7 +38,29 @@ func loadTestConfig(t *testing.T, body string) (*Config, error) {
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("writing test config: %v", err)
 	}
-	return LoadConfig(path)
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		return nil, fmt.Errorf("load test configuration: %w", err)
+	}
+	return cfg, nil
+}
+
+func TestRejectsInvalidVADThreshold(t *testing.T) {
+	body := strings.Replace(legacyConfig, "threads: 4", "threads: 4\n    vad_threshold: 1.1", 1)
+	if _, err := loadTestConfig(t, body); err == nil {
+		t.Fatal("LoadConfig() accepted vad_threshold above 1")
+	}
+}
+
+func TestLegacyConfigAcceptsVADPathEnvironmentOverride(t *testing.T) {
+	t.Setenv("SUSSURRO_MODELS_ASR_VAD_PATH", "/env/silero.bin")
+	cfg, err := loadTestConfig(t, legacyConfig)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if got := cfg.Models.ASR.VADPath; got != "/env/silero.bin" {
+		t.Errorf("VADPath = %q, want environment override", got)
+	}
 }
 
 func TestLegacyConfigKeepsImmediateDefaults(t *testing.T) {

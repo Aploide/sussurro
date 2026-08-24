@@ -7,7 +7,7 @@ CMD_DIR := cmd/sussurro
 # binary reports the "dev" default from internal/version.
 VERSION ?=
 VERSION_PKG := github.com/aploide/sussurro/internal/version
-GO_LDFLAGS := $(if $(VERSION),-ldflags "-X $(VERSION_PKG).Version=$(VERSION)")
+GO_LDFLAGS = $(VERSION:%=-ldflags "-X $(VERSION_PKG).Version=%")
 
 # Whisper.cpp configuration
 WHISPER_DIR := third_party/whisper.cpp
@@ -42,7 +42,7 @@ LLAMA_STAMP   := $(LLAMA_DIR)/.stamp-$(GO_LLAMA_COMMIT)
 # desktop unresponsive for their duration. This is a default, not a cap:
 # override with e.g. BUILD_JOBS=24 to use everything.
 NCORES    := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)
-BUILD_JOBS ?= $(shell n=$$(( $(NCORES) / 2 )); [ $$n -lt 1 ] && n=1; echo $$n)
+BUILD_JOBS ?= $(shell n=$$(expr $(NCORES) / 2); [ $$n -lt 1 ] && n=1; echo $$n)
 NPROCS    := $(BUILD_JOBS)
 
 # Run compilers at low CPU and IO priority, so an interactive desktop keeps
@@ -229,16 +229,16 @@ check-deps-artefacts:
 		rm -f $(LLAMA_STAMP); \
 	fi
 
-$(WHISPER_STAMP):
+$(WHISPER_STAMP): scripts/patch-whisper.sh
 	@mkdir -p third_party
 	@if [ ! -d "$(WHISPER_DIR)" ]; then \
 		echo "Cloning whisper.cpp..."; \
 		git clone https://github.com/ggerganov/whisper.cpp.git $(WHISPER_DIR); \
 		git -C $(WHISPER_DIR) checkout --quiet $(WHISPER_COMMIT); \
-		echo "Patching whisper.cpp symbols..."; \
-		chmod +x scripts/patch-whisper.sh; \
-		./scripts/patch-whisper.sh; \
 	fi
+	@echo "Patching whisper.cpp..."
+	@chmod +x scripts/patch-whisper.sh
+	@./scripts/patch-whisper.sh
 	@echo "Building whisper.cpp library..."
 	@cmake -S $(WHISPER_DIR) -B $(WHISPER_DIR)/build \
 		-DGGML_NATIVE=OFF \

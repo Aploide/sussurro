@@ -4,7 +4,7 @@
 
 set -e
 
-WHISPER_DIR="third_party/whisper.cpp"
+WHISPER_DIR="${WHISPER_DIR:-third_party/whisper.cpp}"
 
 if [ ! -d "$WHISPER_DIR" ]; then
     echo "Directory $WHISPER_DIR does not exist. Run 'make deps' first."
@@ -135,5 +135,53 @@ fi
 # initialiser nothing references), and cgo rejects that flag inside a #cgo
 # directive. The Makefile supplies it through CGO_LDFLAGS instead, which is
 # not subject to that allowlist. See WHISPER_VULKAN in the Makefile.
+
+# 9. whisper.cpp maps segment timestamps back to the original audio after VAD
+# removes silence, but returns token timestamps on the compressed timeline.
+# Sussurro uses token times for streaming window boundaries, so map token data
+# through the same table. Keep this patch here because third_party is cloned at
+# build time and is not part of the repository.
+WHISPER_CPP="$WHISPER_DIR/src/whisper.cpp"
+TOKEN_MAPPING_MARKER="Sussurro: map VAD-compressed token timestamps"
+if [ -f "$WHISPER_CPP" ] && ! grep -q "$TOKEN_MAPPING_MARKER" "$WHISPER_CPP"; then
+    tmp_file="$(mktemp)"
+    awk '
+        /^struct whisper_token_data whisper_full_get_token_data_from_state\(/ {
+            print $0
+            getline old_return
+            getline old_close
+            if (old_return != "    return state->result_all[i_segment].tokens[i_token];" || old_close != "}") exit 2
+            print "    // Sussurro: map VAD-compressed token timestamps to original audio."
+            print "    auto data = state->result_all[i_segment].tokens[i_token];"
+            print "    if (state->has_vad_segments && !state->vad_mapping_table.empty()) {"
+            print "        if (data.t0 >= 0) data.t0 = map_processed_to_original_time(data.t0, state->vad_mapping_table);"
+            print "        if (data.t1 >= 0) data.t1 = map_processed_to_original_time(data.t1, state->vad_mapping_table);"
+            print "    }"
+            print "    return data;"
+            print "}"
+            patched_state = 1
+            next
+        }
+        /^struct whisper_token_data whisper_full_get_token_data\(/ {
+            print $0
+            getline old_return
+            getline old_close
+            if (old_return != "    return ctx->state->result_all[i_segment].tokens[i_token];" || old_close != "}") exit 2
+            print "    return whisper_full_get_token_data_from_state(ctx->state, i_segment, i_token);"
+            print "}"
+            patched_context = 1
+            next
+        }
+        { print }
+        END {
+            if (!patched_state || !patched_context) exit 1
+        }
+    ' "$WHISPER_CPP" > "$tmp_file" || {
+        rm -f "$tmp_file"
+        echo "ERROR: VAD token timestamp patch did not match whisper.cpp" >&2
+        exit 1
+    }
+    mv "$tmp_file" "$WHISPER_CPP"
+fi
 
 echo "Patch applied successfully."

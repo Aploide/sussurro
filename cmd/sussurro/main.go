@@ -56,7 +56,7 @@ func run() {
 	flag.Parse()
 
 	// Ensure Setup (First Run Experience)
-	if err := setup.EnsureSetup(); err != nil {
+	if err := setup.EnsureSetup(*configPath); err != nil {
 		fmt.Printf("Setup failed: %v\n", err)
 		os.Exit(1)
 	}
@@ -112,6 +112,10 @@ func run() {
 		os.Exit(1)
 	}
 	defer asrEngine.Close()
+	if err := asrEngine.EnableVAD(cfg.Models.ASR.ResolvedVADPath(), cfg.Models.ASR.VADThreshold); err != nil {
+		log.Error("Failed to initialize voice activity detection", "error", err)
+		os.Exit(1)
+	}
 
 	// Initialize LLM Engine
 	llmEngine, err := llm.NewEngine(cfg.Models.LLM.Path, cfg.Models.LLM.Threads, cfg.Models.LLM.ContextSize, cfg.Models.LLM.GpuLayers, cfg.App.Debug)

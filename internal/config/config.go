@@ -49,11 +49,42 @@ type ModelsConfig struct {
 	LLM LLMConfig `mapstructure:"llm"`
 }
 
+const (
+	DefaultVADModelFilename = "ggml-silero-v6.2.0.bin"
+	DefaultVADModelURL      = "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin"
+	MinimumVADModelSize     = 100 * 1024
+)
+
 type ASRConfig struct {
-	Path     string `mapstructure:"path"`
-	Type     string `mapstructure:"type"`
-	Threads  int    `mapstructure:"threads"`
-	Language string `mapstructure:"language"`
+	Path         string  `mapstructure:"path"`
+	VADPath      string  `mapstructure:"vad_path"`
+	VADThreshold float32 `mapstructure:"vad_threshold"`
+	Type         string  `mapstructure:"type"`
+	Threads      int     `mapstructure:"threads"`
+	Language     string  `mapstructure:"language"`
+}
+
+// ResolvedVADPath returns the explicit VAD model path, or the setup-managed
+// default for existing configurations that predate vad_path.
+func (c ASRConfig) ResolvedVADPath() string {
+	if c.VADPath != "" {
+		return c.VADPath
+	}
+	if path := defaultVADModelPath(); path != "" {
+		return path
+	}
+	if c.Path == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(c.Path), DefaultVADModelFilename)
+}
+
+func defaultVADModelPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".sussurro", "models", DefaultVADModelFilename)
 }
 
 type LLMConfig struct {
@@ -123,7 +154,7 @@ type InjectionConfig struct {
 func SaveLanguage(cfg *Config, language string) error {
 	configFile, err := userConfigPath()
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve user config path: %w", err)
 	}
 
 	data, err := os.ReadFile(configFile)
@@ -185,7 +216,7 @@ func SaveLanguage(cfg *Config, language string) error {
 func SaveLowercaseOutput(cfg *Config, enabled bool) error {
 	configFile, err := userConfigPath()
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve user config path: %w", err)
 	}
 
 	data, err := os.ReadFile(configFile)
@@ -231,7 +262,7 @@ func SaveLowercaseOutput(cfg *Config, enabled bool) error {
 func SaveSkipLLMCleanup(cfg *Config, enabled bool) error {
 	configFile, err := userConfigPath()
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve user config path: %w", err)
 	}
 
 	data, err := os.ReadFile(configFile)
@@ -302,6 +333,8 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	viper.SetDefault("models.asr.language", "en")
+	viper.SetDefault("models.asr.vad_path", defaultVADModelPath())
+	viper.SetDefault("models.asr.vad_threshold", float32(0.01))
 	viper.SetDefault("hotkey.mode", "push-to-talk")
 	viper.SetDefault("app.lowercase_output", false)
 	viper.SetDefault("app.skip_llm_cleanup", false)
@@ -313,7 +346,7 @@ func LoadConfig(path string) (*Config, error) {
 	// AutomaticEnv alone does not surface keys that Unmarshal has to discover,
 	// so bind the workflow keys explicitly.
 	if err := bindWorkflowEnv(viper.GetViper()); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("bind workflow environment: %w", err)
 	}
 
 	if err := viper.ReadInConfig(); err != nil {
@@ -321,7 +354,7 @@ func LoadConfig(path string) (*Config, error) {
 			// Try fallback to "default" (old behavior)
 			viper.SetConfigName("default")
 			if err := viper.ReadInConfig(); err != nil {
-				return nil, err
+				return nil, fmt.Errorf("read fallback configuration: %w", err)
 			}
 		} else {
 			// Configs written on Windows before the path quoting fix are not
@@ -330,17 +363,21 @@ func LoadConfig(path string) (*Config, error) {
 			// parse fails, so repair it in place and retry once.
 			repaired, rerr := repairConfigPaths(viper.ConfigFileUsed())
 			if rerr != nil || !repaired {
-				return nil, err
+				return nil, fmt.Errorf("read configuration: %w", err)
 			}
 			if err := viper.ReadInConfig(); err != nil {
-				return nil, err
+				return nil, fmt.Errorf("read repaired configuration: %w", err)
 			}
 		}
 	}
 
 	var cfg Config
 	if err := viper.Unmarshal(&cfg); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decode configuration: %w", err)
+	}
+
+	if cfg.Models.ASR.VADThreshold <= 0 || cfg.Models.ASR.VADThreshold > 1 {
+		return nil, fmt.Errorf("invalid configuration: models.asr.vad_threshold must be greater than 0 and at most 1")
 	}
 
 	cfg.Hotkey.Normalize()
@@ -356,5 +393,8 @@ func LoadConfig(path string) (*Config, error) {
 // name is the YAML key under hotkey: "push_to_talk" or "toggle". An empty
 // trigger clears the binding, which is valid — either may be unset.
 func SaveHotkeyBinding(name, trigger string) error {
-	return SaveWorkflowValue("hotkey."+name, YAMLString(trigger))
+	if err := SaveWorkflowValue("hotkey."+name, YAMLString(trigger)); err != nil {
+		return fmt.Errorf("save hotkey binding: %w", err)
+	}
+	return nil
 }

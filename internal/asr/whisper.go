@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aploide/sussurro/internal/config"
 	"github.com/aploide/sussurro/internal/logger"
 	"github.com/ggerganov/whisper.cpp/bindings/go/pkg/whisper"
 )
@@ -113,6 +114,43 @@ func NewEngine(modelPath string, threads int, language string, debug bool) (*Eng
 		context: ctx,
 		debug:   debug,
 	}, nil
+}
+
+// EnableVAD configures whisper.cpp to recognise only audio that its Silero
+// voice-activity model identifies as speech. This prevents trailing silence,
+// ambient noise, and key-release transients from being decoded as stock phrases
+// without filtering any particular words from the transcript.
+func (e *Engine) EnableVAD(modelPath string, thresholds ...float32) error {
+	info, err := os.Stat(modelPath)
+	if err != nil {
+		return fmt.Errorf("VAD model file not found at %s: %w (download it from %s)", modelPath, err, config.DefaultVADModelURL)
+	}
+	if info.Size() < config.MinimumVADModelSize {
+		return fmt.Errorf("VAD model file at %s is incomplete (%d bytes); download it again from %s", modelPath, info.Size(), config.DefaultVADModelURL)
+	}
+
+	threshold := float32(0.01)
+	if len(thresholds) > 0 && thresholds[0] > 0 && thresholds[0] <= 1 {
+		threshold = thresholds[0]
+	}
+
+	e.mutex.Lock()
+	defer e.mutex.Unlock()
+	e.context.SetVAD(true)
+	e.context.SetVADModelPath(modelPath)
+	// The default retained speech attenuated to 0.1% of its original amplitude
+	// in verification while still rejecting silence and pink noise. It remains
+	// configurable for noisier recording environments.
+	e.context.SetVADThreshold(threshold)
+	e.context.SetVADMinSilenceMs(500)
+	e.context.SetVADSpeechPadMs(100)
+	// whisper.cpp loads the VAD model lazily. A short silent pass forces that
+	// initialization now, so a corrupt or incompatible model fails at startup
+	// rather than after the user finishes dictating.
+	if err := e.context.Process(make([]float32, 2*16000), nil, nil, nil); err != nil {
+		return fmt.Errorf("failed to initialize VAD model at %s: %w", modelPath, err)
+	}
+	return nil
 }
 
 // SetDictionary primes the decoder with the user's vocabulary.
