@@ -77,33 +77,25 @@ func (model ViewModel) Visible() bool {
 func CompactModel(state AppState) ViewModel {
 	// Transcript is deliberately empty: this clears any live text still on
 	// screen, so the panel collapses back to the capsule.
-	return ViewModel{State: state, Mode: ViewCompact, Status: compactStatus(state, false)}
+	return ViewModel{State: state, Mode: ViewCompact, Status: compactStatus(state)}
 }
 
-// StreamingCompactModel is CompactModel for a session showing live text. The
-// two differ only in what the finalising state is called, which depends on
-// whether the user has already been reading a transcript.
+// StreamingCompactModel is CompactModel for a session showing live text.
 func StreamingCompactModel(state AppState) ViewModel {
-	return ViewModel{State: state, Mode: ViewCompact, Status: compactStatus(state, true)}
+	return ViewModel{State: state, Mode: ViewCompact, Status: compactStatus(state)}
 }
 
-// compactStatus describes an immediate-mode state. streaming reports whether
-// live text has been on screen during the recording.
-func compactStatus(state AppState, streaming bool) string {
+// compactStatus describes an immediate-mode state.
+func compactStatus(state AppState) string {
 	switch state {
 	case session.StateRecording:
 		// No label while recording: the waveform occupies this slot and is a
 		// live animation, so a word saying the same thing adds nothing.
 		return ""
 	case session.StateTranscribing:
-		// With streaming on, text has been on screen throughout, so this pass
-		// completes a transcription the user can already read: "Finalizing".
-		// With streaming off nothing has been shown yet, and transcription is
-		// literally what is starting, so the plainer word is the honest one.
-		if streaming {
-			return "Finalizing"
-		}
-		return "Transcribing"
+		// One unconditional label makes every stop path agree, including a
+		// max-duration stop where no partial happened to reach the overlay.
+		return "Finalizing"
 	case session.StateCleaningUp:
 		return "Cleaning up"
 	default:

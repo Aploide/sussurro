@@ -11,11 +11,8 @@ import (
 // would displace it mid-dictation, which is sussurro-xvj.61.
 func TestRecordingStatesCarryNoLabel(t *testing.T) {
 	t.Run("compact", func(t *testing.T) {
-		for _, streaming := range []bool{false, true} {
-			if got := compactStatus(session.StateRecording, streaming); got != "" {
-				t.Errorf("compactStatus(recording, streaming=%v) = %q, want empty",
-					streaming, got)
-			}
+		if got := compactStatus(session.StateRecording); got != "" {
+			t.Errorf("compactStatus(recording) = %q, want empty", got)
 		}
 	})
 
@@ -35,7 +32,7 @@ func TestRecordingStatesCarryNoLabel(t *testing.T) {
 // The states where nothing is being captured must still explain themselves:
 // the overlay is static then, and silence would read as a hang.
 func TestNonRecordingStatesKeepTheirLabel(t *testing.T) {
-	if got := compactStatus(session.StateCleaningUp, false); got == "" {
+	if got := compactStatus(session.StateCleaningUp); got == "" {
 		t.Error("cleaning up lost its label; a static overlay must say why")
 	}
 	if got := reviewStatus(session.ReviewFinalizing); got == "" {

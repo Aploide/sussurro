@@ -32,9 +32,9 @@ func TestCompactModelPreservesImmediateBehavior(t *testing.T) {
 		{state: session.StateIdle, status: ""},
 		// The waveform occupies this slot while recording, so no word is shown.
 		{state: session.StateRecording, status: ""},
-		// Without streaming nothing has been shown yet, so transcription is
-		// literally what is starting.
-		{state: session.StateTranscribing, status: "Transcribing"},
+		// "Finalizing" names the whole post-recording pass without exposing an
+		// implementation detail or changing with the path that stopped recording.
+		{state: session.StateTranscribing, status: "Finalizing"},
 	}
 
 	for _, tt := range tests {
@@ -372,19 +372,17 @@ func TestManagerDropsUpdatesWhenSaturated(t *testing.T) {
 	}
 }
 
-// TestStatusDependsOnWhetherTextWasShown covers the distinction added for
-// sussurro-xvj.34. "Finalizing" is only truthful when live text has already
-// been on screen: it completes a transcript the user is reading. With nothing
-// shown, transcription is genuinely what is starting.
-func TestStatusDependsOnWhetherTextWasShown(t *testing.T) {
-	plain := CompactModel(session.StateTranscribing)
-	if plain.Status != "Transcribing" {
-		t.Errorf("CompactModel status = %q, want %q", plain.Status, "Transcribing")
-	}
-
-	streaming := StreamingCompactModel(session.StateTranscribing)
-	if streaming.Status != "Finalizing" {
-		t.Errorf("StreamingCompactModel status = %q, want %q", streaming.Status, "Finalizing")
+// TestPostRecordingStatusDoesNotDependOnWhetherTextWasShown covers the
+// recurring sussurro-xvj.34 failure. Every stop path must use the same
+// user-facing label, so a missing partial cannot expose "Transcribing" again.
+func TestPostRecordingStatusDoesNotDependOnWhetherTextWasShown(t *testing.T) {
+	for name, model := range map[string]ViewModel{
+		"without streaming": CompactModel(session.StateTranscribing),
+		"with streaming":    StreamingCompactModel(session.StateTranscribing),
+	} {
+		if model.Status != "Finalizing" {
+			t.Errorf("%s status = %q, want %q", name, model.Status, "Finalizing")
+		}
 	}
 
 	// Cleanup is named the same either way: it describes the work itself,

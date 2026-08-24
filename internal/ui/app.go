@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -268,18 +267,11 @@ func (m *Manager) OnStateChange(state AppState) {
 // on screen while post-recording work runs, rather than blanking it, and
 // labels the phase that is actually running.
 func (m *Manager) OnPhase(state session.State, partial string) {
-	// A non-empty partial means live text is already on screen, which is
-	// exactly when "Finalizing" is the truthful word rather than
-	// "Transcribing". Deriving it from the text itself rather than the
-	// streaming config keeps the label matched to what the user can see, even
-	// when streaming is on but produced nothing.
-	streaming := strings.TrimSpace(partial) != ""
-
 	m.Present(ViewModel{
 		State:      state,
 		Transcript: partial,
 		Partial:    true,
-		Status:     compactStatus(state, streaming),
+		Status:     compactStatus(state),
 		Mode:       ViewExpanded,
 	})
 }

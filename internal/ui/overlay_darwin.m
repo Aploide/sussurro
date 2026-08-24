@@ -219,10 +219,10 @@ static CVReturn displayLinkCallback(CVDisplayLinkRef link,
                                                weight:NSFontWeightMedium],
         NSForegroundColorAttributeName: [NSColor whiteColor]
     };
-    /* Cleanup shares this shimmer but not its label: no recognition runs
-       during it, and on the partial-reuse path none ran at all. */
+    /* Cleanup shares this shimmer but not its label. Finalizing names the
+       whole post-recording pass regardless of how recording stopped. */
     NSString *text = (state == OVERLAY_STATE_CLEANING_UP)
-        ? @"cleaning up" : @"transcribing";
+        ? @"cleaning up" : @"finalizing";
     NSSize sz  = [text sizeWithAttributes:attrs];
     NSPoint pt = NSMakePoint(floor((w - sz.width)  / 2.0),
                              floor((h - sz.height) / 2.0));

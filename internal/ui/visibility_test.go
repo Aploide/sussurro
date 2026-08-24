@@ -484,24 +484,41 @@ func TestCleaningUpGetsItsOwnNativeState(t *testing.T) {
 	}
 }
 
-// TestPhaseWithoutTextSaysTranscribing covers the other half of the
-// distinction: with no partial on screen, nothing has been shown yet, so
-// transcription is genuinely what is starting.
-func TestPhaseWithoutTextSaysTranscribing(t *testing.T) {
-	manager := &Manager{
-		stateChangeCh: make(chan ViewModel, 8),
-		overlay:       &presentingOverlay{},
+// TestPostRecordingEntryPointsSayFinalizing covers both notifier routes into
+// the immediate-mode UI. A normal release with a partial uses OnPhase; the
+// max-duration cap uses OnStateChange. Neither may revive the old label.
+func TestPostRecordingEntryPointsSayFinalizing(t *testing.T) {
+	tests := []struct {
+		name   string
+		notify func(*Manager)
+	}{
+		{"phase with partial", func(manager *Manager) {
+			manager.OnPhase(session.StateTranscribing, "text so far")
+		}},
+		{"phase without partial", func(manager *Manager) {
+			manager.OnPhase(session.StateTranscribing, "")
+		}},
+		{"state change", func(manager *Manager) {
+			manager.OnStateChange(session.StateTranscribing)
+		}},
 	}
 
-	manager.OnPhase(session.StateTranscribing, "")
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			manager := &Manager{
+				stateChangeCh: make(chan ViewModel, 8),
+				overlay:       &presentingOverlay{},
+			}
+			test.notify(manager)
 
-	select {
-	case model := <-manager.stateChangeCh:
-		if model.Status != "Transcribing" {
-			t.Errorf("Status = %q with no text shown, want %q",
-				model.Status, "Transcribing")
-		}
-	default:
-		t.Fatal("OnPhase queued nothing")
+			select {
+			case model := <-manager.stateChangeCh:
+				if model.Status != "Finalizing" {
+					t.Errorf("Status = %q, want %q", model.Status, "Finalizing")
+				}
+			default:
+				t.Fatal("notification queued nothing")
+			}
+		})
 	}
 }

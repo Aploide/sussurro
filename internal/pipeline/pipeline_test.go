@@ -527,6 +527,26 @@ func TestFinalPassMovesFromTranscribingToCleaningUp(t *testing.T) {
 	}
 }
 
+// TestPhaseMessageNeverCallsWorkTranscribing guards the log side of
+// sussurro-xvj.34 independently from the overlay wording.
+func TestPhaseMessageNeverCallsWorkTranscribing(t *testing.T) {
+	for _, test := range []struct {
+		state session.State
+		want  string
+	}{
+		{session.StateTranscribing, "Finalizing..."},
+		{session.StateCleaningUp, "Cleaning up..."},
+	} {
+		got := phaseMessage(test.state)
+		if got != test.want {
+			t.Errorf("phaseMessage(%s) = %q, want %q", test.state, got, test.want)
+		}
+		if strings.Contains(strings.ToLower(got), "transcrib") {
+			t.Errorf("phaseMessage(%s) exposed forbidden wording %q", test.state, got)
+		}
+	}
+}
+
 // TestStopReasonDistinguishesReleaseFromCap covers sussurro-xvj.37: a
 // recording that ends early must be separable in the log from one the user
 // ended, otherwise the cause cannot be identified after the fact.

@@ -126,10 +126,10 @@ static void draw_recording_bars(OverlayData *od)
 
 static void draw_transcribing_text(OverlayData *od)
 {
-    /* Cleanup shares this shimmer but not its label: no recognition runs
-     * during it, and on the partial-reuse path none ran at all. */
+    /* Cleanup shares this shimmer but not its label. Finalizing names the
+     * whole post-recording pass regardless of how recording stopped. */
     const WCHAR *text = (od->state == OVERLAY_STATE_CLEANING_UP)
-        ? L"cleaning up" : L"transcribing";
+        ? L"cleaning up" : L"finalizing";
 
     GpFontFamily *family = NULL;
     if (GdipCreateFontFamilyFromName(L"Segoe UI", NULL, &family) != Ok || !family)
