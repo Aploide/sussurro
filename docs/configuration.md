@@ -6,20 +6,23 @@ Sussurro uses a flexible configuration system powered by [Viper](https://github.
 
 When Sussurro starts, it looks for a configuration file in the following order:
 
-1.  **Command Line Flag**: If provided via `-config`.
+1. **Command Line Flag**: If provided via `-config`.
+
     ```bash
     ./sussurro -config /path/to/my-config.yaml
     ```
-2.  **Current Directory**: Checks for `config.yaml` in the directory where the binary is run.
-3.  **Home Directory**: Checks for `~/.sussurro/config.yaml`.
-4.  **Configs Directory**: Checks for `./configs/config.yaml`.
-5.  **Fallback**: If `config.yaml` is not found, the same paths are checked for `default.yaml`.
+
+2. **Current Directory**: Checks for `config.yaml` in the directory where the binary is run.
+3. **Home Directory**: Checks for `~/.sussurro/config.yaml`.
+4. **Configs Directory**: Checks for `./configs/config.yaml`.
+5. **Fallback**: If `config.yaml` is not found, the same paths are checked for `default.yaml`.
 
 ## Configuration Structure (`config.yaml`)
 
 The repo also includes `configs/default.yaml` with the same keys. It is a fallback if `config.yaml` is missing.
 
 ### App Settings
+
 ```yaml
 app:
   name: "Sussurro"
@@ -37,27 +40,26 @@ editing the list.
 
 ### Cleanup behavior
 
-Long dictations are cleaned in sentence-aligned chunks with strict output
-validation: a chunk whose cleanup drops content, invents content, or loses the
-original ending is automatically retried on smaller pieces and, as a last
-resort, kept verbatim. The cleanup therefore never summarizes — worst case a
-few filler words survive in a difficult passage.
+Cleanup first removes filler words and stutters deterministically. The LLM
+then uses the surrounding sentence to propose corrections for obvious
+speech-recognition mistakes, such as choosing between “base” and “bass”. A
+strict validator admits only similar-sounding substitutions: it rejects
+inserted, deleted, or reordered words, punctuation changes, and more than one
+changed token group per ten input words. Rejected output and inference errors
+leave the text unchanged.
 
-Dictated enumerations ("first... second... third...") are automatically
-reformatted into numbered list lines. This is done deterministically after
-cleanup (LLMs apply layout instructions inconsistently), so it works with any
-model and never alters wording — a spoken series must start with "first" and
+The bundled `qwen3-sussurro` model uses its trained cleanup prompt plus
+contextual examples. Set `models.llm.extended_prompt: true` with a general
+instruct model to use narrower correction-only instructions instead. The same
+output validator applies to both modes.
+
+The personal dictionary is applied after contextual correction, followed by
+deterministic formatting of dictated enumerations ("first... second...
+third...") into numbered lines. A spoken series must start with "first" and
 contain at least two in-order markers to trigger.
 
-`models.llm.extended_prompt: true` switches to a richer instruction set with
-an explicit no-summarization contract and a prompt-level dictionary. The
-bundled `qwen3-sussurro` fine-tune does not follow these extra instructions
-(it is trained on the default prompt) — use this option together with a
-general instruct model in `models.llm.path` (e.g. a Qwen3 Instruct GGUF) for
-noticeably more thorough filler removal on long dictations, at the cost of
-slower CPU cleanup.
-
 ### Audio Settings
+
 ```yaml
 audio:
   sample_rate: 16000 # Required by Whisper
@@ -68,6 +70,7 @@ audio:
 ```
 
 ### Model Settings
+
 Sussurro requires two models: one for ASR and one for LLM cleanup.
 
 ```yaml
@@ -94,9 +97,9 @@ Two Whisper models are supported. During first-run setup you will be asked which
 sussurro --whisper   # or: sussurro --wsp
 ```
 
-| Model | Filename | Size | Notes |
-|-------|----------|------|-------|
-| Whisper Small | `ggml-small.bin` | 488 MB | Faster, lower RAM |
+| Model                  | Filename                  | Size    | Notes                   |
+| ---------------------- | ------------------------- | ------- | ----------------------- |
+| Whisper Small          | `ggml-small.bin`          | 488 MB  | Faster, lower RAM       |
 | Whisper Large v3 Turbo | `ggml-large-v3-turbo.bin` | 1.62 GB | Slower, higher accuracy |
 
 The `--whisper` / `--wsp` flag opens an interactive menu, downloads the chosen model if needed, and updates `~/.sussurro/config.yaml` automatically.
@@ -112,6 +115,7 @@ export SUSSURRO_MODELS_ASR_LANGUAGE=it
 ```
 
 ### Hotkey Settings
+
 ```yaml
 hotkey:
   push_to_talk: "ctrl+shift+space" # hold to record, release to transcribe
@@ -122,10 +126,10 @@ The two bindings are independent and each optional, so one key can be held
 for push-to-talk while another is tapped to toggle. Leaving both empty is
 valid — on Wayland the trigger socket is used instead.
 
-| Setting | Behaviour |
-|---------|-----------|
-| `push_to_talk` | Hold to record; release to transcribe. |
-| `toggle` | Press once to start recording; press again to transcribe. |
+| Setting        | Behaviour                                                 |
+| -------------- | --------------------------------------------------------- |
+| `push_to_talk` | Hold to record; release to transcribe.                    |
+| `toggle`       | Press once to start recording; press again to transcribe. |
 
 Both can be changed from **Settings → Global Hotkey** and take effect
 immediately without a restart. Not applicable on Wayland, where shortcuts are
@@ -138,13 +142,14 @@ binding is already set.
 The trigger string is `+`-separated: modifiers first, then the key. Modifier aliases:
 
 | Alias(es) | Linux X11 | macOS |
-|-----------|-----------|-------|
+| ----------- | ----------- | ------- |
 | `ctrl`, `control` | `Control_L` | `⌃ Control` |
 | `shift` | `Shift_L` | `⇧ Shift` |
 | `alt`, `option` | Mod1 (`Alt_L`) | `⌥ Option` |
 | `cmd`, `command`, `super`, `meta` | Mod4 (`Super_L`) | `⌘ Command` |
 
 **Examples:**
+
 ```yaml
 trigger: "ctrl+shift+space"   # default Linux
 trigger: "cmd+shift+space"    # default macOS
@@ -155,6 +160,7 @@ trigger: "super+space"        # Linux (Super/Windows key)
 > **Note:** Hotkey changes made in the Settings window take effect immediately — no restart is required.
 
 ### Injection Settings
+
 ```yaml
 injection:
   method: "keyboard"
@@ -182,10 +188,10 @@ whole section changes nothing**. Existing configurations need no edits.
 
 #### `mode`
 
-| Value | Behaviour |
-|-------|-----------|
-| `immediate` | Transcribed text is delivered as soon as it is ready. The original behaviour, and the default. |
-| `review` | Text is held so you can read it, dictate a correction, or discard it, and is delivered only when you ask. |
+| Value       | Behaviour                                                                                                 |
+| ----------- | --------------------------------------------------------------------------------------------------------- |
+| `immediate` | Transcribed text is delivered as soon as it is ready. The original behaviour, and the default.            |
+| `review`    | Text is held so you can read it, dictate a correction, or discard it, and is delivered only when you ask. |
 
 #### `streaming`
 
@@ -204,7 +210,7 @@ string (`750ms`, `1s`). Values outside 100ms–10s are rejected.
 **`backend`** selects where recording gestures come from:
 
 | Value | Behaviour |
-|-------|-----------|
+| ------- | ----------- |
 | `auto` | Native hotkeys on X11, macOS, and Windows; the trigger socket on Wayland. Never opens `/dev/input`. The default. |
 | `native` | The in-process global hotkey listener. |
 | `trigger` | The Unix socket only — for compositors that own their own key bindings. See [wayland.md](wayland.md). |
@@ -235,7 +241,7 @@ These three keys apply to `evdev` only; other backends ignore them.
 **`backend`** selects how reviewed text is inserted:
 
 | Value | Behaviour |
-|-------|-----------|
+| ------- | ----------- |
 | `auto` | Uses `ydotool` or `wtype` when installed, otherwise clipboard paste. The default. |
 | `clipboard-paste` | Stages the text on the clipboard and sends the paste keystroke. Works on X11, macOS, and Windows with no extra packages. |
 | `wtype` | Types through the Wayland virtual keyboard protocol. Requires `wtype`. |
@@ -265,6 +271,7 @@ which marks options this host cannot use and explains why.
 All configuration values can be overridden using environment variables prefixed with `SUSSURRO_`. Nested keys are separated by underscores.
 
 Example:
+
 ```bash
 export SUSSURRO_APP_DEBUG=true
 export SUSSURRO_MODELS_LLM_THREADS=8
@@ -274,7 +281,7 @@ export SUSSURRO_MODELS_LLM_THREADS=8
 The review workflow keys follow the same rule:
 
 | Variable | Setting |
-|----------|---------|
+| ---------- | --------- |
 | `SUSSURRO_WORKFLOW_MODE` | `workflow.mode` |
 | `SUSSURRO_WORKFLOW_STREAMING_ENABLED` | `workflow.streaming.enabled` |
 | `SUSSURRO_WORKFLOW_STREAMING_INTERVAL` | `workflow.streaming.interval` |

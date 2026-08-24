@@ -61,11 +61,9 @@ type LLMConfig struct {
 	ContextSize int    `mapstructure:"context_size"`
 	GpuLayers   int    `mapstructure:"gpu_layers"`
 	Threads     int    `mapstructure:"threads"`
-	// ExtendedPrompt enables richer cleanup instructions (no-summarization
-	// contract, list formatting, prompt-level dictionary). Leave false for
-	// the bundled qwen3-sussurro model, which only behaves with the
-	// prompt it was trained on; set true when pointing path at a general
-	// instruct model.
+	// ExtendedPrompt enables strict correction-only instructions. Leave false
+	// for the bundled qwen3-sussurro model, which needs its trained cleanup
+	// prompt plus correction examples; set true for a general instruct model.
 	ExtendedPrompt bool `mapstructure:"extended_prompt"`
 }
 

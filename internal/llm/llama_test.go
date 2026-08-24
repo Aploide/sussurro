@@ -160,6 +160,44 @@ func TestCleanupPreservesAnAllFillerUtterance(t *testing.T) {
 	}
 }
 
+func TestCleanupCorrectsContextSensitiveMishearings(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "blockchain casing",
+			raw:  "I compare the Polygon blockchain and the base blockchain.",
+			want: "I compare the Polygon blockchain and the Base blockchain.",
+		},
+		{
+			name: "musical homophone",
+			raw:  "The music software can generate base notes.",
+			want: "The music software can generate bass notes.",
+		},
+		{
+			name: "model version",
+			raw:  "Run this under the large B3 turbo model.",
+			want: "Run this under the large v3 turbo model.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := &fakePredictor{output: tt.want}
+			engine := &Engine{model: model}
+			got, err := engine.CleanupText(tt.raw)
+			if err != nil {
+				t.Fatalf("CleanupText() error = %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("CleanupText() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCleanupAppliesTheDictionary(t *testing.T) {
 	engine := &Engine{}
 	engine.SetDictionary([]string{"Kubernetes"})
@@ -173,17 +211,42 @@ func TestCleanupAppliesTheDictionary(t *testing.T) {
 	}
 }
 
-func TestCleanupRunsNoInference(t *testing.T) {
-	// No model on the delivery path: that is what removes both the latency
-	// and the possibility of a rewrite.
-	model := &fakePredictor{output: "should never be used"}
-	engine := &Engine{model: model, threads: 4, debug: true}
+func TestCleanupRunsContextCorrectionBeforeDictionary(t *testing.T) {
+	model := &fakePredictor{output: "Use the Base blockchain."}
+	engine := &Engine{model: model, debug: true}
+	engine.SetDictionary([]string{"Base"})
 
-	if _, err := engine.CleanupText("Um, the build is broken."); err != nil {
+	got, err := engine.CleanupText("Use the base blockchain.")
+	if err != nil {
 		t.Fatalf("CleanupText() error = %v", err)
 	}
-	if model.calls != 0 {
-		t.Errorf("Predict called %d times during cleanup, want 0", model.calls)
+	if got != "Use the Base blockchain." {
+		t.Errorf("CleanupText() = %q, want contextual and dictionary correction", got)
+	}
+	if !strings.Contains(model.prompt, "<|im_start|>user\nUse the base blockchain.<|im_end|>\n<|im_start|>assistant") {
+		t.Errorf("model did not receive pre-dictionary text: %q", model.prompt)
+	}
+}
+
+func TestCleanupRunsBoundedCorrectionInference(t *testing.T) {
+	model := &fakePredictor{output: "The build is broken."}
+	engine := &Engine{model: model, threads: 4, debug: true}
+
+	got, err := engine.CleanupText("Um, the build is broken.")
+	if err != nil {
+		t.Fatalf("CleanupText() error = %v", err)
+	}
+	if got != "The build is broken." {
+		t.Errorf("CleanupText() = %q, want deterministic filler removal plus unchanged correction", got)
+	}
+	if model.calls != 1 {
+		t.Errorf("Predict called %d times during cleanup, want 1", model.calls)
+	}
+	if !strings.Contains(model.prompt, "<|im_start|>user\nThe build is broken.<|im_end|>") {
+		t.Errorf("prompt does not contain the deterministically cleaned transcript: %q", model.prompt)
+	}
+	if model.options.Tokens != correctionMaxTokens || model.options.Threads != 4 {
+		t.Errorf("prediction options = %+v, want tokens=%d threads=4", model.options, correctionMaxTokens)
 	}
 }
 

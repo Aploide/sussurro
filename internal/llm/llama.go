@@ -27,15 +27,13 @@ type Engine struct {
 	debug   bool
 
 	// dictionary holds user-provided terms that must be spelled exactly as
-	// written; they are applied as a deterministic post-processing pass and
-	// whitelisted by the anti-hallucination validator.
+	// written; they are applied as a deterministic post-processing pass after
+	// context-sensitive correction.
 	dictionary []string
 
-	// extendedPrompt switches the cleanup prompt to a richer instruction set
-	// (no-summarization contract, list/structure formatting, prompt-level
-	// dictionary). The bundled qwen3-sussurro model is fine-tuned on the
-	// default prompt and misbehaves on the extended one, so this is meant for
-	// general instruct models configured via models.llm.path.
+	// extendedPrompt selects strict correction-only instructions for general
+	// instruct models. The bundled qwen3-sussurro model instead needs its
+	// trained cleanup prompt plus few-shot correction examples.
 	extendedPrompt bool
 }
 
@@ -45,8 +43,8 @@ func (e *Engine) SetDictionary(terms []string) {
 	e.dictionary = terms
 }
 
-// SetExtendedPrompt enables the extended cleanup instructions (config
-// models.llm.extended_prompt).
+// SetExtendedPrompt enables strict correction-only instructions (config
+// models.llm.extended_prompt) for general instruct models.
 func (e *Engine) SetExtendedPrompt(on bool) {
 	e.extendedPrompt = on
 }
@@ -104,10 +102,11 @@ const cleanupMaxTokens = 512
 
 // CleanupText tidies a raw transcription without rewriting it.
 //
-// It deletes fillers and stutters, applies the personal dictionary, and lays
-// out dictated enumerations. Every word in the result was spoken by the user:
-// the transform can remove words and correct the spelling of known terms, but
-// cannot introduce, reorder, or rephrase anything.
+// It deletes fillers and stutters, admits a bounded set of context-sensitive
+// phonetic substitutions proposed by the LLM, applies the personal dictionary,
+// and lays out dictated enumerations. Validation permits no free-form rewrite:
+// unchanged words stay in order and only one similar-sounding token group per
+// ten input words may change.
 //
 // This replaces a pass that handed the dictation to the LLM and delivered
 // whatever came back. That could not meet the contract: a model fine-tuned
@@ -128,6 +127,7 @@ func (e *Engine) CleanupText(rawText string) (string, error) {
 		cleaned = rawText
 	}
 
+	cleaned = e.correctMishearings(cleaned)
 	return listify(e.applyDictionary(cleaned)), nil
 }
 

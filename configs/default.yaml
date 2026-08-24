@@ -39,8 +39,7 @@ models:
     context_size: 32768
     gpu_layers: 0
     threads: 4
-    # Extended cleanup instructions (no-summarization contract, list
-    # formatting, prompt-level dictionary). Leave false for the bundled
+    # Strict correction-only instructions. Leave false for the bundled
     # qwen3-sussurro model; set true when using a general instruct model.
     extended_prompt: false
 
