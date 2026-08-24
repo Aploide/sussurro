@@ -194,11 +194,18 @@ export LIBRARY_PATH
 # Packages that link whisper need the same CGO_LDFLAGS as the binary: with
 # Vulkan enabled, a plain "go test ./..." cannot resolve the backend symbols.
 # Use this target rather than calling go test directly.
+#
+# GOTESTFLAGS and PKGS narrow a run without a full-suite round trip, e.g.
+#   make test PKGS=./internal/pipeline/ GOTESTFLAGS="-count=1 -run TestWindow"
+# Unrecognised variables are silently ignored by make, so a typo here reads as
+# a passing full run; check the echoed command line when narrowing.
+PKGS ?= ./internal/... ./cmd/...
+
 test: deps compat-pc
 	PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_UI)" \
 	CGO_CFLAGS="$(LAYER_CFLAGS) $(WV_CFLAGS)" \
 	CGO_LDFLAGS="$(BASE_LDFLAGS) $(GGML_VULKAN_PATH) $(VULKAN_LDFLAGS) $(LAYER_LDFLAGS) $(WV_LDFLAGS)" \
-	$(NICE) go test $(UI_TAGS) $(if $(RACE),-race) ./internal/... ./cmd/...
+	$(NICE) go test $(UI_TAGS) $(if $(RACE),-race) $(GOTESTFLAGS) $(PKGS)
 
 all: build build-transcribe
 
