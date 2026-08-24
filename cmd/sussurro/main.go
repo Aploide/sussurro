@@ -177,11 +177,15 @@ func run() {
 				})
 			}
 		}
-		pipe.SetStreamer(pipeline.NewStreamer(
+		streamer := pipeline.NewStreamer(
 			asrEngine, pipe.SnapshotRecording, onPartial,
 			cfg.Workflow.StreamingInterval(), cfg.Audio.SampleRate, log,
-		))
-		log.Info("Partial transcription enabled", "interval", cfg.Workflow.StreamingInterval())
+		)
+		streamer.SetRevisionSentences(cfg.Workflow.Streaming.RevisionWindowSentences)
+		pipe.SetStreamer(streamer)
+		log.Info("Partial transcription enabled",
+			"interval", cfg.Workflow.StreamingInterval(),
+			"revision_sentences", cfg.Workflow.Streaming.RevisionWindowSentences)
 	}
 
 	// Optional evdev input, when explicitly configured. Falls back silently

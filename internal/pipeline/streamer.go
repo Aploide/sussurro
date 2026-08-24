@@ -54,6 +54,10 @@ type Streamer struct {
 	sampleRate int
 	log        *slog.Logger
 
+	// revisionSentences is how many sentences stay revisable. Read without a
+	// lock: it is set before Start and only ever read by the worker goroutine.
+	revisionSentences int
+
 	// generation identifies the active recording session. Bumping it
 	// invalidates every in-flight and queued partial result.
 	generation atomic.Uint64
@@ -67,12 +71,17 @@ type Streamer struct {
 	lastText    string
 	lastSamples int
 	lastGen     uint64
-	// settledText is the transcript of audio behind the window, and
-	// settledUntil the point in the recording it covers. Settled text is never
-	// transcribed again: it conditions the decoder as a prompt, so it costs no
-	// inference and cannot change under the user.
+	// settledText is the transcript of audio that has fallen out of the
+	// revision window, and settledUntil the point in the recording it covers.
+	// Settled text is never decoded again: it conditions the decoder as a
+	// prompt, so it costs no inference and cannot change under the user.
 	settledText  string
 	settledUntil time.Duration
+	// lastSegments are the previous pass's segments and lastStart the point
+	// that pass began decoding at. Their timings are what the next window is
+	// measured back through, since whisper reports no word timings of its own.
+	lastSegments []asr.Segment
+	lastStart    time.Duration
 	// wake signals the worker that a pass is due. Capacity 1 is what
 	// coalesces ticks: a pending wake absorbs any number of further ticks.
 	wake chan struct{}
@@ -94,37 +103,338 @@ func NewStreamer(
 		sampleRate = 16000
 	}
 	return &Streamer{
-		transcribe: transcribe,
-		snapshot:   snapshot,
-		onPartial:  onPartial,
-		newTicker:  func() Ticker { return NewTicker(interval) },
-		sampleRate: sampleRate,
-		log:        log,
+		transcribe:        transcribe,
+		snapshot:          snapshot,
+		onPartial:         onPartial,
+		newTicker:         func() Ticker { return NewTicker(interval) },
+		sampleRate:        sampleRate,
+		log:               log,
+		revisionSentences: defaultRevisionSentences,
 	}
 }
 
-// partialWindow is how much recent audio each partial pass transcribes.
+// defaultRevisionSentences is how many complete sentences stay revisable.
 //
-// Handing whisper the whole recording made each pass cost roughly 25-30ms per
-// second of accumulated audio, so a fixed tick interval produced work quadratic
-// in dictation length: 0.365s per pass early in a dictation against 1.270s
-// late, 3.5x, and 45.8s of inference for 54.9s of speech (sussurro-xvj.60).
-// Bounding the audio makes the per-pass cost constant instead.
+// Windowing begins only once this many sentences have been finished, so a
+// dictation shorter than that is decoded whole on every pass: nothing settles,
+// and no mistake can be frozen.
 //
-// Fifteen seconds holds several sentences, so the decoder has substantial
-// acoustic context rather than starting cold at a splice point, which is what
-// made the tail-splicing in sussurro-xvj.22 invent words at the boundary. Text
-// settled before the window is carried as a decoder prompt.
-const partialWindow = 15 * time.Second
+// Four is drawn from this repository's own dictation logs. The median sentence
+// there runs twelve words, about five seconds, so four sentences is roughly
+// twenty seconds of revisable audio — which is also the point up to which
+// whole-recording passes still measure a flat 0.29-0.37s. Below that there is
+// nothing to save by windowing; the growth windowing exists to bound only bites
+// later, at 1.27s per pass for a fifty-five second dictation (sussurro-xvj.60).
+// Three-sentence dictations are the commonest length in those logs and are left
+// untouched entirely.
+//
+// Sizing by words instead put the boundary mid-phrase, and whisper handed audio
+// that starts partway through a phrase produces a plausible continuation rather
+// than the truth: "a short couple of years" for "a short couple of sentences",
+// and a duplicated "Yep" at a window head that was not a natural start
+// (sussurro-k6w).
+const defaultRevisionSentences = 4
 
-// settleMargin is how far behind the window's start a segment must end before
-// its text is settled.
+// maxWindowDuration caps the audio a single pass may decode.
 //
-// Whisper's segment timestamps are approximate, and a segment ending near the
-// boundary may be reported slightly differently on the next pass. Settling only
-// what is clear of the boundary by this margin keeps a word from being frozen
-// on one pass and re-recognised on the next.
-const settleMargin = 2 * time.Second
+// A sentence count does not bound cost on its own: two sentences of slow or
+// rambling speech can span a great deal of audio, and cost tracks audio. Without
+// this backstop a long unpunctuated stretch would reintroduce the
+// sussurro-xvj.60 slowdown the window exists to prevent.
+//
+// It must comfortably exceed the time defaultRevisionSentences takes to speak,
+// or the two settings contradict each other: the ceiling would forever be
+// trying to shrink a window the sentence count is trying to hold open.
+const maxWindowDuration = 60 * time.Second
+
+// sentenceEnd reports whether a word ends a sentence, i.e. finishes with a
+// full stop, question mark, or exclamation mark.
+//
+// Trailing quotes and brackets are stepped over so that a sentence ending
+// inside quotation marks still counts.
+func sentenceEnd(text string) bool {
+	trimmed := strings.TrimRight(strings.TrimSpace(text), `"'”’)]`)
+	if trimmed == "" {
+		return false
+	}
+	switch trimmed[len(trimmed)-1] {
+	case '.', '!', '?':
+		return true
+	}
+	return false
+}
+
+// countWords reports how many whitespace-separated words a transcript holds.
+func countWords(text string) int {
+	return len(strings.Fields(text))
+}
+
+// flattenWords concatenates every segment's word timings in order.
+//
+// Sentences routinely straddle segment boundaries, so the run of words has to
+// be seen as one sequence rather than per segment. Returns nil when the engine
+// reported no word timings, which callers treat as "fall back to segments".
+func flattenWords(segments []asr.Segment) []asr.Word {
+	var words []asr.Word
+	for _, seg := range segments {
+		words = append(words, seg.Words...)
+	}
+	return words
+}
+
+// windowStartFor returns where a partial pass should begin decoding.
+//
+// The window reaches back over the last revisionSentences complete sentences,
+// so recent speech keeps being reconsidered as later audio arrives and can
+// still be corrected. It is clamped two ways: never before the settled point,
+// whose text is gone from the audio being decoded, and never spanning more than
+// maxWindowDuration, which bounds the cost of a pass.
+//
+// segments are those of the previous pass, with timings relative to
+// windowStart, the point that pass began at.
+func windowStartFor(
+	settledUntil time.Duration,
+	segments []asr.Segment,
+	windowStart time.Duration,
+	total time.Duration,
+	revisionSentences int,
+) time.Duration {
+	if settledUntil < 0 {
+		settledUntil = 0
+	}
+	if revisionSentences <= 0 {
+		revisionSentences = defaultRevisionSentences
+	}
+
+	// Walk back to the start of the nth-from-last sentence.
+	//
+	// Cutting on a sentence boundary rather than a word count is what keeps
+	// whisper from having to guess at the join. Handed audio that begins
+	// mid-phrase it produces a plausible continuation rather than the truth —
+	// "a short couple of years" for "a short couple of sentences", and a
+	// duplicated "Yep" at a window head that was not a natural start — and
+	// settling then made those permanent (sussurro-k6w).
+	//
+	// The boundary moves only when the count is actually reached, so a
+	// dictation with fewer than revisionSentences sentences stays wholly
+	// revisable. Assigning on every step instead put the boundary *after* the
+	// oldest unit, which froze whisper's first guess at the opening of every
+	// dictation at 420ms (sussurro-fkd).
+	//
+	// Falls back to segment granularity when an engine reports no word timings,
+	// which decodes more audio than asked but never less.
+	// Flattened across segments deliberately: a sentence frequently ends on the
+	// last token of one segment and continues into the next, and walking the
+	// segments separately cannot express "the word after that mark".
+	start := settledUntil
+	if words := flattenWords(segments); len(words) > 0 {
+		ends := 0
+		// A full stop on the very last word closes the sentence just spoken,
+		// which must itself stay revisable; counting it would leave one fewer
+		// complete sentence open than asked for.
+		for j := len(words) - 2; j >= 0; j-- {
+			if !sentenceEnd(words[j].Text) {
+				continue
+			}
+			ends++
+			if ends < revisionSentences {
+				continue
+			}
+			// The full stop closes the sentence before it, so the window opens
+			// at the following word.
+			start = windowStart + words[j+1].Start
+			break
+		}
+	} else {
+		// No word timings: fall back to whole segments. The last segment is
+		// skipped for the same reason as the last word above.
+		ends := 0
+		for i := len(segments) - 2; i >= 0; i-- {
+			if !sentenceEnd(segments[i].Text) {
+				continue
+			}
+			ends++
+			if ends >= revisionSentences {
+				start = windowStart + segments[i+1].Start
+				break
+			}
+		}
+	}
+
+	// Never reach back behind the settled point: that audio already has frozen
+	// text, so decoding it again would duplicate those words.
+	if start < settledUntil {
+		start = settledUntil
+	}
+	// Cap the span so a long pause cannot make a pass arbitrarily expensive.
+	//
+	// The cap may only pull the window forward as far as the settled point,
+	// never past it. Only decoded audio can settle, so audio the ceiling skips
+	// is transcribed by nobody and is lost outright: an earlier version
+	// clamped unconditionally, reasoning that settling would catch up, and
+	// whole sentences vanished from long dictations (sussurro-fkd). When
+	// settling has fallen behind, the pass simply costs more — a slow pass is
+	// a cost, dropped speech is a defect.
+	if floor := total - maxWindowDuration; start < floor {
+		// Never past the settled point: see above.
+		if floor > settledUntil {
+			floor = settledUntil
+		}
+		start = floor
+	}
+	if start < 0 {
+		start = 0
+	}
+	return start
+}
+
+// lastSentenceStart returns the window-relative start of the nth-from-last
+// sentence, or zero when the window holds fewer than n complete sentences and
+// so is entirely within the revision budget.
+//
+// This is the settling side of the same boundary windowStartFor computes: text
+// may only be frozen once it lies behind the sentence the next pass will begin
+// at. Deriving both from sentence ends is what keeps settling from running
+// ahead of the window and freezing text still being decoded.
+func lastSentenceStart(segments []asr.Segment, n int) time.Duration {
+	if n <= 0 {
+		return 0
+	}
+
+	// The last word is skipped: a full stop on it closes the sentence just
+	// spoken, which must itself stay revisable. Counting it would leave one
+	// fewer complete sentence open than asked for, and settling would run
+	// ahead of the window.
+	if words := flattenWords(segments); len(words) > 0 {
+		ends := 0
+		for j := len(words) - 2; j >= 0; j-- {
+			if !sentenceEnd(words[j].Text) {
+				continue
+			}
+			ends++
+			if ends >= n {
+				return words[j+1].Start
+			}
+		}
+		return 0
+	}
+
+	ends := 0
+	for i := len(segments) - 2; i >= 0; i-- {
+		if !sentenceEnd(segments[i].Text) {
+			continue
+		}
+		ends++
+		if ends >= n {
+			return segments[i+1].Start
+		}
+	}
+	return 0
+}
+
+// settleSegments freezes the segments that have fallen out of the revision
+// window and can no longer change.
+//
+// windowStart is where this pass's audio began, so segment timings (relative to
+// that audio) are shifted onto the recording's own timeline. A segment settles
+// once it ends before nextStart less a margin: it is outside the audio the next
+// pass will decode, so no later pass can revise it anyway.
+//
+// Settling is deliberately driven by the window rather than by elapsed time.
+// Tying the two together is what guarantees no audio is orphaned: text is
+// frozen exactly when its audio stops being decoded, never before.
+//
+// Returns the settled text, the point it now covers up to, and whether
+// anything settled.
+func settleSegments(
+	segments []asr.Segment,
+	windowStart, nextStart time.Duration,
+	revisionSentences int,
+) (string, time.Duration, bool) {
+	if len(segments) == 0 {
+		return "", 0, false
+	}
+
+	// Nothing can settle until the window has actually moved: if the next pass
+	// decodes the same audio, none of this text has left it.
+	//
+	// Checked rather than assumed, because the caller's timings come from
+	// whisper and cannot be trusted to advance. With token timestamps disabled
+	// every token reports -10ms, which drove nextStart to zero; every word then
+	// tested as settled, so each pass froze the whole transcript and appended
+	// it to the previous one, filling the overlay with the same sentence over
+	// and over (sussurro-fkd). Token timestamps are now enabled, and this
+	// guard keeps the failure contained if they are ever unavailable again.
+	if nextStart <= windowStart {
+		return "", 0, false
+	}
+
+	// Text settles exactly when it ends at or before the next window's start:
+	// it is then outside the audio the next pass decodes, so no later pass
+	// could revise it anyway.
+	//
+	// The comparison is deliberately exact. Subtracting a safety margin holds
+	// back the very text that just left the window, which froze nothing at
+	// all; adding one settles text still inside the window, the freezing-too-
+	// early defect this exists to avoid.
+	limit := nextStart
+
+	// Keep the last revisionSentences words of the window revisable, whatever the
+	// timings say.
+	//
+	// nextStart alone is not enough: the walk that produces it only sees words
+	// still in the window, and the window already excludes settled text. Once
+	// settling jumped ahead, the next window held fewer words than the budget,
+	// so nothing pulled it back and it stayed starved. Whisper was then decoding
+	// under two seconds of audio behind a confident prompt, which is how a
+	// correctly heard "Surely" came back as "Really" and was frozen
+	// (sussurro-fkd).
+	if keep := lastSentenceStart(segments, revisionSentences); keep > 0 {
+		if abs := windowStart + keep; abs < limit {
+			limit = abs
+		}
+	}
+
+	// Settling is word-granular for the same reason the window is: whisper
+	// segments run tens of seconds, so a segment straddling the boundary could
+	// never partly settle and the settled point would stall (sussurro-fkd).
+	var parts []string
+	until := windowStart
+	for _, seg := range segments {
+		if len(seg.Words) == 0 {
+			if end := windowStart + seg.End; end <= limit {
+				if len(parts) > 0 {
+					parts = append(parts, " ")
+				}
+				parts = append(parts, seg.Text)
+				until = end
+				continue
+			}
+			break
+		}
+		done := false
+		for _, w := range seg.Words {
+			end := windowStart + w.End
+			if end > limit {
+				done = true
+				break
+			}
+			parts = append(parts, w.Text)
+			until = end
+		}
+		if done {
+			break // In time order, so nothing later settles either.
+		}
+	}
+
+	if len(parts) == 0 {
+		return "", 0, false
+	}
+	// Joined without a separator: token text carries its own leading spaces,
+	// whereas whole-segment text does not, so segments are spaced as they are
+	// appended instead.
+	return strings.TrimSpace(strings.Join(parts, "")), until, true
+}
 
 // samplesDuration converts a sample count to the time it represents.
 func samplesDuration(samples, sampleRate int) time.Duration {
@@ -140,62 +450,6 @@ func durationSamples(d time.Duration, sampleRate int) int {
 		return 0
 	}
 	return int(d.Seconds() * float64(sampleRate))
-}
-
-// windowStartFor returns where a partial pass should begin transcribing.
-//
-// The window begins exactly where the settled text ends, and is never moved
-// ahead of it: audio between the two would be transcribed by nobody, which is
-// how an earlier offset-only attempt silently dropped speech from long
-// dictations. The window therefore grows beyond partialWindow whenever
-// settling lags, and that pass simply costs more; the cost is bounded again as
-// soon as the next segment settles.
-func windowStartFor(settledUntil time.Duration) time.Duration {
-	if settledUntil < 0 {
-		return 0
-	}
-	return settledUntil
-}
-
-// settleSegments picks the segments whose audio lies behind the window and can
-// therefore be frozen.
-//
-// windowStart is where this pass's audio began in the recording, so segment
-// timestamps (which are relative to that audio) are shifted by it. A segment
-// settles when it ends before cutoff less a margin, which keeps a word sitting
-// on the boundary from being frozen on one pass and re-recognised on the next.
-//
-// Returns the settled text, the point up to which it now covers, and whether
-// anything settled at all.
-func settleSegments(
-	segments []asr.Segment,
-	windowStart, cutoff time.Duration,
-	sampleRate int,
-) (string, time.Duration, bool) {
-	if cutoff <= 0 || len(segments) == 0 {
-		return "", 0, false
-	}
-
-	limit := cutoff - settleMargin
-	if limit <= 0 {
-		return "", 0, false
-	}
-
-	var settled []asr.Segment
-	until := windowStart
-	for _, seg := range segments {
-		end := windowStart + seg.End
-		if end > limit {
-			break // Segments are in order, so nothing later settles either.
-		}
-		settled = append(settled, seg)
-		until = end
-	}
-
-	if len(settled) == 0 {
-		return "", 0, false
-	}
-	return asr.JoinSegments(settled), until, true
 }
 
 // joinTranscript appends text to a settled prefix, keeping a single space
@@ -240,6 +494,17 @@ func minPartialSamples(sampleRate int) int {
 	return int(minAudio.Seconds() * float64(sampleRate))
 }
 
+// SetRevisionSentences sets how many sentences stay revisable. A non-positive
+// count leaves the default in place. Must be called before Start().
+func (s *Streamer) SetRevisionSentences(n int) {
+	if n <= 0 {
+		s.log.Warn("Non-positive revision_window_sentences, using default",
+			"value", n, "default", defaultRevisionSentences)
+		return
+	}
+	s.revisionSentences = n
+}
+
 // Generation returns the currently active session generation.
 func (s *Streamer) Generation() uint64 { return s.generation.Load() }
 
@@ -258,6 +523,12 @@ func (s *Streamer) Start() uint64 {
 	s.running = true
 	s.lastText = ""
 	s.lastSamples = 0
+	// Settled state belongs to one recording. Leaving it set would prepend the
+	// previous dictation's text to this one (sussurro-fkd).
+	s.settledText = ""
+	s.settledUntil = 0
+	s.lastSegments = nil
+	s.lastStart = 0
 	s.wake = make(chan struct{}, 1)
 	s.stop = make(chan struct{})
 
@@ -379,14 +650,18 @@ func (s *Streamer) runPass(generation uint64) {
 
 	s.mu.Lock()
 	settledText, settledUntil := s.settledText, s.settledUntil
+	prevSegments, prevStart := s.lastSegments, s.lastStart
 	s.mu.Unlock()
 
-	// The window starts where the settled text ends, and never spans more than
-	// partialWindow, so per-pass cost is bounded however long the dictation
-	// runs. Everything before it is carried as a decoder prompt rather than
-	// transcribed again.
+	// The window reaches back over the last revisionSentences words, so recent
+	// speech keeps being reconsidered and can still be corrected by later
+	// audio. Text behind it is settled and rides along as a decoder prompt
+	// instead of being transcribed again, which is what keeps per-pass cost
+	// flat however long the dictation runs.
 	total := samplesDuration(len(samples), s.sampleRate)
-	windowStart := windowStartFor(settledUntil)
+	windowStart := windowStartFor(
+		settledUntil, prevSegments, prevStart, total, s.revisionSentences,
+	)
 	offset := durationSamples(windowStart, s.sampleRate)
 	if offset < 0 || offset > len(samples) {
 		offset = 0
@@ -408,11 +683,32 @@ func (s *Streamer) runPass(generation uint64) {
 	windowText := StripNonSpeechMarkers(asr.JoinSegments(segments))
 	full := joinTranscript(settledText, windowText)
 
-	s.log.Info("Partial pass",
+	// Logged before joining and marker-stripping so a defect in the text can be
+	// attributed to whisper or to our assembly of it. The joined form alone
+	// cannot distinguish the two (sussurro-sqn).
+	if s.log.Enabled(nil, slog.LevelDebug) {
+		for i, seg := range segments {
+			tokens := make([]string, len(seg.Words))
+			for j, w := range seg.Words {
+				tokens[j] = w.Text
+			}
+			s.log.Debug("Raw segment",
+				"i", i,
+				"start", seg.Start.Round(time.Millisecond),
+				"end", seg.End.Round(time.Millisecond),
+				"text", seg.Text,
+				"tokens", strings.Join(tokens, "|"))
+		}
+	}
+
+	s.log.Debug("Partial pass",
 		"duration", passDuration.Round(time.Millisecond),
 		"window", samplesDuration(len(audio), s.sampleRate).Round(time.Millisecond),
 		"total", total.Round(time.Millisecond),
-		"settled", settledUntil.Round(time.Millisecond))
+		"settled", settledUntil.Round(time.Millisecond),
+		"settled_text", settledText,
+		"window_text", windowText,
+		"overlay_text", full)
 
 	if full == "" {
 		return
@@ -425,18 +721,27 @@ func (s *Streamer) runPass(generation uint64) {
 		return
 	}
 
+	// Where the next pass will begin decoding. Settling is measured against
+	// this rather than against elapsed time, which is what guarantees no audio
+	// is orphaned: a segment is frozen exactly when it stops being decoded.
+	nextStart := windowStartFor(
+		settledUntil, segments, windowStart, total, s.revisionSentences,
+	)
+
 	s.mu.Lock()
 	s.lastText = full
 	s.lastSamples = len(samples)
 	s.lastGen = generation
-	// Settle the segments whose audio is clear of the window's start. Their
-	// timestamps are relative to the window, so they are offset back onto the
-	// recording's own timeline before comparing.
-	if newText, newUntil, ok := settleSegments(
-		segments, windowStart, total-partialWindow, s.sampleRate,
-	); ok {
+	s.lastSegments = segments
+	s.lastStart = windowStart
+	if newText, newUntil, ok := settleSegments(segments, windowStart, nextStart, s.revisionSentences); ok {
 		s.settledText = joinTranscript(settledText, newText)
 		s.settledUntil = newUntil
+		s.log.Debug("Settled",
+			"newly_settled", newText,
+			"until", newUntil.Round(time.Millisecond),
+			"next_window_start", nextStart.Round(time.Millisecond),
+			"settled_total", s.settledText)
 	}
 	s.mu.Unlock()
 

@@ -62,11 +62,25 @@ workflow:
   mode: "immediate"
   streaming:
     # Show partial transcriptions on the overlay while you speak. Each pass
-    # re-transcribes the audio so far, so text is revised as context grows.
-    # Needs GPU acceleration to keep up; set false on CPU-only hosts.
+    # decodes only the most recent words, so cost stays flat however long the
+    # dictation runs. Needs GPU acceleration to keep up; set false on
+    # CPU-only hosts.
     enabled: true
     # Minimum gap between partial transcription passes (100ms-10s).
     interval: "750ms"
+    # How many of the most recently spoken sentences stay open to revision
+    # (1-20). They are decoded again on every pass, so later audio can still
+    # correct them; older text is frozen and only conditions the decoder.
+    #
+    # The window is cut at a sentence boundary rather than after a fixed number
+    # of words, because whisper handed audio that starts mid-phrase produces a
+    # plausible continuation rather than what was actually said.
+    #
+    # Windowing begins only once this many sentences have been finished, so a
+    # short dictation is decoded whole every pass and nothing is ever frozen.
+    # Raise it to keep more text correctable, at the price of a larger window
+    # and slower passes on long dictations.
+    revision_window_sentences: 4
   input:
     # auto, native (in-process hotkey), trigger (compositor socket),
     # or evdev (Linux input devices; needs input group membership).

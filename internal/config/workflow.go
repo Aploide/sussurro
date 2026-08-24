@@ -60,8 +60,16 @@ const (
 	DefaultInteractionMode   = ModeImmediate
 	DefaultStreamingEnabled  = true
 	DefaultStreamingInterval = "750ms"
-	DefaultInputBackend      = InputAuto
-	DefaultDeliveryBackend   = DeliveryAuto
+	// DefaultRevisionWindowSentences is how many complete sentences stay open
+	// to revision. Windowing begins only once this many sentences have been
+	// finished, so a short dictation is decoded whole each pass, which costs no
+	// more and freezes nothing.
+	//
+	// Four is about twenty seconds at a measured median of twelve words per
+	// sentence, which is as long as a whole-recording pass stays cheap.
+	DefaultRevisionWindowSentences = 4
+	DefaultInputBackend            = InputAuto
+	DefaultDeliveryBackend         = DeliveryAuto
 	// Pasting automatically is the existing behavior, so it stays the default.
 	DefaultClipboardOnly = false
 
@@ -69,6 +77,11 @@ const (
 	// the final transcription of CPU on modest hardware.
 	minStreamingInterval = 100 * time.Millisecond
 	maxStreamingInterval = 10 * time.Second
+
+	// maxRevisionWindowSentences bounds the audio a pass decodes. Beyond this
+	// the window approaches the whole recording, which is the quadratic cost
+	// sussurro-xvj.60 was raised for.
+	maxRevisionWindowSentences = 20
 )
 
 var (
@@ -96,6 +109,15 @@ type StreamingConfig struct {
 	// Interval is the minimum gap between partial transcription passes,
 	// as a Go duration string.
 	Interval string `mapstructure:"interval"`
+	// RevisionWindowSentences is how many of the most recently spoken sentences
+	// stay open to revision. They are decoded again on every pass, so later
+	// audio can still correct them; older text is frozen and merely conditions
+	// the decoder. Larger values revise more and cost proportionally more.
+	//
+	// Sentences rather than words because the window is cut at a sentence
+	// boundary: whisper handed audio starting mid-phrase produces a plausible
+	// continuation rather than the truth (sussurro-k6w).
+	RevisionWindowSentences int `mapstructure:"revision_window_sentences"`
 }
 
 // InputConfig selects the recording gesture source.
@@ -145,6 +167,9 @@ func (w *WorkflowConfig) Normalize() {
 	if w.Streaming.Interval == "" {
 		w.Streaming.Interval = DefaultStreamingInterval
 	}
+	if w.Streaming.RevisionWindowSentences == 0 {
+		w.Streaming.RevisionWindowSentences = DefaultRevisionWindowSentences
+	}
 	if w.Input.Backend == "" {
 		w.Input.Backend = DefaultInputBackend
 	}
@@ -188,6 +213,11 @@ func (w WorkflowConfig) Validate() error {
 	if interval < minStreamingInterval || interval > maxStreamingInterval {
 		return fmt.Errorf("workflow.streaming.interval: %s is outside the supported range %s-%s",
 			interval, minStreamingInterval, maxStreamingInterval)
+	}
+
+	if n := w.Streaming.RevisionWindowSentences; n < 1 || n > maxRevisionWindowSentences {
+		return fmt.Errorf("workflow.streaming.revision_window_sentences: %d is outside the supported range 1-%d",
+			n, maxRevisionWindowSentences)
 	}
 
 	return nil

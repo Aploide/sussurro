@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/aploide/sussurro/internal/asr"
 )
 
 // manualTicker lets a test decide exactly when a partial pass becomes due.
@@ -541,5 +543,34 @@ func TestStreamerTranscribesOnceThereIsEnoughAudio(t *testing.T) {
 
 	if texts, _ := recorder.snapshot(); len(texts) != 1 {
 		t.Errorf("published %v, want the transcription", texts)
+	}
+}
+
+// Settled state belongs to one recording. Leaving it set prepended the
+// previous dictation's text to the next one, so the overlay showed old words
+// and appended the new ones to them (sussurro-fkd).
+func TestStartClearsSettledStateFromThePreviousRecording(t *testing.T) {
+	stub := newBlockingTranscriber()
+	recorder := newPartialRecorder()
+	s, ticker := newTestStreamer(t, stub, recorder.record)
+
+	// Stand in for a finished recording that settled some text.
+	s.mu.Lock()
+	s.settledText = "text from the previous dictation"
+	s.settledUntil = 20 * time.Second
+	s.lastSegments = []asr.Segment{{Text: "previous", Start: 0, End: time.Second}}
+	s.lastStart = 19 * time.Second
+	s.mu.Unlock()
+
+	s.Start()
+	ticker.tick(t)
+	stub.awaitEntry(t)
+	stub.release <- "fresh words"
+	recorder.awaitUpdate(t)
+
+	texts, _ := recorder.snapshot()
+	if len(texts) != 1 || texts[0] != "fresh words" {
+		t.Fatalf("partials = %v, want only %q: settled state leaked across recordings",
+			texts, "fresh words")
 	}
 }
