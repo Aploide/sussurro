@@ -24,6 +24,19 @@ type Segment struct {
 	Text  string
 	Start time.Duration
 	End   time.Duration
+	// Words carries the segment's tokens with their own timings. Whisper
+	// reports segments that can each run for tens of seconds, which is too
+	// coarse to place a window boundary: a single long segment holding the
+	// whole word budget leaves the window unable to shrink at all.
+	Words []Word
+}
+
+// Word is a token with its own timing, used to place a window boundary
+// between words rather than only between segments.
+type Word struct {
+	Text  string
+	Start time.Duration
+	End   time.Duration
 }
 
 // JoinSegments renders segments as a single transcription.
@@ -79,6 +92,14 @@ func NewEngine(modelPath string, threads int, language string, debug bool) (*Eng
 	if threads > 0 {
 		ctx.SetThreads(uint(threads))
 	}
+
+	// Per-token timings are what place a window boundary between words. Without
+	// this whisper leaves every token's timestamp at its uninitialised -10ms,
+	// which is not a corrupt value to be validated around but simply the answer
+	// to a question never asked: the streamer then saw a window that never
+	// advanced and re-settled the whole transcript on every pass
+	// (sussurro-fkd).
+	ctx.SetTokenTimestamps(true)
 
 	if language != "" {
 		if err := ctx.SetLanguage(language); err != nil {
@@ -137,13 +158,9 @@ func (e *Engine) TranscribeWithContext(samples []float32, preceding string) (str
 
 	if prompt := composePrompt(e.dictionary, preceding); prompt != "" {
 		e.context.SetInitialPrompt(prompt)
-		// Leave the dictionary-only prompt behind for callers that supply no
-		// context of their own.
-		defer func() {
-			if len(e.dictionary) > 0 {
-				e.context.SetInitialPrompt(strings.Join(e.dictionary, ", "))
-			}
-		}()
+		// Restore the standing prompt for callers that supply no context of
+		// their own, whether or not a dictionary exists.
+		defer e.resetPromptLocked()
 	}
 
 	return e.transcribeLocked(samples)
@@ -161,14 +178,23 @@ func (e *Engine) SegmentsWithContext(samples []float32, preceding string) ([]Seg
 
 	if prompt := composePrompt(e.dictionary, preceding); prompt != "" {
 		e.context.SetInitialPrompt(prompt)
-		defer func() {
-			if len(e.dictionary) > 0 {
-				e.context.SetInitialPrompt(strings.Join(e.dictionary, ", "))
-			}
-		}()
+		defer e.resetPromptLocked()
 	}
 
 	return e.segmentsLocked(samples)
+}
+
+// resetPromptLocked returns the context to its standing prompt: the dictionary
+// alone, or nothing when there is none.
+//
+// The empty case is not a no-op and must not be skipped. Leaving a per-call
+// prompt set leaks it into the next caller, and the next caller is the final
+// pass: whisper continues an initial prompt rather than merely conditioning on
+// it, so the whole accumulated transcript was re-emitted ahead of the real
+// audio and the delivered text arrived with its sentences repeated
+// (sussurro-fkd).
+func (e *Engine) resetPromptLocked() {
+	e.context.SetInitialPrompt(strings.Join(e.dictionary, ", "))
 }
 
 // composePrompt builds the initial prompt from vocabulary and preceding text.
@@ -235,10 +261,29 @@ func (e *Engine) segmentsLocked(samples []float32) ([]Segment, error) {
 		if text == "" {
 			continue
 		}
+		var words []Word
+		for _, tok := range segment.Tokens {
+			// Whisper mixes special tokens (timestamps, control markers) in
+			// with real text; they carry no speech, so they must not count
+			// toward a word budget or reach the transcript.
+			if strings.TrimSpace(tok.Text) == "" || strings.HasPrefix(tok.Text, "[_") {
+				continue
+			}
+			// Text is kept verbatim, spaces included. These are BPE pieces
+			// rather than words, and their leading spaces are what separate
+			// words: trimming them and rejoining would run words together.
+			words = append(words, Word{
+				Text:  tok.Text,
+				Start: tok.Start,
+				End:   tok.End,
+			})
+		}
+
 		segments = append(segments, Segment{
 			Text:  text,
 			Start: segment.Start,
 			End:   segment.End,
+			Words: words,
 		})
 	}
 
