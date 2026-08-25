@@ -343,6 +343,8 @@ func LoadConfig(path string) (*Config, error) {
 		viper.AddConfigPath("./configs")
 	}
 
+	viper.SetDefault("audio.sample_rate", 16000)
+	viper.SetDefault("audio.channels", 1)
 	viper.SetDefault("models.asr.language", "en")
 	viper.SetDefault("models.asr.vad_path", defaultVADModelPath())
 	viper.SetDefault("models.asr.vad_threshold", float32(0.01))

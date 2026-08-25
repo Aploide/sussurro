@@ -80,6 +80,10 @@ func run() {
 		fmt.Printf("Failed to load config: %v\n", err)
 		os.Exit(1)
 	}
+	if err := cfg.Audio.ValidateLiveCapture(); err != nil {
+		fmt.Printf("Invalid live audio configuration: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Initialize Logger
 	log := logger.Init(cfg.App.LogLevel)
