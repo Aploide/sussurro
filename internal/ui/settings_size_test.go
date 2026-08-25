@@ -56,9 +56,10 @@ func TestSettingsSizeForContentAdaptsHeightAndKeepsWidthUsable(t *testing.T) {
 		t.Errorf("tall content height %d did not grow beyond short height %d", tall, short)
 	}
 
+	_, budgetHeight := settingsSizeBudget()
 	_, capped := settingsSizeForContent(980, 5000, 1)
-	if capped != maxSettingsHeight {
-		t.Errorf("oversized height = %d, want cap %d", capped, maxSettingsHeight)
+	if capped != budgetHeight {
+		t.Errorf("oversized height = %d, want this display's budget %d", capped, budgetHeight)
 	}
 
 	_, scaled := settingsSizeForContent(980, 400, 1.5)
@@ -111,5 +112,34 @@ func TestSettingsWindowFitsCommonDisplays(t *testing.T) {
 func TestUnscaledDisplayGetsContentSize(t *testing.T) {
 	if got := scaleDimension(settingsContentWidth, 1, maxSettingsWidth); got != settingsContentWidth {
 		t.Errorf("width = %d, want %d", got, settingsContentWidth)
+	}
+}
+
+// TestSettingsSizeBudgetPrefersTheRealScreen guards the fix for the Dictation
+// tab being cropped: the budget must follow the display when one can be
+// queried, because capping a 1920px-tall screen to the 1366x768 fallback threw
+// away height the content needed. The fallback remains a floor, so a display
+// smaller than it still gets a usable window rather than a stunted one.
+func TestSettingsSizeBudgetPrefersTheRealScreen(t *testing.T) {
+	width, height := settingsSizeBudget()
+	if width < maxSettingsWidth {
+		t.Errorf("budget width = %d, want at least the fallback %d", width, maxSettingsWidth)
+	}
+	if height < maxSettingsHeight {
+		t.Errorf("budget height = %d, want at least the fallback %d", height, maxSettingsHeight)
+	}
+
+	screenWidth, screenHeight := workAreaSize()
+	if screenWidth <= 0 || screenHeight <= 0 {
+		// No display to query (headless CI); the fallback is the only answer.
+		if width != maxSettingsWidth || height != maxSettingsHeight {
+			t.Errorf("budget = %dx%d with no display, want the fallback %dx%d",
+				width, height, maxSettingsWidth, maxSettingsHeight)
+		}
+		return
+	}
+	if width > screenWidth || height > screenHeight {
+		t.Errorf("budget %dx%d exceeds the work area %dx%d",
+			width, height, screenWidth, screenHeight)
 	}
 }

@@ -12,6 +12,7 @@ import (
 var (
 	snUser32                = windows.NewLazySystemDLL("user32.dll")
 	procShowWindow          = snUser32.NewProc("ShowWindow")
+	procIsWindowVisible     = snUser32.NewProc("IsWindowVisible")
 	procSetForegroundWindow = snUser32.NewProc("SetForegroundWindow")
 	procSetWindowLongPtrW   = snUser32.NewProc("SetWindowLongPtrW")
 	procCallWindowProcW     = snUser32.NewProc("CallWindowProcW")
@@ -31,6 +32,15 @@ func showWebviewWindow(win unsafe.Pointer) {
 
 func hideWebviewWindow(win unsafe.Pointer) {
 	procShowWindow.Call(uintptr(win), swHide)
+}
+
+// webviewWindowVisible reports whether the settings window is currently shown.
+// Asking Win32 rather than tracking a flag in Go keeps this correct when the
+// window is hidden by the WM_CLOSE subclass below, which never calls
+// hideWebviewWindow.
+func webviewWindowVisible(win unsafe.Pointer) bool {
+	r, _, _ := procIsWindowVisible.Call(uintptr(win))
+	return r != 0
 }
 
 // prevSettingsProc holds the webview window's original WndProc so the
@@ -60,4 +70,13 @@ func interceptSettingsClose(win unsafe.Pointer) {
 // needed. Returning 1 keeps the cross-platform caller simple.
 func windowScale() float64 {
 	return 1.0
+}
+
+// workAreaSize returns zero so the caller keeps its built-in budget.
+//
+// Not yet implemented for Windows: SystemParametersInfo(SPI_GETWORKAREA)
+// would supply it, but the clamp only bites on displays smaller than the
+// content needs, and the built-in budget is already safe there.
+func workAreaSize() (int, int) {
+	return 0, 0
 }

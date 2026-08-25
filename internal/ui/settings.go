@@ -68,6 +68,25 @@ func (sw *settingsWindow) Show() {
 	})
 }
 
+// Toggle hides the settings window when it is visible, and otherwise shows it.
+//
+// The visibility test runs inside the dispatched closure rather than before
+// it. Reading it on the calling goroutine and acting later on the UI thread
+// leaves a gap in which the window's state can change -- the user clicking the
+// close button, say -- which would invert the result at exactly the moment
+// they pressed the key again.
+func (sw *settingsWindow) Toggle() {
+	sw.w.Dispatch(func() {
+		win := unsafe.Pointer(sw.w.Window())
+		if webviewWindowVisible(win) {
+			hideWebviewWindow(win)
+			return
+		}
+		showWebviewWindow(win)
+		sw.w.Eval("reloadSettings()")
+	})
+}
+
 // Hide conceals the settings window.
 func (sw *settingsWindow) Hide() {
 	sw.w.Dispatch(func() {
@@ -125,12 +144,45 @@ const (
 	// content height. Fractional WebKit scaling does not scale native chrome.
 	settingsChrome = 40
 
-	// maxSettingsWidth and maxSettingsHeight keep the window on a small
-	// laptop display (1366x768) even at high scaling, where the scaled
-	// requirement would otherwise exceed the screen.
+	// maxSettingsWidth and maxSettingsHeight are the fallback budget for when
+	// the display cannot be queried. They assume a small laptop (1366x768),
+	// so they are a floor on what is safe rather than a description of the
+	// screen in use; settingsSizeBudget prefers the real work area.
 	maxSettingsWidth  = 1300
 	maxSettingsHeight = 900
+
+	// settingsScreenMargin leaves room for the window frame and a panel the
+	// work area may not account for, so a window sized to the full budget is
+	// still draggable rather than flush against the screen edge.
+	settingsScreenMargin = 80
 )
+
+// settingsSizeBudget reports the largest window this display can hold, in
+// device pixels.
+//
+// The constants above describe a 1366x768 laptop. Capping every display to
+// that silently discards content height on a larger screen: at 1.45 scaling
+// the Dictation tab needs 1093 device px, so the 900 cap cropped it by 105
+// CSS px with 1920 px of screen going spare. Tuning the content constants
+// could never fix that, because the cap is applied after them.
+func settingsSizeBudget() (int, int) {
+	width, height := workAreaSize()
+	if width <= 0 || height <= 0 {
+		return maxSettingsWidth, maxSettingsHeight
+	}
+	width -= settingsScreenMargin
+	height -= settingsScreenMargin
+	// Never return less than the built-in budget: on a display smaller than
+	// the fallback assumes, the old behaviour of overflowing slightly and
+	// scrolling beats a window too short to show a section at all.
+	if width < maxSettingsWidth {
+		width = maxSettingsWidth
+	}
+	if height < maxSettingsHeight {
+		height = maxSettingsHeight
+	}
+	return width, height
+}
 
 // applySettingsSize sizes the settings window so its CSS viewport matches what
 // the content needs on this display.
@@ -175,10 +227,11 @@ func settingsSizeForContent(cssWidth, cssHeight int, scale float64) (int, int) {
 	if cssHeight < settingsMinContentHeight {
 		cssHeight = settingsMinContentHeight
 	}
+	budgetWidth, budgetHeight := settingsSizeBudget()
 	contentHeight := scaleDimension(
-		cssHeight, scale, maxSettingsHeight-settingsChrome,
+		cssHeight, scale, budgetHeight-settingsChrome,
 	)
-	return scaleDimension(cssWidth, scale, maxSettingsWidth),
+	return scaleDimension(cssWidth, scale, budgetWidth),
 		contentHeight + settingsChrome
 }
 

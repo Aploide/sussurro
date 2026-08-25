@@ -181,9 +181,21 @@ func assertRenderedSettingsGeometry(t *testing.T, payload string) {
 		if uncappedCSSHeight < settingsMinContentHeight {
 			uncappedCSSHeight = settingsMinContentHeight
 		}
+		// A panel may only be cropped when the physical screen cannot hold
+		// it. Excusing a crop whenever the configured cap was exceeded made
+		// this guard blind to the bug it should have caught, because a cap
+		// set below the screen size is itself the cause: the Dictation tab
+		// lost 105 CSS px on a 1920px-tall display and this still passed.
 		uncappedDeviceHeight := int(math.Ceil(float64(uncappedCSSHeight)*scale)) + settingsChrome
-		if uncappedDeviceHeight <= maxSettingsHeight && panel.ViewportHeight+2 < panel.NaturalHeight {
-			t.Errorf("uncapped panel %q needs %d CSS px but viewport is %d", panel.Name, panel.NaturalHeight, panel.ViewportHeight)
+		_, screenHeight := workAreaSize()
+		if screenHeight <= 0 {
+			// Headless: no screen to defer to, so nothing may be cropped.
+			screenHeight = uncappedDeviceHeight
+		}
+		if uncappedDeviceHeight <= screenHeight && panel.ViewportHeight+2 < panel.NaturalHeight {
+			t.Errorf("panel %q needs %d CSS px (%d device) but viewport is %d, and the %d px screen could have held it",
+				panel.Name, panel.NaturalHeight, uncappedDeviceHeight,
+				panel.ViewportHeight, screenHeight)
 		}
 		expectedViewportHeight := expectedSettingsViewportHeight(
 			panel.RequestedWidth, panel.RequestedHeight,
