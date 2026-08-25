@@ -117,6 +117,9 @@ func TestDictionaryEditorBridgeAndAssetsStayConnected(t *testing.T) {
 	if count := strings.Count(js, "function renderDictionary("); count != 1 {
 		t.Fatalf("app.js defines renderDictionary %d times, want exactly once", count)
 	}
+	if count := strings.Count(js, "scheduleSettingsLayout();"); count < 5 {
+		t.Fatalf("app.js schedules layout %d times, want updates after tabs, folds, and dictionary changes", count)
+	}
 
 	for _, required := range []struct {
 		name string
@@ -136,9 +139,16 @@ func TestDictionaryEditorBridgeAndAssetsStayConnected(t *testing.T) {
 		{name: "entry class", body: js, want: `row.className = "dictionary-entry"`},
 		{name: "entry style", body: css, want: ".dictionary-entry"},
 		{name: "input style", body: css, want: ".dictionary-input"},
+		{name: "adaptive columns", body: css, want: "grid-template-columns: repeat("},
+		{name: "term measurement", body: js, want: "context.measureText(text).width"},
+		{name: "measured column width", body: js, want: `setProperty("--dictionary-entry-width"`},
+		{name: "layout after row changes", body: js, want: "scheduleSettingsLayout();"},
+		{name: "height measurement", body: js, want: "function naturalSettingsHeight()"},
+		{name: "resize request", body: js, want: "window.resizeSettingsWindow(width, height)"},
 		{name: "save call", body: js, want: "window.saveDictionary(JSON.stringify(normalized))"},
 		{name: "Go JSON field", body: string(bridge), want: `json:"dictionary"`},
 		{name: "Go save binding", body: string(bridge), want: `Bind("saveDictionary"`},
+		{name: "Go resize binding", body: string(bridge), want: `Bind("resizeSettingsWindow"`},
 	} {
 		t.Run(required.name, func(t *testing.T) {
 			if !strings.Contains(required.body, required.want) {

@@ -7,6 +7,57 @@ document.addEventListener('DOMContentLoaded', async () => {
   await reloadSettings();
 });
 
+let settingsLayoutFrame = 0;
+let lastRequestedSettingsSize = '';
+
+// Coalesce DOM changes so measurements happen after the browser has laid out
+// the visible tab. Hidden panels report zero dimensions.
+function scheduleSettingsLayout() {
+  if (settingsLayoutFrame) return;
+  settingsLayoutFrame = requestAnimationFrame(() => {
+    settingsLayoutFrame = 0;
+    sizeDictionaryColumns();
+    requestSettingsSize();
+  });
+}
+
+function visibleElementHeight(element) {
+  if (!element || element.hidden) return 0;
+  return Math.max(element.scrollHeight, element.getBoundingClientRect().height);
+}
+
+function naturalSettingsHeight() {
+  const content = document.querySelector('.content');
+  if (!content) return 0;
+
+  const style = getComputedStyle(content);
+  const children = Array.from(content.children).filter(child => !child.hidden);
+  const gap = Number.parseFloat(style.rowGap) || 0;
+  let height =
+    (Number.parseFloat(style.paddingTop) || 0) +
+    (Number.parseFloat(style.paddingBottom) || 0) +
+    Math.max(0, children.length - 1) * gap;
+  children.forEach(child => {
+    height += visibleElementHeight(child);
+  });
+
+  height += visibleElementHeight(document.getElementById('restart-banner'));
+  height += visibleElementHeight(document.querySelector('.statusbar'));
+  return Math.ceil(height);
+}
+
+function requestSettingsSize() {
+  if (typeof window.resizeSettingsWindow !== 'function') return;
+  const width = Math.ceil(document.documentElement.clientWidth);
+  const height = naturalSettingsHeight();
+  if (!width || !height) return;
+
+  const size = `${width}x${height}`;
+  if (size === lastRequestedSettingsSize) return;
+  lastRequestedSettingsSize = size;
+  window.resizeSettingsWindow(width, height);
+}
+
 // Re-fetch data and re-render in place — never calls location.reload() which
 // destroys the WebKit JS context mid-execution and causes a crash.
 async function reloadSettings() {
@@ -42,6 +93,7 @@ function render(data) {
   renderSkipLLMCleanup(data.skipLLMCleanup);
   renderDictionary(data.dictionary || []);
   renderWorkflow(data.workflow);
+  scheduleSettingsLayout();
 }
 
 // ---- Tabs ----
@@ -63,6 +115,7 @@ function initTabs() {
     // inheriting the previous panel's scroll position.
     const content = document.querySelector('.content');
     if (content) content.scrollTop = 0;
+    scheduleSettingsLayout();
   };
 
   tabs.forEach(tab => {
@@ -83,6 +136,7 @@ function initFoldableSections() {
       section.classList.toggle('collapsed', collapse);
       body.hidden = collapse;
       header.setAttribute('aria-expanded', collapse ? 'false' : 'true');
+      scheduleSettingsLayout();
     };
   });
 }
@@ -142,6 +196,7 @@ function renderModelList(containerId, models, groupName) {
 function showRestartBanner() {
   const banner = document.getElementById('restart-banner');
   if (banner) banner.hidden = false;
+  scheduleSettingsLayout();
 }
 
 function installedBadge() {
@@ -262,6 +317,46 @@ function showDictionaryStatus(message, isError) {
   status.hidden = !message;
   status.textContent = message || "";
   status.classList.toggle("setting-note-error", !!isError);
+  scheduleSettingsLayout();
+}
+
+function sizeDictionaryColumns() {
+  const list = document.getElementById("dictionary-list");
+  const rows = Array.from(list?.querySelectorAll(".dictionary-entry") || []);
+  if (!list || !rows.length || !list.clientWidth) return;
+
+  const sampleInput = rows[0].querySelector("input");
+  const sampleButton = rows[0].querySelector("button");
+  if (!sampleInput || !sampleButton) return;
+
+  const inputStyle = getComputedStyle(sampleInput);
+  const rowStyle = getComputedStyle(rows[0]);
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+  if (!context) return;
+  context.font = inputStyle.font ||
+    `${inputStyle.fontWeight} ${inputStyle.fontSize} ${inputStyle.fontFamily}`;
+
+  let widestTerm = 0;
+  rows.forEach(row => {
+    const input = row.querySelector("input");
+    const text = input?.value || input?.placeholder || "";
+    widestTerm = Math.max(widestTerm, context.measureText(text).width);
+  });
+
+  const inputChrome =
+    (Number.parseFloat(inputStyle.paddingLeft) || 0) +
+    (Number.parseFloat(inputStyle.paddingRight) || 0) +
+    (Number.parseFloat(inputStyle.borderLeftWidth) || 0) +
+    (Number.parseFloat(inputStyle.borderRightWidth) || 0);
+  const rowChrome =
+    (Number.parseFloat(rowStyle.paddingLeft) || 0) +
+    (Number.parseFloat(rowStyle.paddingRight) || 0) +
+    (Number.parseFloat(rowStyle.columnGap) || 0);
+  const inputWidth = Math.max(96, Math.ceil(widestTerm + inputChrome + 4));
+  const preferredWidth =
+    inputWidth + Math.ceil(sampleButton.getBoundingClientRect().width) + rowChrome;
+  list.style.setProperty("--dictionary-entry-width", `${preferredWidth}px`);
 }
 
 function renderDictionary(terms) {
@@ -288,6 +383,7 @@ function renderDictionary(terms) {
       empty.className = "dictionary-empty";
       empty.textContent = "No personal terms yet";
       list.appendChild(empty);
+      scheduleSettingsLayout();
       return;
     }
 
@@ -331,6 +427,7 @@ function renderDictionary(terms) {
       row.append(input, remove);
       list.appendChild(row);
     });
+    scheduleSettingsLayout();
   };
 
   add.onclick = () => {
@@ -418,6 +515,7 @@ function showWorkflowStatus(message, isError) {
   status.hidden = !message;
   status.textContent = message || '';
   status.classList.toggle('setting-note-error', !!isError);
+  scheduleSettingsLayout();
 }
 
 // Saves one workflow setting, reverting the control if Go rejects the value.

@@ -336,24 +336,30 @@ kbd {
 }
 
 .dictionary-list {
+  --dictionary-entry-width: 240px;
+  display: grid;
+  grid-template-columns: repeat(
+    auto-fit,
+    minmax(min(100%, var(--dictionary-entry-width)), 1fr)
+  );
   border-top: 1px solid var(--border);
+  background: var(--surface);
 }
 
 .dictionary-entry {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
   padding: 8px 14px;
+  background: var(--surface);
+  box-shadow: inset -1px -1px 0 var(--border);
 }
 
-.dictionary-entry + .dictionary-entry {
-  border-top: 1px solid var(--border);
-}
-
-.dictionary-input {
+.setting-input.dictionary-input {
   width: auto;
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 1 1 96px;
   user-select: text;
 }
 
@@ -363,9 +369,11 @@ kbd {
 }
 
 .dictionary-empty {
+  grid-column: 1 / -1;
   padding: 12px 14px;
   font-size: 14px;
   color: var(--muted);
+  background: var(--surface);
 }
 
 .dictionary-actions {

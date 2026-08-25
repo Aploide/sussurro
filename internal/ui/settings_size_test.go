@@ -36,6 +36,37 @@ func TestScaleDimensionPrefersFittingTheScreen(t *testing.T) {
 	}
 }
 
+func TestSettingsSizeForContentAdaptsHeightAndKeepsWidthUsable(t *testing.T) {
+	width, short := settingsSizeForContent(640, 120, 1)
+	if width != settingsContentWidth {
+		t.Errorf("narrow width = %d, want minimum %d", width, settingsContentWidth)
+	}
+	if want := settingsMinContentHeight + settingsChrome; short != want {
+		t.Errorf("short height = %d, want minimum %d", short, want)
+	}
+
+	wide, tall := settingsSizeForContent(980, 700, 1)
+	if wide != 980 {
+		t.Errorf("wide viewport = %d, want 980", wide)
+	}
+	if tall != 700+settingsChrome {
+		t.Errorf("tall height = %d, want %d", tall, 700+settingsChrome)
+	}
+	if tall <= short {
+		t.Errorf("tall content height %d did not grow beyond short height %d", tall, short)
+	}
+
+	_, capped := settingsSizeForContent(980, 5000, 1)
+	if capped != maxSettingsHeight {
+		t.Errorf("oversized height = %d, want cap %d", capped, maxSettingsHeight)
+	}
+
+	_, scaled := settingsSizeForContent(980, 400, 1.5)
+	if want := 600 + settingsChrome; scaled != want {
+		t.Errorf("scaled height = %d, want CSS content scaled but native chrome unchanged: %d", scaled, want)
+	}
+}
+
 func TestScaleDimensionCapsForSmallDisplays(t *testing.T) {
 	// A 1366x768 laptop at high scaling must still get a window that fits.
 	if got := scaleDimension(settingsContentWidth, 3, maxSettingsWidth); got != maxSettingsWidth {

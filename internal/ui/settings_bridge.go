@@ -56,6 +56,10 @@ func bindBridge(sw *settingsWindow) {
 		return string(b)
 	})
 
+	sw.w.Bind("resizeSettingsWindow", func(cssWidth, cssHeight int) {
+		sw.resizeToContent(cssWidth, cssHeight)
+	})
+
 	// One entry point for every workflow setting: the key names the field, so
 	// six controls need one binding rather than six near-identical ones.
 	sw.w.Bind("saveWorkflowSetting", func(key, value string) (result string) {

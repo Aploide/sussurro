@@ -82,6 +82,16 @@ func (sw *settingsWindow) pushDownloadProgress(name string, pct float64) {
 	})
 }
 
+// resizeToContent keeps the current CSS viewport width while fitting the
+// visible tab's natural height. The browser supplies CSS pixels; webview needs
+// device pixels.
+func (sw *settingsWindow) resizeToContent(cssWidth, cssHeight int) {
+	sw.w.Dispatch(func() {
+		width, height := settingsSizeForContent(cssWidth, cssHeight, windowScale())
+		sw.w.SetSize(width, height, webview.HintNone)
+	})
+}
+
 // Run starts the webview event loop (blocks until Terminate is called).
 func (sw *settingsWindow) Run() {
 	sw.w.Run()
@@ -107,9 +117,12 @@ const (
 	// because it could not answer the page's model query. Both under-reported
 	// it, and the Models tab was cut off mid-section as a result.
 	settingsContentHeight = 560
-	// settingsChrome covers the title bar and window frame. The tab strip,
-	// page padding, and status bar are already inside settingsContentHeight,
-	// which is measured from the whole rendered page rather than one panel.
+	// The minimum leaves a short tab usable when sections are collapsed without
+	// forcing every tab to keep the Models tab's height.
+	settingsMinContentHeight = 280
+	// settingsChrome covers the title bar and window frame in device pixels.
+	// The tab strip, page padding, and status bar are already inside the CSS
+	// content height. Fractional WebKit scaling does not scale native chrome.
 	settingsChrome = 40
 
 	// maxSettingsWidth and maxSettingsHeight keep the window on a small
@@ -132,21 +145,41 @@ const (
 // its controls need, which is the state the cropping bug reported.
 func applySettingsSize(w webview.WebView) {
 	scale := windowScale()
-	if scale < 1 {
-		// A sub-1 scale would shrink the window below the content's needs.
-		scale = 1
-	}
+	minWidth, minHeight := settingsSizeForContent(
+		settingsContentWidth, settingsMinContentHeight, scale,
+	)
+	width, height := settingsSizeForContent(
+		settingsContentWidth, settingsContentHeight, scale,
+	)
 
-	width := scaleDimension(settingsContentWidth, scale, maxSettingsWidth)
-	height := scaleDimension(settingsContentHeight+settingsChrome, scale, maxSettingsHeight)
-
-	w.SetSize(width, height, webview.HintMin)
+	w.SetSize(minWidth, minHeight, webview.HintMin)
 	w.SetSize(width, height, webview.HintNone)
 
 	// Logged because the scale lookup silently returning 1.0 is exactly the
 	// failure this function had, and it is invisible from the outside.
 	slog.Debug("Sized the settings window",
 		"scale", scale, "device", fmt.Sprintf("%dx%d", width, height))
+}
+
+// settingsSizeForContent converts a measured CSS viewport to webview device
+// pixels. Width never drops below the controls' requirement; height can follow
+// a shorter visible tab and remains capped to the display budget.
+func settingsSizeForContent(cssWidth, cssHeight int, scale float64) (int, int) {
+	if scale < 1 {
+		// A sub-1 scale would shrink the window below the content's needs.
+		scale = 1
+	}
+	if cssWidth < settingsContentWidth {
+		cssWidth = settingsContentWidth
+	}
+	if cssHeight < settingsMinContentHeight {
+		cssHeight = settingsMinContentHeight
+	}
+	contentHeight := scaleDimension(
+		cssHeight, scale, maxSettingsHeight-settingsChrome,
+	)
+	return scaleDimension(cssWidth, scale, maxSettingsWidth),
+		contentHeight + settingsChrome
 }
 
 // scaleDimension converts a CSS-pixel requirement into device pixels, capped
