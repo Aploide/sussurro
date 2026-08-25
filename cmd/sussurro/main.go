@@ -80,6 +80,7 @@ func run() {
 	// Initialize Logger
 	log := logger.Init(cfg.App.LogLevel)
 	log.Info("Starting Sussurro", "version", version.Version, "ui", !*noUIFlag)
+	maxDuration, minDuration := logEffectiveConfiguration(log, cfg)
 
 	// Check if models exist
 	if _, err := os.Stat(cfg.Models.ASR.Path); os.IsNotExist(err) {
@@ -140,8 +141,8 @@ func run() {
 	}
 
 	// Initialize and Start Pipeline
-	pipe := pipeline.NewPipeline(audioEngine, asrEngine, llmEngine, ctxProvider, log, cfg.Audio.SampleRate, cfg.Audio.MaxDuration)
-	pipe.SetMinDuration(cfg.Audio.MinDuration)
+	pipe := pipeline.NewPipeline(audioEngine, asrEngine, llmEngine, ctxProvider, log, cfg.Audio.SampleRate, maxDuration)
+	pipe.SetMinDuration(minDuration)
 
 	// A failed injector must stay out of the interface, or the typed nil would
 	// read as a usable backend and panic on the first paste.
