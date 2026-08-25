@@ -52,10 +52,11 @@ Dictation**.
 When enabled, cleanup first removes filler words and stutters deterministically.
 The LLM then uses the surrounding sentence to propose corrections for obvious
 speech-recognition mistakes, such as choosing between “base” and “bass”. A
-strict validator admits only similar-sounding substitutions: it rejects
-inserted, deleted, or reordered words, punctuation changes, and more than one
-changed token group per ten input words. Rejected output and inference errors
-leave the text unchanged.
+strict validator admits capitalization, sentence punctuation, and tightly
+bounded similar-sounding substitutions. It rejects replies, inserted, deleted,
+or reordered words, unsupported symbols, and more than one substitution group
+per ten input words. Rejected output and inference errors leave the text
+unchanged.
 
 The bundled `qwen3-sussurro` model uses its trained cleanup prompt plus
 contextual examples. Set `models.llm.extended_prompt: true` with a general
