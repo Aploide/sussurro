@@ -42,7 +42,7 @@ LLAMA_STAMP   := $(LLAMA_DIR)/.stamp-$(GO_LLAMA_COMMIT)
 # desktop unresponsive for their duration. This is a default, not a cap:
 # override with e.g. BUILD_JOBS=24 to use everything.
 NCORES    := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)
-BUILD_JOBS ?= $(shell n=$$(expr $(NCORES) / 2); [ $$n -lt 1 ] && n=1; echo $$n)
+BUILD_JOBS ?= $(shell awk 'BEGIN { n = int($(NCORES) / 2); print n < 1 ? 1 : n }')
 NPROCS    := $(BUILD_JOBS)
 
 # Run compilers at low CPU and IO priority, so an interactive desktop keeps
@@ -54,6 +54,9 @@ NICE += $(shell command -v ionice >/dev/null 2>&1 && echo "ionice -c 3")
 # Detect OS and architecture for platform-specific builds
 UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
+# Generic ShellCheck integrations otherwise parse GNU Make conditionals as
+# shell function declarations and stop before checking any recipe bodies.
+# shellcheck disable=SC1073,SC1065,SC1064,SC1072
 ifeq ($(UNAME_S),Darwin)
 	BUILD_TYPE := metal
 	GGML_METAL_PATH := -L$(WHISPER_DIR)/build/ggml/src/ggml-metal
@@ -183,6 +186,15 @@ BASE_LDFLAGS := -L$(WHISPER_DIR)/build/src -L$(WHISPER_DIR)/build/ggml/src \
 	-L$(WHISPER_DIR)/build/ggml/src/ggml-cpu $(GGML_METAL_PATH) \
 	-L$(WHISPER_DIR)/build/ggml/src/ggml-blas -lwhisper
 
+# Every Go binary that imports Whisper must link the backend compiled into its
+# static ggml archive. Keep this platform-aware set shared so auxiliary tools
+# cannot silently drift from the main application.
+ifeq ($(OS),Windows_NT)
+WHISPER_LDFLAGS := $(BASE_LDFLAGS) $(GGML_VULKAN_PATH) $(WIN_LDFLAGS)
+else
+WHISPER_LDFLAGS := $(BASE_LDFLAGS) $(GGML_VULKAN_PATH) $(VULKAN_LDFLAGS)
+endif
+
 # Export environment variables for CGO
 export C_INCLUDE_PATH
 export LIBRARY_PATH
@@ -204,7 +216,7 @@ PKGS ?= ./internal/... ./cmd/...
 test: deps compat-pc
 	PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_UI)" \
 	CGO_CFLAGS="$(LAYER_CFLAGS) $(WV_CFLAGS)" \
-	CGO_LDFLAGS="$(BASE_LDFLAGS) $(GGML_VULKAN_PATH) $(VULKAN_LDFLAGS) $(LAYER_LDFLAGS) $(WV_LDFLAGS)" \
+	CGO_LDFLAGS="$(WHISPER_LDFLAGS) $(LAYER_LDFLAGS) $(WV_LDFLAGS)" \
 	$(NICE) go test $(UI_TAGS) $(if $(RACE),-race) $(GOTESTFLAGS) $(PKGS)
 
 all: build build-transcribe
@@ -306,10 +318,10 @@ build: deps compat-pc
 	@echo "Building $(APP_NAME)..."
 	@mkdir -p $(BUILD_DIR)
 ifeq ($(OS),Windows_NT)
-	CGO_LDFLAGS="$(BASE_LDFLAGS) $(GGML_VULKAN_PATH) $(WIN_LDFLAGS)" \
+	CGO_LDFLAGS="$(WHISPER_LDFLAGS)" \
 	go build $(GO_LDFLAGS) -o $(BUILD_DIR)/$(APP_NAME)$(EXE) ./$(CMD_DIR)
 else ifeq ($(UNAME_S),Darwin)
-	CGO_LDFLAGS="$(BASE_LDFLAGS) -framework Cocoa -framework QuartzCore -framework CoreVideo -framework Foundation" \
+	CGO_LDFLAGS="$(WHISPER_LDFLAGS) -framework Cocoa -framework QuartzCore -framework CoreVideo -framework Foundation" \
 	go build $(GO_LDFLAGS) -o $(BUILD_DIR)/$(APP_NAME) ./$(CMD_DIR)
 else
 	@echo "  Layer shell  : $(HAS_LAYER_SHELL)$(if $(LAYER_SHELL_PC), ($(LAYER_SHELL_PC)))"
@@ -318,7 +330,7 @@ else
 	@echo "  Build tags   : $(UI_TAGS)"
 	PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_UI)" \
 	CGO_CFLAGS="$(LAYER_CFLAGS) $(WV_CFLAGS)" \
-	CGO_LDFLAGS="$(BASE_LDFLAGS) $(GGML_VULKAN_PATH) $(VULKAN_LDFLAGS) $(LAYER_LDFLAGS) $(WV_LDFLAGS)" \
+	CGO_LDFLAGS="$(WHISPER_LDFLAGS) $(LAYER_LDFLAGS) $(WV_LDFLAGS)" \
 	$(NICE) go build $(UI_TAGS) $(GO_LDFLAGS) -o $(BUILD_DIR)/$(APP_NAME) ./$(CMD_DIR)
 endif
 
@@ -327,13 +339,13 @@ build-transcribe: deps
 	@echo "Building sussurro-transcribe..."
 	@mkdir -p $(BUILD_DIR)
 ifeq ($(OS),Windows_NT)
-	CGO_LDFLAGS="$(BASE_LDFLAGS) $(GGML_VULKAN_PATH) $(WIN_LDFLAGS)" \
+	CGO_LDFLAGS="$(WHISPER_LDFLAGS)" \
 	go build $(GO_LDFLAGS) -o $(BUILD_DIR)/sussurro-transcribe$(EXE) ./cmd/transcribe
 else ifeq ($(UNAME_S),Darwin)
-	CGO_LDFLAGS="$(BASE_LDFLAGS) -framework Accelerate -framework Foundation" \
+	CGO_LDFLAGS="$(WHISPER_LDFLAGS) -framework Accelerate -framework Foundation" \
 	go build $(GO_LDFLAGS) -o $(BUILD_DIR)/sussurro-transcribe ./cmd/transcribe
 else
-	CGO_LDFLAGS="$(BASE_LDFLAGS)" \
+	CGO_LDFLAGS="$(WHISPER_LDFLAGS)" \
 	go build $(GO_LDFLAGS) -o $(BUILD_DIR)/sussurro-transcribe ./cmd/transcribe
 endif
 
