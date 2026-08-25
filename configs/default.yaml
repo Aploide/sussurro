@@ -4,8 +4,8 @@ app:
   log_level: "info" # debug, info, warn, error
   lowercase_output: false
   skip_llm_cleanup: false
-  # Personal dictionary: names and terms the cleanup stage must spell exactly
-  # as written here (fixes words the ASR tends to mishear).
+  # Personal dictionary: names and terms Whisper should prefer while decoding
+  # and the cleanup stage must spell exactly as written here.
   # dictionary:
   #   - "Sussurro"
   #   - "whisper.cpp"

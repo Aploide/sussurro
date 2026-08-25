@@ -33,11 +33,11 @@ app:
     - "Kubernetes"
 ```
 
-`dictionary` lists names and terms the cleanup stage must spell exactly as
-written. When the ASR mishears one of them (e.g. "Susserow" for "Sussurro"),
-the cleanup replaces it with the correct spelling. The list can also be edited
-under **Settings → Dictation → Personal dictionary**; changes saved there apply
-to the next dictation without a restart.
+`dictionary` lists names and terms Whisper should prefer while decoding and
+the cleanup stage must spell exactly as written. If Whisper still mishears one
+of them, such as "Susserow" for "Sussurro", cleanup replaces it with the saved
+spelling. The list can also be edited under **Settings → Dictation → Personal
+dictionary**; changes saved there apply to the next dictation without a restart.
 
 ### Cleanup behavior
 
