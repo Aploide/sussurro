@@ -201,7 +201,7 @@ export LIBRARY_PATH
 
 # The stamp targets are deliberately absent: they are real files, and marking
 # them phony would defeat the guard entirely.
-.PHONY: all build compat-pc run clean clean-deps check-deps-artefacts deps test
+.PHONY: all build compat-pc run clean clean-deps check-deps-artefacts deps test test-settings-geometry
 
 # Packages that link whisper need the same CGO_LDFLAGS as the binary: with
 # Vulkan enabled, a plain "go test ./..." cannot resolve the backend symbols.
@@ -218,6 +218,17 @@ test: deps compat-pc
 	CGO_CFLAGS="$(LAYER_CFLAGS) $(WV_CFLAGS)" \
 	CGO_LDFLAGS="$(WHISPER_LDFLAGS) $(LAYER_LDFLAGS) $(WV_LDFLAGS)" \
 	$(NICE) go test $(UI_TAGS) $(if $(RACE),-race) $(GOTESTFLAGS) $(PKGS)
+
+test-settings-geometry: deps compat-pc
+ifeq ($(UNAME_S),Linux)
+	@test -n "$$DISPLAY" || { echo "test-settings-geometry requires an X display (for CI, run under Xvfb)"; exit 1; }
+	PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_UI)" \
+	CGO_CFLAGS="$(LAYER_CFLAGS) $(WV_CFLAGS)" \
+	CGO_LDFLAGS="$(WHISPER_LDFLAGS) $(LAYER_LDFLAGS) $(WV_LDFLAGS)" \
+	$(NICE) go test -tags settings_geometry -count=1 -timeout 25s -run '^TestRenderedSettingsGeometryReportsEveryTab$$' ./internal/ui
+else
+	@echo "test-settings-geometry is currently supported only on Linux/WebKit"; exit 1
+endif
 
 all: build build-transcribe
 
