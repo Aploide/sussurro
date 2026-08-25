@@ -3,7 +3,9 @@ app:
   debug: false
   log_level: "info" # debug, info, warn, error
   lowercase_output: false
-  skip_llm_cleanup: false
+  # Synchronous LLM correction adds several seconds after key release.
+  # Opt in by setting this to false when correction quality matters more than latency.
+  skip_llm_cleanup: true
   # Personal dictionary: names and terms Whisper should prefer while decoding
   # and the cleanup stage must spell exactly as written here.
   # dictionary:

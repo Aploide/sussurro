@@ -347,7 +347,9 @@ func LoadConfig(path string) (*Config, error) {
 	viper.SetDefault("models.asr.vad_threshold", float32(0.01))
 	viper.SetDefault("hotkey.mode", "push-to-talk")
 	viper.SetDefault("app.lowercase_output", false)
-	viper.SetDefault("app.skip_llm_cleanup", false)
+	// Keep the interactive release-to-clipboard path fast unless a user
+	// explicitly opts into synchronous model inference.
+	viper.SetDefault("app.skip_llm_cleanup", true)
 	setWorkflowDefaults(viper.GetViper())
 
 	viper.SetEnvPrefix("SUSSURRO")

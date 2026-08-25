@@ -41,8 +41,13 @@ dictionary**; changes saved there apply to the next dictation without a restart.
 
 ### Cleanup behavior
 
-Cleanup first removes filler words and stutters deterministically. The LLM
-then uses the surrounding sentence to propose corrections for obvious
+Raw output is enabled by default so text reaches the clipboard without waiting
+several seconds for synchronous LLM inference. To opt into cleanup, set
+`app.skip_llm_cleanup: false` or turn off **Raw output** under **Settings →
+Dictation**.
+
+When enabled, cleanup first removes filler words and stutters deterministically.
+The LLM then uses the surrounding sentence to propose corrections for obvious
 speech-recognition mistakes, such as choosing between “base” and “bass”. A
 strict validator admits only similar-sounding substitutions: it rejects
 inserted, deleted, or reordered words, punctuation changes, and more than one
@@ -54,10 +59,10 @@ contextual examples. Set `models.llm.extended_prompt: true` with a general
 instruct model to use narrower correction-only instructions instead. The same
 output validator applies to both modes.
 
-The personal dictionary is applied after contextual correction, followed by
-deterministic formatting of dictated enumerations ("first... second...
-third...") into numbered lines. A spoken series must start with "first" and
-contain at least two in-order markers to trigger.
+When cleanup is enabled, the personal dictionary is applied after contextual
+correction, followed by deterministic formatting of dictated enumerations
+("first... second... third...") into numbered lines. A spoken series must start
+with "first" and contain at least two in-order markers to trigger.
 
 ### Audio Settings
 
