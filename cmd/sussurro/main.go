@@ -238,15 +238,9 @@ func run() {
 		bindings := ui.HotkeyBindings{
 			PushToTalk: cfg.Hotkey.PushToTalk,
 			Toggle:     cfg.Hotkey.Toggle,
-			OnPress:    func() { log.Info("Listening..."); input.Dispatch(session.InputPress) },
-			OnRelease:  func() { log.Info("Recording stopped"); input.Dispatch(session.InputRelease) },
-			OnToggle: func() {
-				if input.Dispatch(session.InputToggle) {
-					log.Info("Recording stopped")
-				} else {
-					log.Info("Listening...")
-				}
-			},
+			OnPress:   func() { input.Dispatch(session.InputPress) },
+			OnRelease: func() { input.Dispatch(session.InputRelease) },
+			OnToggle:  func() { input.Dispatch(session.InputToggle) },
 		}
 
 		// Set up input handler before entering the UI main loop.
@@ -293,8 +287,8 @@ func run() {
 			}
 			defer ptt.Unregister()
 			if err := ptt.Register(
-				func() { log.Info("Listening..."); input.Dispatch(session.InputPress) },
-				func() { log.Info("Recording stopped"); input.Dispatch(session.InputRelease) },
+				func() { input.Dispatch(session.InputPress) },
+				func() { input.Dispatch(session.InputRelease) },
 			); err != nil {
 				log.Error("Failed to register the push-to-talk hotkey", "error", err)
 				os.Exit(1)
@@ -315,13 +309,7 @@ func run() {
 		}
 		defer hkHandler.Unregister()
 
-		onDown := func() {
-			if input.Dispatch(session.InputToggle) {
-				log.Info("Recording stopped")
-			} else {
-				log.Info("Listening...")
-			}
-		}
+		onDown := func() { input.Dispatch(session.InputToggle) }
 		onUp := func() {}
 
 		if err := hkHandler.Register(onDown, onUp); err != nil {

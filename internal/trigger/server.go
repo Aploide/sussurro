@@ -209,7 +209,6 @@ func (s *Server) Execute(raw string) string {
 // gesture applies a recording gesture and reports the resulting state.
 func (s *Server) gesture(command Command, event session.InputEvent) string {
 	if s.dispatch.Dispatch(event) {
-		s.log.Info("Recording stopped - processing...")
 		s.notify("Sussurro", "Processing your speech...")
 		return "STOPPED"
 	}
@@ -218,7 +217,6 @@ func (s *Server) gesture(command Command, event session.InputEvent) string {
 		// A release with nothing recording is a no-op, not a new recording.
 		return "IDLE"
 	}
-	s.log.Info("Recording started")
 	return "RECORDING"
 }
 
