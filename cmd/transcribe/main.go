@@ -91,7 +91,7 @@ func main() {
 	}
 
 	// Transcribe
-	text, err := asrEngine.Transcribe(samples)
+	text, err := transcribeWithDictionary(asrEngine, cfg.App.Dictionary, samples)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: transcription failed: %v\n", err)
 		os.Exit(1)
@@ -129,6 +129,16 @@ func main() {
 }
 
 // audioToSamples converts any audio file to 16kHz mono float32 samples using ffmpeg.
+type dictionaryTranscriber interface {
+	SetDictionary([]string)
+	Transcribe([]float32) (string, error)
+}
+
+func transcribeWithDictionary(engine dictionaryTranscriber, dictionary []string, samples []float32) (string, error) {
+	engine.SetDictionary(dictionary)
+	return engine.Transcribe(samples)
+}
+
 func audioToSamples(path string) ([]float32, error) {
 	cmd := exec.Command("ffmpeg",
 		"-i", path,
