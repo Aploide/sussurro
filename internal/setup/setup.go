@@ -114,7 +114,7 @@ audio:
   channels: 1
   bit_depth: 16
   buffer_size: 1024
-  max_duration: "60s"
+  max_duration: "2m"
 
 models:
   asr:

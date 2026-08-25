@@ -19,10 +19,10 @@ audio:
   bit_depth: 16
   buffer_size: 1024
   # Safety cap that bounds memory, not an expected limit. At 16 kHz mono
-  # float32 this is roughly 38 MB. Reaching it stops the recording mid
-  # sentence, so it is set well beyond normal dictation; the overlay shows
+  # float32 this is roughly 7.7 MB. Reaching it stops the recording mid
+  # sentence, so it remains above normal dictation length; the overlay shows
   # the buffer filling as it approaches.
-  max_duration: "10m"
+  max_duration: "2m"
   # Shortest recording sent to recognition. Below this whisper reports stock
   # phrases invented from near-silence rather than saying it heard nothing, so
   # the floor exists to catch an accidental keypress — not to judge whether a

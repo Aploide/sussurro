@@ -44,8 +44,8 @@ func TestEffectiveConfigurationLogResolvesPipelineFallbacks(t *testing.T) {
 	tests := []struct {
 		name, configuredMax, configuredMin, wantMax, wantMin string
 	}{
-		{name: "missing", wantMax: "30s", wantMin: "300ms"},
-		{name: "invalid", configuredMax: "later", configuredMin: "briefly", wantMax: "30s", wantMin: "300ms"},
+		{name: "missing", wantMax: "2m", wantMin: "300ms"},
+		{name: "invalid", configuredMax: "later", configuredMin: "briefly", wantMax: "2m", wantMin: "300ms"},
 		{name: "non-positive minimum", configuredMax: "1m", configuredMin: "0", wantMax: "1m", wantMin: "300ms"},
 		{name: "unlimited maximum", configuredMax: "0", configuredMin: "1s", wantMax: "infinite", wantMin: "1s"},
 	}

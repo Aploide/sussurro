@@ -3,24 +3,21 @@ package main
 import (
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/aploide/sussurro/internal/config"
+	"github.com/aploide/sussurro/internal/pipeline"
 )
 
-const (
-	defaultMaxDuration = "30s"
-	defaultMinDuration = "300ms"
-)
+const defaultMinDuration = "300ms"
 
 // logEffectiveConfiguration resolves the audio fallbacks before reporting and
 // returning them, so the pipeline receives exactly the values named in the log.
 func logEffectiveConfiguration(log *slog.Logger, cfg *config.Config) (string, string) {
-	maxDuration, maxErr := effectiveMaxDuration(cfg.Audio.MaxDuration)
+	maxDuration, maxErr := pipeline.ResolveMaxDuration(cfg.Audio.MaxDuration)
 	if maxErr != nil {
 		log.Warn("Invalid max_duration, using default",
-			"value", cfg.Audio.MaxDuration, "default", defaultMaxDuration, "error", maxErr)
+			"value", cfg.Audio.MaxDuration, "default", pipeline.DefaultMaxDuration, "error", maxErr)
 	}
 	minDuration, minErr := effectiveMinDuration(cfg.Audio.MinDuration)
 	if minErr != nil {
@@ -33,19 +30,6 @@ func logEffectiveConfiguration(log *slog.Logger, cfg *config.Config) (string, st
 		"max_duration", maxDuration,
 		"min_duration", minDuration)
 	return maxDuration, minDuration
-}
-
-func effectiveMaxDuration(value string) (string, error) {
-	if strings.EqualFold(value, "infinite") || value == "0" {
-		return "infinite", nil
-	}
-	if value == "" {
-		return defaultMaxDuration, nil
-	}
-	if _, err := time.ParseDuration(value); err != nil {
-		return defaultMaxDuration, err
-	}
-	return value, nil
 }
 
 func effectiveMinDuration(value string) (string, error) {

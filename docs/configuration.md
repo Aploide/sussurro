@@ -76,7 +76,8 @@ audio:
   channels: 1        # Mono audio
   bit_depth: 16
   buffer_size: 1024
-  max_duration: "60s" # Maximum recording time (default: 60s, 0 for no limit)
+  max_duration: "2m"  # Safety cap for one recording ("0" means no limit)
+  min_duration: "300ms" # Shorter captures are ignored as accidental presses
 ```
 
 ### Model Settings

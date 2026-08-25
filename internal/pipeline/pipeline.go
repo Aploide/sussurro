@@ -19,15 +19,12 @@ import (
 // audioBufferCapFor returns a sensible pre-allocation capacity (in samples)
 // for the audio buffer based on the configured max duration.
 func audioBufferCapFor(maxDuration string, sampleRate int) int {
-	const fallbackSecs = 30
-	switch strings.ToLower(maxDuration) {
-	case "infinite", "0", "":
-		return fallbackSecs * sampleRate // reasonable starting size for infinite mode
+	const unlimitedInitialSeconds = 30
+	resolved, _ := ResolveMaxDuration(maxDuration)
+	if resolved == "infinite" {
+		return unlimitedInitialSeconds * sampleRate
 	}
-	d, err := time.ParseDuration(maxDuration)
-	if err != nil {
-		d = fallbackSecs * time.Second
-	}
+	d, _ := time.ParseDuration(resolved)
 	return int(d.Seconds() * float64(sampleRate))
 }
 
@@ -562,23 +559,18 @@ func (p *Pipeline) captureLoop() {
 
 	defer p.audioEngine.Stop()
 
-	// Calculate max samples based on configuration
+	// Calculate max samples based on configuration.
+	resolvedDuration, resolveErr := ResolveMaxDuration(p.maxDuration)
 	var maxSamples int
-	if strings.ToLower(p.maxDuration) == "infinite" || p.maxDuration == "0" {
+	if resolvedDuration == "infinite" {
 		maxSamples = math.MaxInt32 // Effectively infinite
 		p.log.Debug("Max recording duration set to infinite")
 	} else {
-		// Default to 30s if not specified or invalid
-		durationStr := p.maxDuration
-		if durationStr == "" {
-			durationStr = "30s"
+		if resolveErr != nil {
+			p.log.Warn("Invalid max_duration, using default",
+				"value", p.maxDuration, "default", DefaultMaxDuration, "error", resolveErr)
 		}
-
-		d, err := time.ParseDuration(durationStr)
-		if err != nil {
-			p.log.Warn("Invalid max_duration format, defaulting to 30s", "value", p.maxDuration, "error", err)
-			d = 30 * time.Second
-		}
+		d, _ := time.ParseDuration(resolvedDuration)
 		maxSamples = int(float64(d.Seconds()) * float64(p.vadParams.SampleRate))
 		p.log.Debug("Max recording duration set", "duration", d, "max_samples", maxSamples)
 	}
