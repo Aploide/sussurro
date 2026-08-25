@@ -1,4 +1,4 @@
-'use strict';
+
 
 // ---- Bootstrap ----
 document.addEventListener('DOMContentLoaded', async () => {
@@ -72,6 +72,10 @@ async function reloadSettings() {
 
 // ---- Render ----
 function render(data) {
+  // Apply an explicit override before building the page to avoid a flash of
+  // the system palette on first open.
+  renderTheme(data.theme);
+
   // Status bar labels
   document.getElementById('platform-label').textContent = data.platform;
   document.getElementById('version-label').textContent  = `v${data.version}`;
@@ -144,26 +148,43 @@ function initFoldableSections() {
 // ---- Model list ----
 function renderModelList(containerId, models, groupName) {
   const container = document.getElementById(containerId);
-  container.innerHTML = '';
+  container.replaceChildren();
 
   models.forEach(m => {
     const item = document.createElement('div');
     item.className = 'model-item' + (m.active ? ' active' : '');
     item.dataset.id = m.id;
 
-    item.innerHTML = `
-      <input type="radio" name="${groupName}" value="${m.id}" ${m.active ? 'checked' : ''}>
-      <div class="model-info">
-        <span class="model-name">${m.name}${m.active ? '<span class="model-badge">ACTIVE</span>' : ''}</span>
-        <span class="model-desc">${m.desc}</span>
-        <span class="model-size">${m.size}</span>
-      </div>
-      <div class="model-status" id="status-${m.id}">
-        ${m.installed ? installedBadge() : downloadArea(m.id)}
-      </div>
-    `;
+    const radio = document.createElement('input');
+    radio.type = 'radio';
+    radio.name = groupName;
+    radio.value = m.id;
+    radio.checked = m.active;
 
-    const radio = item.querySelector('input[type="radio"]');
+    const info = document.createElement('div');
+    info.className = 'model-info';
+    const name = document.createElement('span');
+    name.className = 'model-name';
+    name.textContent = m.name;
+    if (m.active) {
+      const badge = document.createElement('span');
+      badge.className = 'model-badge';
+      badge.textContent = 'ACTIVE';
+      name.appendChild(badge);
+    }
+    const description = document.createElement('span');
+    description.className = 'model-desc';
+    description.textContent = m.desc;
+    const size = document.createElement('span');
+    size.className = 'model-size';
+    size.textContent = m.size;
+    info.append(name, description, size);
+
+    const status = document.createElement('div');
+    status.className = 'model-status';
+    status.id = `status-${m.id}`;
+    status.appendChild(m.installed ? installedBadge() : downloadArea(m.id));
+    item.append(radio, info, status);
 
     // LLM has only one model — disable the radio, nothing to switch to
     if (m.type === 'llm') {
@@ -187,7 +208,7 @@ function renderModelList(containerId, models, groupName) {
     // Attach download handler
     if (!m.installed) {
       const btn = item.querySelector('.download-btn');
-      if (btn) btn.addEventListener('click', e => { e.stopPropagation(); startDownload(m.id, m.name); });
+      if (btn) btn.addEventListener('click', e => { e.stopPropagation(); startDownload(m.id); });
     }
   });
 }
@@ -200,22 +221,43 @@ function showRestartBanner() {
 }
 
 function installedBadge() {
-  return `<span class="installed-badge">✓ Installed</span>`;
+  const badge = document.createElement('span');
+  badge.className = 'installed-badge';
+  badge.textContent = '✓ Installed';
+  return badge;
 }
 
 function downloadArea(id) {
-  return `
-    <div class="download-area">
-      <button class="download-btn" id="btn-${id}">↓ Download</button>
-      <div class="dl-progress-wrap" id="prog-wrap-${id}" hidden>
-        <progress class="dl-progress" id="prog-${id}" value="0" max="1"></progress>
-        <span class="dl-progress-label" id="pct-${id}">0%</span>
-      </div>
-    </div>
-  `;
+  const area = document.createElement('div');
+  area.className = 'download-area';
+
+  const button = document.createElement('button');
+  button.className = 'download-btn';
+  button.id = `btn-${id}`;
+  button.textContent = '↓ Download';
+
+  const wrap = document.createElement('div');
+  wrap.className = 'dl-progress-wrap';
+  wrap.id = `prog-wrap-${id}`;
+  wrap.hidden = true;
+
+  const progress = document.createElement('progress');
+  progress.className = 'dl-progress';
+  progress.id = `prog-${id}`;
+  progress.value = 0;
+  progress.max = 1;
+
+  const label = document.createElement('span');
+  label.className = 'dl-progress-label';
+  label.id = `pct-${id}`;
+  label.textContent = '0%';
+
+  wrap.append(progress, label);
+  area.append(button, wrap);
+  return area;
 }
 
-function startDownload(modelId, modelName) {
+function startDownload(modelId) {
   const btn      = document.getElementById(`btn-${modelId}`);
   const progWrap = document.getElementById(`prog-wrap-${modelId}`);
 
@@ -227,20 +269,20 @@ function startDownload(modelId, modelName) {
 }
 
 // Called from Go via webview.Eval — matched by model ID, not name text.
-window.onDownloadProgress = function(modelId, percent) {
+window.onDownloadProgress = (modelId, percent) => {
   const prog = document.getElementById(`prog-${modelId}`);
   const pct  = document.getElementById(`pct-${modelId}`);
   if (prog) prog.value = percent / 100;
   if (pct)  pct.textContent = `${Math.round(percent)}%`;
 };
 
-window.onDownloadComplete = function(modelId) {
+window.onDownloadComplete = (modelId) => {
   const statusDiv = document.getElementById(`status-${modelId}`);
-  if (statusDiv) statusDiv.innerHTML = installedBadge();
+  if (statusDiv) statusDiv.replaceChildren(installedBadge());
   reloadSettings();
 };
 
-window.onDownloadError = function(modelId, err) {
+window.onDownloadError = (modelId, err) => {
   // Restore the download button on failure
   const btn      = document.getElementById(`btn-${modelId}`);
   const progWrap = document.getElementById(`prog-wrap-${modelId}`);
@@ -265,7 +307,7 @@ function renderLanguage(currentLang) {
   const select = document.getElementById('language-select');
   if (!select) return;
 
-  select.innerHTML = '';
+  select.replaceChildren();
   const active = currentLang || 'en';
 
   WHISPER_LANGUAGES.forEach(({ code, name }) => {
@@ -279,6 +321,51 @@ function renderLanguage(currentLang) {
   select.onchange = async () => {
     const res = await window.saveLanguage(select.value);
     if (!res.startsWith('error')) showRestartBanner();
+  };
+}
+
+// ---- Appearance ----
+const THEMES = new Set(['system', 'light', 'dark']);
+
+function applySettingsTheme(theme) {
+  const chosen = THEMES.has(theme) ? theme : 'system';
+  document.documentElement.dataset.theme = chosen;
+}
+
+function showAppearanceStatus(message, isError) {
+  const status = document.getElementById('appearance-status');
+  if (!status) return;
+  status.hidden = !message;
+  status.textContent = message || '';
+  status.classList.toggle('setting-note-error', !!isError);
+  scheduleSettingsLayout();
+}
+
+function renderTheme(theme) {
+  const select = document.getElementById('appearance-theme');
+  if (!select) return;
+
+  let previous = THEMES.has(theme) ? theme : 'system';
+  select.value = previous;
+  applySettingsTheme(previous);
+  select.onchange = async () => {
+    const chosen = select.value;
+    applySettingsTheme(chosen);
+    try {
+      const result = await window.saveTheme(chosen);
+      if (typeof result === 'string' && result.startsWith('error:')) {
+        select.value = previous;
+        applySettingsTheme(previous);
+        showAppearanceStatus(result.slice('error:'.length).trim(), true);
+        return;
+      }
+      previous = chosen;
+      showAppearanceStatus('Saved', false);
+    } catch (error) {
+      select.value = previous;
+      applySettingsTheme(previous);
+      showAppearanceStatus(`Could not save theme: ${error}`, true);
+    }
   };
 }
 
@@ -497,7 +584,7 @@ function renderDictionary(terms) {
 // can tell "not offered here" from "needs something installed".
 function fillChoices(select, choices, current) {
   if (!select) return;
-  select.innerHTML = '';
+  select.replaceChildren();
   (choices || []).forEach(choice => {
     const option = document.createElement('option');
     option.value = choice.value;
@@ -673,28 +760,38 @@ function bindHotkeyRow(row, displayId, buttonId, trigger, save) {
 
   const btn = document.getElementById(buttonId);
   if (btn) {
-    btn.onclick = () => showRecordModal(trigger, function (combo) {
-      return save(combo).then(function (res) {
+    btn.onclick = () => showRecordModal((combo) => save(combo).then((res) => {
         if (typeof res !== 'string' || !res.startsWith('error')) {
           updateHotkeyDisplay(displayId, combo);
         }
         return res;
-      });
-    });
+      }));
   }
 }
 
 function updateHotkeyDisplay(displayId, trigger) {
   const display = document.getElementById(displayId);
   if (!display) return;
+  display.replaceChildren();
   if (!trigger) {
     // An unset binding says so rather than rendering an empty row.
-    display.innerHTML = '<span style="color:var(--muted);font-size:13px">Not set</span>';
+    const unset = document.createElement('span');
+    unset.className = 'hotkey-unset';
+    unset.textContent = 'Not set';
+    display.appendChild(unset);
     return;
   }
-  display.innerHTML = trigger.split('+')
-    .map(k => `<kbd>${k}</kbd>`)
-    .join('<span style="color:var(--muted);font-size:11px;padding:0 2px">+</span>');
+  trigger.split('+').forEach((key, index) => {
+    if (index > 0) {
+      const separator = document.createElement('span');
+      separator.className = 'hotkey-separator';
+      separator.textContent = '+';
+      display.appendChild(separator);
+    }
+    const keycap = document.createElement('kbd');
+    keycap.textContent = key;
+    display.appendChild(keycap);
+  });
 }
 
 // ---- Record hotkey modal ----
@@ -720,7 +817,7 @@ function buildTriggerFromSet(keys) {
   return [...mods, ...main].join('+');
 }
 
-function showRecordModal(currentTrigger, save) {
+function showRecordModal(save) {
   const modal   = document.getElementById('hotkey-modal');
   const preview = document.getElementById('hotkey-modal-preview');
   if (!modal) return;
@@ -776,9 +873,8 @@ function showRecordModal(currentTrigger, save) {
       }
       finalized = true;
       cleanup();
-      const res = await save(lastCombo);
+      await save(lastCombo);
       modal.classList.remove('visible');
-
     }
   }
 

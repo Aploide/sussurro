@@ -57,6 +57,10 @@ hotkey:
 injection:
   method: "keyboard"
 
+appearance:
+  # system follows the desktop preference; light and dark are explicit overrides.
+  theme: "system"
+
 # Streaming review workflow. Every value below reproduces the original
 # immediate-dictation behavior, so omitting this whole section changes nothing.
 workflow:

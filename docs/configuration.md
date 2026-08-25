@@ -68,6 +68,21 @@ contextual correction and deterministic formatting turns dictated enumerations
 ("first... second... third...") into numbered lines. A spoken series must start
 with "first" and contain at least two in-order markers to trigger.
 
+### Appearance settings
+
+```yaml
+appearance:
+  theme: "system" # system, light, or dark
+```
+
+`system`, the default, follows the desktop colour-scheme preference and reacts
+when it changes while Sussurro is running. `light` and `dark` override that
+preference. The same choice is available under **Settings → Appearance** and
+is saved immediately. The native overlay and Settings window share this value,
+so neither needs a restart after the live overlay callback is connected.
+
+Set `SUSSURRO_APPEARANCE_THEME` to override the file for one process.
+
 ### Audio Settings
 
 ```yaml
@@ -313,6 +328,7 @@ The review workflow keys follow the same rule:
 | `SUSSURRO_WORKFLOW_INPUT_CANCEL_CHORD` | `workflow.input.cancel_chord` |
 | `SUSSURRO_WORKFLOW_DELIVERY_BACKEND` | `workflow.delivery.backend` |
 | `SUSSURRO_WORKFLOW_DELIVERY_CLIPBOARD_ONLY` | `workflow.delivery.clipboard_only` |
+| `SUSSURRO_APPEARANCE_THEME` | `appearance.theme` |
 
 ```bash
 SUSSURRO_WORKFLOW_MODE=review ./sussurro   # try review mode without editing the config

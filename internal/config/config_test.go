@@ -113,6 +113,9 @@ func TestShippedDefaultConfigLoads(t *testing.T) {
 	if !cfg.Workflow.Streaming.Enabled {
 		t.Error("shipped defaults disable streaming, want enabled")
 	}
+	if cfg.Appearance.Theme != ThemeSystem {
+		t.Errorf("shipped Appearance.Theme = %q, want %q", cfg.Appearance.Theme, ThemeSystem)
+	}
 }
 
 func TestExplicitWorkflowValuesLoad(t *testing.T) {

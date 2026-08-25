@@ -111,7 +111,7 @@ func TestEveryControlHasAnAccessibleLabel(t *testing.T) {
 	for _, id := range []string{
 		"workflow-mode", "workflow-streaming-interval", "workflow-delivery-backend",
 		"workflow-input-backend", "workflow-input-device", "workflow-input-chord",
-		"workflow-input-cancel-chord",
+		"workflow-input-cancel-chord", "appearance-theme",
 	} {
 		if !strings.Contains(html, `for="`+id+`"`) {
 			t.Errorf("no label is associated with the control %q", id)
@@ -193,6 +193,123 @@ func TestEverySectionsPanelIsATab(t *testing.T) {
 		if panel != "" && !strings.Contains(html, `data-tab="`+panel+`"`) {
 			t.Errorf("section %q is in panel %q, which no tab selects", section, panel)
 		}
+	}
+}
+
+func TestEmbeddedSettingsPageIncludesThemeAssets(t *testing.T) {
+	for _, marker := range []string{"<!--SETTINGS_STYLE-->", "{{JS}}"} {
+		if strings.Contains(settingsHTML, marker) {
+			t.Errorf("assembled settings page still contains marker %q", marker)
+		}
+	}
+	for _, content := range []string{`:root[data-theme="light"]`, "function renderTheme(theme)"} {
+		if !strings.Contains(settingsHTML, content) {
+			t.Errorf("assembled settings page is missing %q", content)
+		}
+	}
+}
+
+func TestThemeControlOffersEveryConfiguredValue(t *testing.T) {
+	html := readAsset(t, "index.html")
+	js := readAsset(t, "app.js")
+
+	for _, theme := range []string{"system", "light", "dark"} {
+		if !strings.Contains(html, `option value="`+theme+`"`) {
+			t.Errorf("Appearance control has no %q option", theme)
+		}
+		if !strings.Contains(js, `'`+theme+`'`) {
+			t.Errorf("app.js does not recognize theme %q", theme)
+		}
+	}
+	for _, contract := range []string{
+		"window.saveTheme(chosen)",
+		"document.documentElement.dataset.theme = chosen",
+		"renderTheme(data.theme)",
+	} {
+		if !strings.Contains(js, contract) {
+			t.Errorf("app.js is missing theme contract %q", contract)
+		}
+	}
+	if !strings.Contains(html, `id="appearance-status" role="status" aria-live="polite"`) {
+		t.Error("Appearance save result has no accessible live status")
+	}
+}
+
+func TestThemePalettesCoverOverridesAndSystemPreference(t *testing.T) {
+	css := readAsset(t, "style.css")
+
+	for _, selector := range []string{
+		`:root[data-theme="dark"]`,
+		`:root[data-theme="light"]`,
+		`@media (prefers-color-scheme: light)`,
+		`:root[data-theme="system"]`,
+	} {
+		if !strings.Contains(css, selector) {
+			t.Errorf("style.css has no %s palette selector", selector)
+		}
+	}
+
+	// Explicit light and system-light must stay the same palette. Every light
+	// declaration appears once in each block.
+	for _, declaration := range []string{
+		`--bg:                   #f5f5f7`,
+		`--surface:              #ffffff`,
+		`--surface2:             #ededf0`,
+		`--border:               #d2d2d7`,
+		`--text:                 #1d1d1f`,
+		`--muted:                #5f6368`,
+		`--accent:               #16833b`,
+		`--red:                  #c62828`,
+		`--blue:                 #0066cc`,
+		`--modal-scrim:          rgba(0, 0, 0, 0.45)`,
+		`fill='%235f6368'`,
+	} {
+		if count := strings.Count(css, declaration); count != 2 {
+			t.Errorf("light palette declaration %q appears %d times, want explicit and system", declaration, count)
+		}
+	}
+
+	// These are the original dark colours. A theme refactor must not subtly
+	// change the appearance users already have.
+	for _, declaration := range []string{
+		`--bg:                   #111113`,
+		`--surface:              #1a1a1c`,
+		`--surface2:             #222224`,
+		`--border:               #2e2e30`,
+		`--text:                 #e8e8ea`,
+		`--muted:                #6b6b70`,
+		`--accent:               #30d158`,
+		`--red:                  #ff453a`,
+		`--blue:                 #0a84ff`,
+		`--subtle-hover:         rgba(255, 255, 255, 0.02)`,
+		`--subtle-selected:      rgba(255, 255, 255, 0.04)`,
+		`--control-hover:        #2e2e30`,
+		`--control-hover-border: #444444`,
+		`--toggle-knob:          #ffffff`,
+		`--modal-scrim:          rgba(0, 0, 0, 0.6)`,
+		`--preview-bg:           rgba(255, 255, 255, 0.05)`,
+		`--info-bg:              rgba(10, 132, 255, 0.10)`,
+		`--info-border:          rgba(10, 132, 255, 0.25)`,
+		`fill='%236b6b70'`,
+	} {
+		if !strings.Contains(css, declaration) {
+			t.Errorf("dark palette no longer contains %q", declaration)
+		}
+	}
+}
+
+func TestColourLiteralsExistOnlyInPaletteTokens(t *testing.T) {
+	css := readAsset(t, "style.css")
+	html := readAsset(t, "index.html")
+	literal := regexp.MustCompile(`(?i)(#[0-9a-f]{3,8}\b|rgba?\s*\(|%23[0-9a-f]{3,8}\b)`)
+
+	for number, line := range strings.Split(css, "\n") {
+		if literal.MatchString(line) && !strings.Contains(line, "--") {
+			t.Errorf("style.css:%d has an untokenised colour literal: %s", number+1, line)
+		}
+	}
+	if match := literal.FindString(html); match != "" {
+		t.Errorf("index.html has untokenised colour literal %q", match)
 	}
 }
 

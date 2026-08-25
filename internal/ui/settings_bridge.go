@@ -26,16 +26,17 @@ type modelInfo struct {
 
 // initialData is returned by getInitialData().
 type initialData struct {
-	Platform         string      `json:"platform"`
-	Version          string      `json:"version"`
-	Models           []modelInfo `json:"models"`
-	PushToTalkHotkey string      `json:"pushToTalkHotkey"`
-	ToggleHotkey     string      `json:"toggleHotkey"`
-	IsWayland        bool        `json:"isWayland"`
-	Language         string      `json:"language"`
-	LowercaseOutput  bool        `json:"lowercaseOutput"`
-	SkipLLMCleanup   bool        `json:"skipLLMCleanup"`
-	Dictionary       []string    `json:"dictionary"`
+	Platform         string       `json:"platform"`
+	Version          string       `json:"version"`
+	Models           []modelInfo  `json:"models"`
+	PushToTalkHotkey string       `json:"pushToTalkHotkey"`
+	ToggleHotkey     string       `json:"toggleHotkey"`
+	IsWayland        bool         `json:"isWayland"`
+	Language         string       `json:"language"`
+	LowercaseOutput  bool         `json:"lowercaseOutput"`
+	SkipLLMCleanup   bool         `json:"skipLLMCleanup"`
+	Dictionary       []string     `json:"dictionary"`
+	Theme            config.Theme `json:"theme"`
 	// Workflow carries the review controls and this host's capabilities.
 	Workflow workflowSettings `json:"workflow"`
 }
@@ -157,6 +158,16 @@ func bindBridge(sw *settingsWindow) {
 		return saveDictionary(mgr, encoded)
 	})
 
+	sw.w.Bind("saveTheme", func(value string) (result string) {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("panic in saveTheme", "error", r)
+				result = fmt.Sprintf("error: panic: %v", r)
+			}
+		}()
+		return saveTheme(mgr, value)
+	})
+
 	sw.w.Bind("downloadModel", func(modelID string) {
 		go func() {
 			defer func() {
@@ -225,6 +236,16 @@ func bindBridge(sw *settingsWindow) {
 	sw.w.Bind("closeSettings", func() {
 		sw.Hide()
 	})
+}
+
+func saveTheme(mgr *Manager, value string) string {
+	theme := config.Theme(value)
+	if err := config.SaveTheme(mgr.cfg, theme); err != nil {
+		return fmt.Sprintf("error: %v", err)
+	}
+	mgr.cfg.Appearance.Theme = theme
+	mgr.applyTheme(theme)
+	return "ok"
 }
 
 func saveDictionary(mgr *Manager, encoded string) string {
@@ -312,6 +333,7 @@ func buildInitialData(mgr *Manager) initialData {
 		LowercaseOutput:  mgr.cfg.App.LowercaseOutput,
 		SkipLLMCleanup:   mgr.cfg.App.SkipLLMCleanup,
 		Dictionary:       append([]string(nil), mgr.cfg.App.Dictionary...),
+		Theme:            mgr.cfg.Appearance.Theme,
 		Workflow:         buildWorkflowSettings(mgr.cfg, hostCapabilities()),
 	}
 }

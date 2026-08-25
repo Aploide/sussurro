@@ -24,7 +24,7 @@ var settingsJS string
 var settingsHTML string
 
 func init() {
-	h := strings.ReplaceAll(settingsHTMLTemplate, "{{CSS}}", settingsCSS)
+	h := strings.ReplaceAll(settingsHTMLTemplate, "<!--SETTINGS_STYLE-->", "<style>"+settingsCSS+"</style>")
 	h = strings.ReplaceAll(h, "{{JS}}", settingsJS)
 	settingsHTML = h
 }

@@ -2,19 +2,82 @@
 /* Ensure the HTML hidden attribute always wins over element display rules */
 [hidden] { display: none !important; }
 
-:root {
-  --bg:        #111113;
-  --surface:   #1a1a1c;
-  --surface2:  #222224;
-  --border:    #2e2e30;
-  --text:      #e8e8ea;
-  --muted:     #6b6b70;
-  --accent:    #30d158;
-  --green:     #30d158;
-  --red:       #ff453a;
-  --blue:      #0a84ff;
-  --radius:    10px;
-  --font:      -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg:                   #111113;
+  --surface:              #1a1a1c;
+  --surface2:             #222224;
+  --border:               #2e2e30;
+  --text:                 #e8e8ea;
+  --muted:                #6b6b70;
+  --accent:               #30d158;
+  --green:                #30d158;
+  --red:                  #ff453a;
+  --blue:                 #0a84ff;
+  --subtle-hover:         rgba(255, 255, 255, 0.02);
+  --subtle-selected:      rgba(255, 255, 255, 0.04);
+  --control-hover:        #2e2e30;
+  --control-hover-border: #444444;
+  --toggle-knob:          #ffffff;
+  --modal-scrim:          rgba(0, 0, 0, 0.6);
+  --preview-bg:           rgba(255, 255, 255, 0.05);
+  --info-bg:              rgba(10, 132, 255, 0.10);
+  --info-border:          rgba(10, 132, 255, 0.25);
+  --select-arrow:         url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%236b6b70'/%3E%3C/svg%3E");
+  --radius:               10px;
+  --font:                 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg:                   #f5f5f7;
+  --surface:              #ffffff;
+  --surface2:             #ededf0;
+  --border:               #d2d2d7;
+  --text:                 #1d1d1f;
+  --muted:                #5f6368;
+  --accent:               #16833b;
+  --green:                #16833b;
+  --red:                  #c62828;
+  --blue:                 #0066cc;
+  --subtle-hover:         rgba(0, 0, 0, 0.025);
+  --subtle-selected:      rgba(0, 0, 0, 0.04);
+  --control-hover:        #e2e2e5;
+  --control-hover-border: #b8b8bd;
+  --toggle-knob:          #ffffff;
+  --modal-scrim:          rgba(0, 0, 0, 0.45);
+  --preview-bg:           rgba(0, 0, 0, 0.04);
+  --info-bg:              rgba(0, 102, 204, 0.08);
+  --info-border:          rgba(0, 102, 204, 0.25);
+  --select-arrow:         url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%235f6368'/%3E%3C/svg%3E");
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]),
+  :root[data-theme="system"] {
+    color-scheme: light;
+    --bg:                   #f5f5f7;
+    --surface:              #ffffff;
+    --surface2:             #ededf0;
+    --border:               #d2d2d7;
+    --text:                 #1d1d1f;
+    --muted:                #5f6368;
+    --accent:               #16833b;
+    --green:                #16833b;
+    --red:                  #c62828;
+    --blue:                 #0066cc;
+    --subtle-hover:         rgba(0, 0, 0, 0.025);
+    --subtle-selected:      rgba(0, 0, 0, 0.04);
+    --control-hover:        #e2e2e5;
+    --control-hover-border: #b8b8bd;
+    --toggle-knob:          #ffffff;
+    --modal-scrim:          rgba(0, 0, 0, 0.45);
+    --preview-bg:           rgba(0, 0, 0, 0.04);
+    --info-bg:              rgba(0, 102, 204, 0.08);
+    --info-border:          rgba(0, 102, 204, 0.25);
+    --select-arrow:         url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%235f6368'/%3E%3C/svg%3E");
+  }
 }
 
 html, body {
@@ -69,7 +132,7 @@ html, body {
   cursor: pointer;
   padding: 10px 14px 6px;
 }
-.section-header:hover { background: rgba(255,255,255,0.02); }
+.section-header:hover { background: var(--subtle-hover); }
 .section-header:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
 
 .section-caret {
@@ -105,7 +168,7 @@ html, body {
   transition: background 0.1s;
 }
 .model-item:hover { background: var(--surface2); }
-.model-item.active { background: rgba(255,255,255,0.04); }
+.model-item.active { background: var(--subtle-selected); }
 
 .model-item input[type="radio"] {
   appearance: none;
@@ -181,7 +244,7 @@ html, body {
   transition: background 0.1s, border-color 0.1s;
   white-space: nowrap;
 }
-.download-btn:hover { background: #2e2e30; border-color: #444; }
+.download-btn:hover { background: var(--control-hover); border-color: var(--control-hover-border); }
 .download-btn:disabled { opacity: 0.4; cursor: default; }
 
 .dl-progress-wrap {
@@ -226,7 +289,7 @@ select {
   appearance: none;
   -webkit-appearance: none;
   background-color: var(--surface2);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%236b6b70'/%3E%3C/svg%3E");
+  background-image: var(--select-arrow);
   background-repeat: no-repeat;
   background-position: right 8px center;
   color: var(--text);
@@ -270,7 +333,7 @@ select option { background: var(--surface2); color: var(--text); }
   height: 18px;
   left: 3px;
   top: 3px;
-  background: #ffffff;
+  background: var(--toggle-knob);
   border-radius: 50%;
   transition: transform 0.2s;
 }
@@ -318,7 +381,7 @@ kbd {
   color: var(--text);
   cursor: pointer;
 }
-.hotkey-edit-btn:hover { background: #2e2e30; }
+.hotkey-edit-btn:hover { background: var(--control-hover); }
 
 .hotkey-wayland-note {
   font-size: 14px;
@@ -328,6 +391,14 @@ kbd {
   border-top: 1px solid var(--border);
 }
 .hotkey-wayland-note a { color: var(--blue); text-decoration: none; }
+.command-example {
+  color: var(--text);
+  background: var(--surface2);
+  padding: 2px 5px;
+  border-radius: 4px;
+}
+.hotkey-unset { color: var(--muted); font-size: 13px; }
+.hotkey-separator { color: var(--muted); font-size: 11px; padding: 0 2px; }
 
 /* ---- Personal dictionary ---- */
 .dictionary-intro {
@@ -449,7 +520,7 @@ kbd {
 .modal-backdrop {
   display: none;
   position: fixed; inset: 0;
-  background: rgba(0,0,0,0.6);
+  background: var(--modal-scrim);
   z-index: 100;
   align-items: center;
   justify-content: center;
@@ -477,7 +548,7 @@ kbd {
   font-weight: 600;
   letter-spacing: 0.04em;
   color: var(--text);
-  background: rgba(255,255,255,0.05);
+  background: var(--preview-bg);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 6px 12px;
@@ -500,8 +571,8 @@ kbd {
   align-items: center;
   justify-content: center;
   padding: 9px 16px;
-  background: rgba(10, 132, 255, 0.10);
-  border-top: 1px solid rgba(10, 132, 255, 0.25);
+  background: var(--info-bg);
+  border-top: 1px solid var(--info-border);
   font-size: 15px;
   color: var(--blue);
   font-weight: 500;

@@ -10,11 +10,12 @@ import (
 )
 
 type Config struct {
-	App       AppConfig       `mapstructure:"app"`
-	Audio     AudioConfig     `mapstructure:"audio"`
-	Models    ModelsConfig    `mapstructure:"models"`
-	Hotkey    HotkeyConfig    `mapstructure:"hotkey"`
-	Injection InjectionConfig `mapstructure:"injection"`
+	App        AppConfig        `mapstructure:"app"`
+	Audio      AudioConfig      `mapstructure:"audio"`
+	Models     ModelsConfig     `mapstructure:"models"`
+	Hotkey     HotkeyConfig     `mapstructure:"hotkey"`
+	Injection  InjectionConfig  `mapstructure:"injection"`
+	Appearance AppearanceConfig `mapstructure:"appearance"`
 	// Workflow holds the opt-in streaming review settings. Absent from
 	// pre-review configs, where Normalize supplies immediate-mode defaults.
 	Workflow WorkflowConfig `mapstructure:"workflow"`
@@ -350,6 +351,7 @@ func LoadConfig(path string) (*Config, error) {
 	// Keep the interactive release-to-clipboard path fast unless a user
 	// explicitly opts into synchronous model inference.
 	viper.SetDefault("app.skip_llm_cleanup", true)
+	viper.SetDefault("appearance.theme", string(ThemeSystem))
 	setWorkflowDefaults(viper.GetViper())
 
 	viper.SetEnvPrefix("SUSSURRO")
@@ -393,7 +395,11 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	cfg.Hotkey.Normalize()
+	cfg.Appearance.Normalize()
 	cfg.Workflow.Normalize()
+	if err := cfg.Appearance.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
 	if err := cfg.Workflow.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}

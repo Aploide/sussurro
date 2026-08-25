@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Sussurro Settings</title>
-  <style>{{CSS}}</style>
+  <!--SETTINGS_STYLE-->
 </head>
 <body>
 <div class="window">
@@ -16,6 +16,7 @@
       <button class="tab" role="tab" data-tab="workflow" aria-selected="false" type="button">Dictation</button>
       <button class="tab" role="tab" data-tab="output" aria-selected="false" type="button">Output</button>
       <button class="tab" role="tab" data-tab="input" aria-selected="false" type="button">Hotkey</button>
+      <button class="tab" role="tab" data-tab="appearance" aria-selected="false" type="button">Appearance</button>
     </div>
     <div class="tab-panel" data-tab-panel="models">
     <div class="section foldable" data-section-id="speech">
@@ -223,6 +224,28 @@
       </div>
     </div>
     </div>
+    <div class="tab-panel" data-tab-panel="appearance" hidden>
+    <div class="section foldable" data-section-id="appearance">
+      <button class="section-header" type="button" data-section-toggle aria-expanded="true">
+        <span class="section-label">Appearance</span>
+        <span class="section-caret" aria-hidden="true">⌄</span>
+      </button>
+      <div class="section-body">
+        <div class="setting-row">
+          <div>
+            <label class="toggle-label" for="appearance-theme">Theme</label>
+            <div class="toggle-desc">Follow the desktop colour scheme or choose a fixed palette</div>
+          </div>
+          <select id="appearance-theme" class="setting-select">
+            <option value="system">System</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </div>
+        <div class="setting-note" id="appearance-status" role="status" aria-live="polite" hidden></div>
+      </div>
+    </div>
+    </div>
     <div class="tab-panel" data-tab-panel="input" hidden>
     <div class="section foldable" data-section-id="hotkey">
       <button class="section-header" type="button" data-section-toggle aria-expanded="true">
@@ -252,8 +275,8 @@
         <!-- Wayland note -->
         <div id="hotkey-wayland" class="hotkey-wayland-note" hidden>
           On Wayland, global hotkeys require a custom keyboard shortcut in your desktop environment.<br>
-          Configure your DE to run: <code style="color:#e8e8ea;background:#1a1a1c;padding:2px 5px;border-radius:4px">sussurro-trigger start</code> on key down,
-          and <code style="color:#e8e8ea;background:#1a1a1c;padding:2px 5px;border-radius:4px">sussurro-trigger stop</code> on key up.<br>
+          Configure your DE to run: <code class="command-example">sussurro-trigger start</code> on key down,
+          and <code class="command-example">sussurro-trigger stop</code> on key up.<br>
           See <a href="#" onclick="window.openURL('https://github.com/aploide/sussurro/blob/master/docs/wayland.md'); return false">docs/wayland.md</a> for instructions.
         </div>
       </div>
