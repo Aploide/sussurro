@@ -3,6 +3,7 @@
 #import <QuartzCore/QuartzCore.h>
 #include <math.h>
 #include "overlay_state.h"
+#include "overlay_palette.h"
 
 /* Exported Go callbacks — defined by CGo in overlay_darwin.go */
 extern void overlayGoOpenSettings(void);
@@ -34,7 +35,19 @@ typedef void (*HotkeyUpCB)(void);
     double  barTargets[7];
 
     CVDisplayLinkRef displayLink;
+
+    OverlayPalette darkPalette;
+    OverlayPalette lightPalette;
+    OverlayPalette palette;
+    int             themeMode;
 }
+- (instancetype)initWithFrame:(NSRect)frame
+                  darkPalette:(OverlayPalette)dark
+                 lightPalette:(OverlayPalette)light;
+- (void)setThemeMode:(int)mode
+         darkPalette:(OverlayPalette)dark
+        lightPalette:(OverlayPalette)light;
+- (void)applyResolvedTheme;
 - (void)tick:(double)dt;
 @end
 
@@ -53,13 +66,35 @@ static CVReturn displayLinkCallback(CVDisplayLinkRef link,
     return kCVReturnSuccess;
 }
 
+static void set_fill_color(CGContextRef ctx, OverlayColor color, double alphaScale)
+{
+    CGContextSetRGBFillColor(ctx, color.r, color.g, color.b, color.a * alphaScale);
+}
+
+static void set_stroke_color(CGContextRef ctx, OverlayColor color, double alphaScale)
+{
+    CGContextSetRGBStrokeColor(ctx, color.r, color.g, color.b, color.a * alphaScale);
+}
+
+static NSColor *native_color(OverlayColor color, double alphaScale)
+{
+    return [NSColor colorWithCalibratedRed:color.r green:color.g blue:color.b
+                                     alpha:color.a * alphaScale];
+}
+
 @implementation SussurroView
 
 - (instancetype)initWithFrame:(NSRect)frame
+                  darkPalette:(OverlayPalette)dark
+                 lightPalette:(OverlayPalette)light
 {
     self = [super initWithFrame:frame];
     if (self) {
         state        = OVERLAY_STATE_IDLE;
+        darkPalette  = dark;
+        lightPalette = light;
+        themeMode    = OVERLAY_THEME_SYSTEM;
+        palette      = dark;
         animTime     = 0.0;
         shimmerPhase = 0.0;
         rmsHead      = 0;
@@ -74,6 +109,45 @@ static CVReturn displayLinkCallback(CVDisplayLinkRef link,
         CVDisplayLinkStart(displayLink);
     }
     return self;
+}
+
+- (BOOL)systemIsDark
+{
+    NSAppearance *appearance = self.effectiveAppearance ?: NSApp.effectiveAppearance;
+    NSString *match = [appearance bestMatchFromAppearancesWithNames:@[
+        NSAppearanceNameDarkAqua, NSAppearanceNameAqua
+    ]];
+    return [match isEqualToString:NSAppearanceNameDarkAqua];
+}
+
+- (void)applyResolvedTheme
+{
+    BOOL dark = themeMode == OVERLAY_THEME_DARK ||
+        (themeMode == OVERLAY_THEME_SYSTEM && [self systemIsDark]);
+    palette = dark ? darkPalette : lightPalette;
+
+    NSVisualEffectView *effect = [self.superview isKindOfClass:[NSVisualEffectView class]]
+        ? (NSVisualEffectView *)self.superview : nil;
+    effect.appearance = [NSAppearance appearanceNamed:
+        dark ? NSAppearanceNameVibrantDark : NSAppearanceNameVibrantLight];
+    self.window.hasShadow = dark ? NO : YES;
+    [self setNeedsDisplay:YES];
+}
+
+- (void)setThemeMode:(int)mode
+         darkPalette:(OverlayPalette)dark
+        lightPalette:(OverlayPalette)light
+{
+    themeMode = mode;
+    darkPalette = dark;
+    lightPalette = light;
+    [self applyResolvedTheme];
+}
+
+- (void)viewDidChangeEffectiveAppearance
+{
+    [super viewDidChangeEffectiveAppearance];
+    if (themeMode == OVERLAY_THEME_SYSTEM) [self applyResolvedTheme];
 }
 
 - (void)dealloc
@@ -140,13 +214,11 @@ static CVReturn displayLinkCallback(CVDisplayLinkRef link,
                          CGRectMake(0, 0, w, h), r, r);
     CGContextAddPath(ctx, path);
     CGPathRelease(path);
-    /* Dark tint over the blur backdrop — lighter than before since the
-       NSVisualEffectView beneath provides the frosted-glass body. */
-    CGContextSetRGBFillColor(ctx, 0, 0, 0, 0.28);
+    set_fill_color(ctx, palette.background, 1.0);
     CGContextFillPath(ctx);
 
-    /* 1.5 px white border, inset by half the stroke width so it is not
-       clipped by the NSVisualEffectView pill mask. */
+    /* Inset the border by half its stroke width so the pill mask does not
+       clip it. */
     {
         CGFloat inset   = 0.75;
         CGFloat borderR = r - inset;
@@ -157,7 +229,7 @@ static CVReturn displayLinkCallback(CVDisplayLinkRef link,
             borderR, borderR);
         CGContextAddPath(ctx, bp);
         CGPathRelease(bp);
-        CGContextSetRGBStrokeColor(ctx, 1, 1, 1, 0.25);
+        set_stroke_color(ctx, palette.border, 1.0);
         CGContextSetLineWidth(ctx, 1.5);
         CGContextStrokePath(ctx);
     }
@@ -182,7 +254,7 @@ static CVReturn displayLinkCallback(CVDisplayLinkRef link,
         double s   = sin(phi);
         double a   = 0.35 + 0.65 * s * s;
         double cx  = startX + i * spacing;
-        CGContextSetRGBFillColor(ctx, 1, 1, 1, a);
+        set_fill_color(ctx, palette.primary, a);
         CGContextFillEllipseInRect(ctx,
             CGRectMake(cx - dotR, cy - dotR, dotR*2, dotR*2));
     }
@@ -195,7 +267,7 @@ static CVReturn displayLinkCallback(CVDisplayLinkRef link,
     double startX  = (w - totalW) / 2.0;
     double cy      = h / 2.0;
 
-    CGContextSetRGBFillColor(ctx, 1, 1, 1, 1);
+    set_fill_color(ctx, palette.primary, 1.0);
     for (int i = 0; i < ITEM_COUNT; i++) {
         double bh = barHeights[i];
         double cx = startX + i * spacing;
@@ -216,8 +288,7 @@ static CVReturn displayLinkCallback(CVDisplayLinkRef link,
 {
     NSDictionary *attrs = @{
         NSFontAttributeName: [NSFont systemFontOfSize:14
-                                               weight:NSFontWeightMedium],
-        NSForegroundColorAttributeName: [NSColor whiteColor]
+                                               weight:NSFontWeightMedium]
     };
     /* Cleanup shares this shimmer but not its label. Finalizing names the
        whole post-recording pass regardless of how recording stopped. */
@@ -230,11 +301,11 @@ static CVReturn displayLinkCallback(CVDisplayLinkRef link,
     /* Transparency layer so SourceIn clips gradient strictly to text ink. */
     CGContextBeginTransparencyLayer(ctx, NULL);
 
-    /* Base text — dim, so the sweep contrast is visible. */
+    /* Keep the base text dim enough for the sweep to remain visible. */
     NSDictionary *dimAttrs = @{
         NSFontAttributeName: [NSFont systemFontOfSize:14
                                                weight:NSFontWeightMedium],
-        NSForegroundColorAttributeName: [NSColor colorWithWhite:1 alpha:0.28]
+        NSForegroundColorAttributeName: native_color(palette.shimmer_base, 1.0)
     };
     [text drawAtPoint:pt withAttributes:dimAttrs];
 
@@ -251,11 +322,11 @@ static CVReturn displayLinkCallback(CVDisplayLinkRef link,
        Keeping the bright zone narrow at the centre gives the "light gleam" feel. */
     NSGradient *grad = [[NSGradient alloc]
         initWithColors:@[
-            [NSColor colorWithWhite:1 alpha:0.0],
-            [NSColor colorWithWhite:1 alpha:0.0],
-            [NSColor colorWithWhite:1 alpha:0.9],
-            [NSColor colorWithWhite:1 alpha:0.0],
-            [NSColor colorWithWhite:1 alpha:0.0]
+            native_color(palette.shimmer_peak, 0.0),
+            native_color(palette.shimmer_peak, 0.0),
+            native_color(palette.shimmer_peak, 1.0),
+            native_color(palette.shimmer_peak, 0.0),
+            native_color(palette.shimmer_peak, 0.0)
         ]
         atLocations:(CGFloat[]){0.0, 0.2, 0.5, 0.8, 1.0}
         colorSpace:[NSColorSpace genericRGBColorSpace]];
@@ -286,8 +357,11 @@ static CVReturn displayLinkCallback(CVDisplayLinkRef link,
 static SussurroPanel *g_panel = nil;
 static SussurroView  *g_view  = nil;
 
-void* overlay_create_macos(void)
+void* overlay_create_macos(const OverlayPalette *dark_palette,
+                           const OverlayPalette *light_palette)
 {
+    OverlayPalette dark = *dark_palette;
+    OverlayPalette light = *light_palette;
     NSScreen *screen = [NSScreen mainScreen];
     NSRect    sf     = screen.frame;
     NSRect    frame  = NSMakeRect(
@@ -321,8 +395,6 @@ void* overlay_create_macos(void)
     blurView.material     = NSVisualEffectMaterialHUDWindow;
     blurView.blendingMode = NSVisualEffectBlendingModeBehindWindow;
     blurView.state        = NSVisualEffectStateActive;
-    blurView.appearance   = [NSAppearance
-                              appearanceNamed:NSAppearanceNameVibrantDark];
     blurView.wantsLayer   = YES;
 
     /* Clip the blur strictly to the pill silhouette so it doesn't bleed
@@ -333,9 +405,12 @@ void* overlay_create_macos(void)
         blurR, blurR, NULL);
     blurView.layer.mask = pillMask;
 
-    g_view = [[SussurroView alloc] initWithFrame:viewRect];
+    g_view = [[SussurroView alloc] initWithFrame:viewRect
+                                     darkPalette:dark
+                                    lightPalette:light];
     [blurView addSubview:g_view];
     [g_panel setContentView:blurView];
+    [g_view applyResolvedTheme];
 
     /* Deliberately not shown here. The panel is ordered front only while
        something is happening (see overlay_show_macos), so an idle Sussurro
@@ -365,6 +440,17 @@ void overlay_push_rms_macos(float rms)
             g_view->barTargets[i] = BAR_MIN_HEIGHT +
                                     norm * (BAR_MAX_HEIGHT - BAR_MIN_HEIGHT);
         }
+    });
+}
+
+void overlay_set_theme_macos(int mode,
+                             const OverlayPalette *dark_palette,
+                             const OverlayPalette *light_palette)
+{
+    OverlayPalette dark = *dark_palette;
+    OverlayPalette light = *light_palette;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (g_view) [g_view setThemeMode:mode darkPalette:dark lightPalette:light];
     });
 }
 

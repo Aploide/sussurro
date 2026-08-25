@@ -3,7 +3,7 @@
 package ui
 
 /*
-#cgo LDFLAGS: -lgdiplus -lgdi32 -luser32
+#cgo LDFLAGS: -lgdiplus -lgdi32 -luser32 -ladvapi32
 #include "overlay_windows.h"
 
 // Forward-declare the Go-exported trampolines so C can call them.
@@ -15,7 +15,11 @@ static MenuOpenSettingsCB menuOpenSettingsCB(void) { return (MenuOpenSettingsCB)
 static MenuQuitCB         menuQuitCB(void)         { return (MenuQuitCB)goQuit;                 }
 */
 import "C"
-import "unsafe"
+import (
+	"unsafe"
+
+	"github.com/aploide/sussurro/internal/config"
+)
 
 // windowsOverlay wraps the CGO Win32/GDI+ overlay window.
 type windowsOverlay struct {
@@ -46,7 +50,34 @@ func goQuit() {
 // (the main thread — its messages are pumped by the webview loop that
 // Manager.Run enters afterwards).
 func newOverlay() Overlay {
-	return &windowsOverlay{hwnd: C.overlay_create()}
+	dark := nativeOverlayPalette(windowsDarkOverlayPalette)
+	light := nativeOverlayPalette(lightOverlayPalette)
+	return &windowsOverlay{hwnd: C.overlay_create(&dark, &light)}
+}
+
+func nativeOverlayColor(color overlayColor) C.OverlayColor {
+	return C.OverlayColor{r: C.double(color.R), g: C.double(color.G), b: C.double(color.B), a: C.double(color.A)}
+}
+
+func nativeOverlayPalette(palette overlayPalette) C.OverlayPalette {
+	return C.OverlayPalette{
+		background:   nativeOverlayColor(palette.Background),
+		border:       nativeOverlayColor(palette.Border),
+		primary:      nativeOverlayColor(palette.Primary),
+		secondary:    nativeOverlayColor(palette.Secondary),
+		provisional:  nativeOverlayColor(palette.Provisional),
+		track:        nativeOverlayColor(palette.Track),
+		fill:         nativeOverlayColor(palette.Fill),
+		warning:      nativeOverlayColor(palette.Warning),
+		shimmer_base: nativeOverlayColor(palette.ShimmerBase),
+		shimmer_peak: nativeOverlayColor(palette.ShimmerPeak),
+	}
+}
+
+func (o *windowsOverlay) SetTheme(theme config.Theme) {
+	dark := nativeOverlayPalette(windowsDarkOverlayPalette)
+	light := nativeOverlayPalette(lightOverlayPalette)
+	C.overlay_set_theme_async(o.hwnd, C.int(overlayThemeMode(theme)), &dark, &light)
 }
 
 func (o *windowsOverlay) Show() {

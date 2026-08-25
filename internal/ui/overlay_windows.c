@@ -18,6 +18,7 @@
 #include <gdiplus.h>
 
 #include "overlay_windows.h"
+#include "overlay_palette.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -25,6 +26,7 @@
 
 #define WM_APP_SET_STATE (WM_APP + 1)
 #define WM_APP_PUSH_RMS  (WM_APP + 2)
+#define WM_APP_SET_THEME (WM_APP + 3)
 
 #define MENU_ID_SETTINGS 1
 #define MENU_ID_QUIT     2
@@ -42,6 +44,12 @@ typedef struct OverlayData {
 
     double      shimmer_phase;
 
+    OverlayPalette dark_palette;
+    OverlayPalette light_palette;
+    OverlayPalette palette;
+    int            theme_mode;
+    BOOL           system_dark;
+
     /* Render resources (created once) */
     HDC         mem_dc;
     HBITMAP     dib;
@@ -55,7 +63,57 @@ typedef struct OverlayData {
     MenuQuitCB         quit_cb;
 } OverlayData;
 
+typedef struct ThemeUpdate {
+    int            mode;
+    OverlayPalette dark_palette;
+    OverlayPalette light_palette;
+} ThemeUpdate;
+
 static ULONG_PTR g_gdiplus_token = 0;
+
+static ARGB overlay_argb(OverlayColor color, double alpha_scale)
+{
+    double alpha = color.a * alpha_scale;
+    if (alpha < 0.0) alpha = 0.0;
+    if (alpha > 1.0) alpha = 1.0;
+    BYTE a = (BYTE)(alpha * 255.0 + 0.5);
+    BYTE r = (BYTE)(color.r * 255.0 + 0.5);
+    BYTE g = (BYTE)(color.g * 255.0 + 0.5);
+    BYTE b = (BYTE)(color.b * 255.0 + 0.5);
+    return ((ARGB)a << 24) | ((ARGB)r << 16) | ((ARGB)g << 8) | (ARGB)b;
+}
+
+static BOOL system_uses_dark_apps(void)
+{
+    HKEY key = NULL;
+    LONG result = RegOpenKeyExW(
+        HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+        0,
+        KEY_QUERY_VALUE,
+        &key);
+    if (result != ERROR_SUCCESS) return FALSE;
+
+    DWORD light = 1;
+    DWORD type = 0;
+    DWORD size = sizeof(light);
+    result = RegQueryValueExW(key, L"AppsUseLightTheme", NULL, &type,
+                              (BYTE *)&light, &size);
+    RegCloseKey(key);
+    return result == ERROR_SUCCESS && type == REG_DWORD ? light == 0 : FALSE;
+}
+
+static BOOL resolved_dark(const OverlayData *od)
+{
+    if (od->theme_mode == OVERLAY_THEME_DARK) return TRUE;
+    if (od->theme_mode == OVERLAY_THEME_LIGHT) return FALSE;
+    return od->system_dark;
+}
+
+static void apply_resolved_palette(OverlayData *od)
+{
+    od->palette = resolved_dark(od) ? od->dark_palette : od->light_palette;
+}
 
 /* ------------------------------------------------------------------ */
 /* Drawing helpers                                                     */
@@ -84,9 +142,8 @@ static void draw_idle_dots(OverlayData *od)
         double s   = sin(phi);
         double a   = 0.35 + 0.65 * s * s;
 
-        ARGB color = ((ARGB)(a * 255.0) << 24) | 0x00FFFFFFu;
         GpSolidFill *brush = NULL;
-        GdipCreateSolidFill(color, &brush);
+        GdipCreateSolidFill(overlay_argb(od->palette.primary, a), &brush);
         float cx = start_x + i * DOT_SPACING;
         GdipFillEllipse(od->gfx, (GpBrush *)brush,
                         cx - DOT_RADIUS, center_y - DOT_RADIUS,
@@ -102,7 +159,7 @@ static void draw_recording_bars(OverlayData *od)
     float center_y = OVERLAY_HEIGHT / 2.0f;
 
     GpSolidFill *brush = NULL;
-    GdipCreateSolidFill(0xFFFFFFFFu, &brush);
+    GdipCreateSolidFill(overlay_argb(od->palette.primary, 1.0), &brush);
 
     GpPath *path = NULL;
     GdipCreatePath(FillModeAlternate, &path);
@@ -144,9 +201,8 @@ static void draw_transcribing_text(OverlayData *od)
 
     RectF layout = { 0.0f, 0.0f, (float)OVERLAY_WIDTH, (float)OVERLAY_HEIGHT };
 
-    /* Base white text @ 0.7 alpha */
     GpSolidFill *base = NULL;
-    GdipCreateSolidFill(0xB3FFFFFFu, &base); /* 0.7 * 255 = 179 = 0xB3 */
+    GdipCreateSolidFill(overlay_argb(od->palette.shimmer_base, 1.0), &base);
     GdipDrawString(od->gfx, text, -1, font, &layout, fmt, (GpBrush *)base);
     GdipDeleteBrush((GpBrush *)base);
 
@@ -159,10 +215,15 @@ static void draw_transcribing_text(OverlayData *od)
 
     RectF grad_rect = { shimmer_x - 20.0f, 0.0f, 40.0f, (float)OVERLAY_HEIGHT };
     GpLineGradient *grad = NULL;
-    if (GdipCreateLineBrushFromRect(&grad_rect, 0x00FFFFFFu, 0x00FFFFFFu,
+    ARGB transparent_peak = overlay_argb(od->palette.shimmer_peak, 0.0);
+    if (GdipCreateLineBrushFromRect(&grad_rect, transparent_peak, transparent_peak,
                                     LinearGradientModeHorizontal,
                                     WrapModeTileFlipX, &grad) == Ok && grad) {
-        ARGB colors[3]    = { 0x00FFFFFFu, 0x80FFFFFFu, 0x00FFFFFFu };
+        ARGB colors[3] = {
+            transparent_peak,
+            overlay_argb(od->palette.shimmer_peak, 1.0),
+            transparent_peak
+        };
         REAL positions[3] = { 0.0f, 0.5f, 1.0f };
         GdipSetLinePresetBlend(grad, colors, positions, 3);
 
@@ -185,20 +246,19 @@ static void draw_transcribing_text(OverlayData *od)
 
 static void render_frame(OverlayData *od)
 {
-    GdipGraphicsClear(od->gfx, 0x00000000u);
+    GdipGraphicsClear(od->gfx, 0); /* structural transparent clear */
 
     GpPath *path = NULL;
     GdipCreatePath(FillModeAlternate, &path);
     pill_path(path, 0, 0, OVERLAY_WIDTH, OVERLAY_HEIGHT, OVERLAY_RADIUS);
 
-    /* Background fill + subtle white rim */
     GpSolidFill *bg = NULL;
-    GdipCreateSolidFill(BG_ARGB, &bg);
+    GdipCreateSolidFill(overlay_argb(od->palette.background, 1.0), &bg);
     GdipFillPath(od->gfx, (GpBrush *)bg, path);
     GdipDeleteBrush((GpBrush *)bg);
 
     GpPen *rim = NULL;
-    GdipCreatePen1(BORDER_ARGB, 1.5f, UnitPixel, &rim);
+    GdipCreatePen1(overlay_argb(od->palette.border, 1.0), 1.5f, UnitPixel, &rim);
     GdipDrawPath(od->gfx, rim, path);
     GdipDeletePen(rim);
     GdipDeletePath(path);
@@ -283,6 +343,27 @@ static LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPAR
         }
         return 0;
 
+    case WM_APP_SET_THEME:
+        if (od) {
+            ThemeUpdate *update = (ThemeUpdate *)lparam;
+            od->theme_mode = update->mode;
+            od->dark_palette = update->dark_palette;
+            od->light_palette = update->light_palette;
+            apply_resolved_palette(od);
+            render_frame(od);
+            free(update);
+        }
+        return 0;
+
+    case WM_SETTINGCHANGE:
+    case WM_THEMECHANGED:
+        if (od) {
+            od->system_dark = system_uses_dark_apps();
+            apply_resolved_palette(od);
+            render_frame(od);
+        }
+        return 0;
+
     case WM_RBUTTONUP:
         if (od && (od->open_settings_cb || od->quit_cb)) show_context_menu(od);
         return 0;
@@ -305,7 +386,8 @@ static LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPAR
 /* Public API                                                          */
 /* ------------------------------------------------------------------ */
 
-void *overlay_create(void)
+void *overlay_create(const OverlayPalette *dark_palette,
+                     const OverlayPalette *light_palette)
 {
     /* Per-monitor-v2 DPI awareness, set before any window exists in the
      * process (overlay_create is the first window-creating call in
@@ -356,10 +438,15 @@ void *overlay_create(void)
     if (!hwnd) return NULL;
 
     OverlayData *od = (OverlayData *)calloc(1, sizeof(OverlayData));
-    od->hwnd  = hwnd;
-    od->state = OVERLAY_STATE_IDLE;
-    od->pos_x = x;
-    od->pos_y = y;
+    od->hwnd          = hwnd;
+    od->state         = OVERLAY_STATE_IDLE;
+    od->pos_x         = x;
+    od->pos_y         = y;
+    od->theme_mode    = OVERLAY_THEME_SYSTEM;
+    od->system_dark   = system_uses_dark_apps();
+    od->dark_palette  = *dark_palette;
+    od->light_palette = *light_palette;
+    apply_resolved_palette(od);
     for (int i = 0; i < ITEM_COUNT; i++) {
         od->bar_heights[i] = BAR_MIN_HEIGHT;
         od->bar_targets[i] = BAR_MIN_HEIGHT;
@@ -423,6 +510,20 @@ void overlay_push_rms_async(void *hwnd, float rms)
     union { UINT32 u; float f; } cvt;
     cvt.f = rms;
     PostMessageW((HWND)hwnd, WM_APP_PUSH_RMS, (WPARAM)cvt.u, 0);
+}
+
+void overlay_set_theme_async(void *hwnd, int mode,
+                             const OverlayPalette *dark_palette,
+                             const OverlayPalette *light_palette)
+{
+    ThemeUpdate *update = (ThemeUpdate *)malloc(sizeof(ThemeUpdate));
+    if (!update) return;
+    update->mode = mode;
+    update->dark_palette = *dark_palette;
+    update->light_palette = *light_palette;
+    if (!PostMessageW((HWND)hwnd, WM_APP_SET_THEME, 0, (LPARAM)update)) {
+        free(update);
+    }
 }
 
 void overlay_install_context_menu(void *hwnd,

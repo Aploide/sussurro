@@ -1,6 +1,7 @@
 #pragma once
 
 #include "overlay_state.h"
+#include "overlay_palette.h"
 
 /* ---- Geometry (identical to overlay_linux.h) ---- */
 #define OVERLAY_WIDTH    220
@@ -8,10 +9,6 @@
 #define OVERLAY_RADIUS    26.0f
 #define ITEM_COUNT         7
 #define OVERLAY_MARGIN_BOTTOM 24
-
-/* ---- Colors: #1A1A1A @ 90%, white rim @ 30% ---- */
-#define BG_ARGB      0xE61A1A1Au  /* 0.90 * 255 = 230 = 0xE6 */
-#define BORDER_ARGB  0x4DFFFFFFu  /* 0.30 * 255 = 77  = 0x4D */
 
 /* ---- Bar parameters ---- */
 #define BAR_WIDTH       5.0f
@@ -31,7 +28,8 @@ typedef void (*MenuQuitCB)(void);
 
 /* ---- Public API ----
  * hwnd is the overlay HWND returned by overlay_create, passed as void*. */
-void *overlay_create(void);
+void *overlay_create(const OverlayPalette *dark_palette,
+                     const OverlayPalette *light_palette);
 void  overlay_show(void *hwnd);
 void  overlay_hide(void *hwnd);
 
@@ -39,6 +37,9 @@ void  overlay_hide(void *hwnd);
  * (the Windows analogue of gdk_threads_add_idle). */
 void  overlay_set_state_async(void *hwnd, int state);
 void  overlay_push_rms_async(void *hwnd, float rms);
+void  overlay_set_theme_async(void *hwnd, int mode,
+                              const OverlayPalette *dark_palette,
+                              const OverlayPalette *light_palette);
 
 /* Right-click context menu (fallback for when no system tray is visible) */
 void  overlay_install_context_menu(void *hwnd,

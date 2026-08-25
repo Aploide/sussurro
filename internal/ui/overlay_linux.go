@@ -26,6 +26,8 @@ import "C"
 import (
 	"os"
 	"unsafe"
+
+	"github.com/aploide/sussurro/internal/config"
 )
 
 // linuxOverlay wraps the CGO GTK3 overlay window.
@@ -89,8 +91,37 @@ func newOverlay() Overlay {
 
 	// gtk_init(NULL, NULL) — idempotent if already initialised by webview.
 	C.gtk_init(nil, nil)
-	win := C.overlay_create()
+	dark := nativeOverlayPalette(linuxDarkOverlayPalette)
+	light := nativeOverlayPalette(lightOverlayPalette)
+	win := C.overlay_create(&dark, &light)
 	return &linuxOverlay{win: unsafe.Pointer(win)}
+}
+
+func nativeOverlayColor(color overlayColor) C.OverlayColor {
+	return C.OverlayColor{r: C.double(color.R), g: C.double(color.G), b: C.double(color.B), a: C.double(color.A)}
+}
+
+func nativeOverlayPalette(palette overlayPalette) C.OverlayPalette {
+	return C.OverlayPalette{
+		background:   nativeOverlayColor(palette.Background),
+		border:       nativeOverlayColor(palette.Border),
+		primary:      nativeOverlayColor(palette.Primary),
+		secondary:    nativeOverlayColor(palette.Secondary),
+		provisional:  nativeOverlayColor(palette.Provisional),
+		track:        nativeOverlayColor(palette.Track),
+		fill:         nativeOverlayColor(palette.Fill),
+		warning:      nativeOverlayColor(palette.Warning),
+		shimmer_base: nativeOverlayColor(palette.ShimmerBase),
+		shimmer_peak: nativeOverlayColor(palette.ShimmerPeak),
+	}
+}
+
+func (o *linuxOverlay) SetTheme(theme config.Theme) {
+	dark := nativeOverlayPalette(linuxDarkOverlayPalette)
+	light := nativeOverlayPalette(lightOverlayPalette)
+	C.overlay_set_theme_async(
+		(*C.GtkWidget)(o.win), C.int(overlayThemeMode(theme)), &dark, &light,
+	)
 }
 
 // installHotkey registers the X11 global bindings (no-op on Wayland). Either

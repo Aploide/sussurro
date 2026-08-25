@@ -1,4 +1,5 @@
 #include "overlay_linux.h"
+#include "overlay_palette.h"
 #include <pango/pangocairo.h>
 
 /* ------------------------------------------------------------------ */
@@ -41,6 +42,15 @@ struct OverlayData {
        the overlay is mapped: a hidden capsule must cost nothing. */
     guint        anim_source;
 
+    OverlayPalette dark_palette;
+    OverlayPalette light_palette;
+    OverlayPalette palette;
+    int            theme_mode;
+    gboolean       system_dark;
+    gboolean       portal_known;
+    GDBusConnection *portal_connection;
+    guint           portal_subscription;
+
     /* X11 hotkeys. Push-to-talk and toggle are separate bindings, either of
        which may be unset (keycode 0), so a user can hold one key and tap
        another. */
@@ -58,6 +68,24 @@ struct OverlayData {
 /* ------------------------------------------------------------------ */
 /* Drawing helpers                                                     */
 /* ------------------------------------------------------------------ */
+
+static void set_source_color(cairo_t *cr, OverlayColor color, double alpha_scale)
+{
+    cairo_set_source_rgba(cr, color.r, color.g, color.b, color.a * alpha_scale);
+}
+
+static gboolean resolved_dark(const OverlayData *od)
+{
+    if (od->theme_mode == OVERLAY_THEME_DARK) return TRUE;
+    if (od->theme_mode == OVERLAY_THEME_LIGHT) return FALSE;
+    return od->system_dark;
+}
+
+static void apply_resolved_palette(OverlayData *od)
+{
+    od->palette = resolved_dark(od) ? od->dark_palette : od->light_palette;
+    gtk_widget_queue_draw(od->drawing_area);
+}
 
 /* Appends a rounded-rectangle sub-path. The corner radius is clamped so a
  * shape shorter or narrower than its own corners still renders, degenerating
@@ -92,7 +120,7 @@ static void draw_idle_dots(cairo_t *cr, OverlayData *od,
 
         double cx = start_x + i * DOT_SPACING;
         cairo_arc(cr, cx, center_y, DOT_RADIUS, 0, 2.0 * M_PI);
-        cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, a);
+        set_source_color(cr, od->palette.primary, a);
         cairo_fill(cr);
     }
 }
@@ -111,7 +139,7 @@ static void draw_buffer_fill(cairo_t *cr, OverlayData *od,
     double r = FILL_TRACK_HEIGHT / 2.0;
 
     /* Unfilled track: dim enough to read as a groove rather than content. */
-    cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.18);
+    set_source_color(cr, od->palette.track, 1.0);
     rounded_rect(cr, x, y, w, FILL_TRACK_HEIGHT, r);
     cairo_fill(cr);
 
@@ -122,9 +150,9 @@ static void draw_buffer_fill(cairo_t *cr, OverlayData *od,
     if (fill_w < FILL_TRACK_HEIGHT) fill_w = FILL_TRACK_HEIGHT;
 
     if (od->fill >= FILL_WARN_FRACTION) {
-        cairo_set_source_rgba(cr, 1.0, 0.62, 0.23, 0.95);
+        set_source_color(cr, od->palette.warning, 1.0);
     } else {
-        cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.55);
+        set_source_color(cr, od->palette.fill, 1.0);
     }
     rounded_rect(cr, x, y, fill_w, FILL_TRACK_HEIGHT, r);
     cairo_fill(cr);
@@ -143,7 +171,7 @@ static void draw_recording_bars(cairo_t *cr, OverlayData *od,
     double start_x = x + (w - total_w) / 2.0;
     double center_y = centre_y;
 
-    cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 1.0);
+    set_source_color(cr, od->palette.primary, 1.0);
 
     for (int i = 0; i < ITEM_COUNT; i++) {
         double h  = od->bar_heights[i];
@@ -286,7 +314,7 @@ static void draw_row_status(cairo_t *cr, OverlayData *od,
     int tw = 0, th = 0;
     pango_layout_get_pixel_size(layout, &tw, &th);
 
-    cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.55);
+    set_source_color(cr, od->palette.secondary, 1.0);
     cairo_move_to(cr, x, centre_y - th / 2.0);
     pango_cairo_show_layout(cr, layout);
     g_object_unref(layout);
@@ -347,9 +375,9 @@ static int draw_panel(cairo_t *cr, OverlayData *od, gboolean paint)
 
     if (paint) {
         panel_path(cr, PANEL_WIDTH, height);
-        cairo_set_source_rgba(cr, 0.12, 0.12, 0.12, 0.94);
+        set_source_color(cr, od->palette.background, 1.0);
         cairo_fill_preserve(cr);
-        cairo_set_source_rgba(cr, 1, 1, 1, 0.10);
+        set_source_color(cr, od->palette.border, 1.0);
         cairo_set_line_width(cr, 1.0);
         cairo_stroke(cr);
 
@@ -357,9 +385,9 @@ static int draw_panel(cairo_t *cr, OverlayData *od, gboolean paint)
            user should be able to tell settled text from text that may
            still change under them. */
         if (od->provisional) {
-            cairo_set_source_rgba(cr, 1, 1, 1, 0.72);
+            set_source_color(cr, od->palette.provisional, 1.0);
         } else {
-            cairo_set_source_rgba(cr, 1, 1, 1, 0.95);
+            set_source_color(cr, od->palette.primary, 0.95);
         }
         /* Clip the text to its own region, which stops above the status
            line. A scrolled layout starts above the panel's top edge, so
@@ -571,10 +599,135 @@ static KeySym parse_x11_keysym(const char *trigger)
 #endif /* WAYLAND_ONLY */
 
 /* ------------------------------------------------------------------ */
+/* System appearance                                                   */
+/* ------------------------------------------------------------------ */
+
+static gboolean portal_color_scheme(GVariant *wrapped, gboolean *dark)
+{
+    if (!wrapped) return FALSE;
+    GVariant *value = g_variant_get_variant(wrapped);
+    gboolean known = FALSE;
+    if (g_variant_is_of_type(value, G_VARIANT_TYPE_UINT32)) {
+        guint32 scheme = g_variant_get_uint32(value);
+        if (scheme == 1 || scheme == 2) {
+            *dark = scheme == 1;
+            known = TRUE;
+        }
+    }
+    g_variant_unref(value);
+    return known;
+}
+
+static gboolean gtk_style_is_dark(GtkWidget *widget)
+{
+    GdkRGBA background = {1, 1, 1, 1};
+    GtkStyleContext *context = gtk_widget_get_style_context(widget);
+    if (!gtk_style_context_lookup_color(context, "theme_bg_color", &background)) {
+        GdkRGBA *css_background = NULL;
+        gtk_style_context_get(context, GTK_STATE_FLAG_NORMAL,
+                              "background-color", &css_background, NULL);
+        if (css_background) {
+            background = *css_background;
+            gdk_rgba_free(css_background);
+        }
+    }
+    double luminance = 0.2126 * background.red +
+                       0.7152 * background.green +
+                       0.0722 * background.blue;
+    return luminance < 0.5;
+}
+
+static void update_system_dark(OverlayData *od, gboolean dark)
+{
+    if (od->system_dark == dark) return;
+    od->system_dark = dark;
+    if (od->theme_mode == OVERLAY_THEME_SYSTEM) apply_resolved_palette(od);
+}
+
+static void on_portal_setting_changed(GDBusConnection *connection,
+                                      const gchar *sender_name,
+                                      const gchar *object_path,
+                                      const gchar *interface_name,
+                                      const gchar *signal_name,
+                                      GVariant *parameters,
+                                      gpointer user_data)
+{
+    (void)connection; (void)sender_name; (void)object_path;
+    (void)interface_name; (void)signal_name;
+    OverlayData *od = (OverlayData *)user_data;
+    const gchar *namespace_name = NULL;
+    const gchar *key = NULL;
+    GVariant *wrapped = NULL;
+    g_variant_get(parameters, "(&s&s@v)", &namespace_name, &key, &wrapped);
+    if (g_strcmp0(namespace_name, "org.freedesktop.appearance") == 0 &&
+        g_strcmp0(key, "color-scheme") == 0) {
+        gboolean dark = FALSE;
+        od->portal_known = portal_color_scheme(wrapped, &dark);
+        update_system_dark(od, od->portal_known ? dark : gtk_style_is_dark(od->window));
+    }
+    g_variant_unref(wrapped);
+}
+
+static void on_style_updated(GtkWidget *widget, gpointer user_data)
+{
+    OverlayData *od = (OverlayData *)user_data;
+    if (!od->portal_known) update_system_dark(od, gtk_style_is_dark(widget));
+}
+
+static void watch_system_appearance(OverlayData *od)
+{
+    GError *error = NULL;
+    od->portal_connection = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, &error);
+    if (!od->portal_connection) {
+        g_clear_error(&error);
+        update_system_dark(od, gtk_style_is_dark(od->window));
+        return;
+    }
+
+    GVariant *reply = g_dbus_connection_call_sync(
+        od->portal_connection,
+        "org.freedesktop.portal.Desktop",
+        "/org/freedesktop/portal/desktop",
+        "org.freedesktop.portal.Settings",
+        "Read",
+        g_variant_new("(ss)", "org.freedesktop.appearance", "color-scheme"),
+        G_VARIANT_TYPE("(v)"),
+        G_DBUS_CALL_FLAGS_NONE,
+        300,
+        NULL,
+        &error);
+    if (reply) {
+        GVariant *wrapped = NULL;
+        g_variant_get(reply, "(@v)", &wrapped);
+        gboolean dark = FALSE;
+        od->portal_known = portal_color_scheme(wrapped, &dark);
+        if (od->portal_known) od->system_dark = dark;
+        g_variant_unref(wrapped);
+        g_variant_unref(reply);
+    } else {
+        g_clear_error(&error);
+    }
+    if (!od->portal_known) od->system_dark = gtk_style_is_dark(od->window);
+
+    od->portal_subscription = g_dbus_connection_signal_subscribe(
+        od->portal_connection,
+        "org.freedesktop.portal.Desktop",
+        "org.freedesktop.portal.Settings",
+        "SettingChanged",
+        "/org/freedesktop/portal/desktop",
+        NULL,
+        G_DBUS_SIGNAL_FLAGS_NONE,
+        on_portal_setting_changed,
+        od,
+        NULL);
+}
+
+/* ------------------------------------------------------------------ */
 /* Public API                                                          */
 /* ------------------------------------------------------------------ */
 
-GtkWidget *overlay_create(void)
+GtkWidget *overlay_create(const OverlayPalette *dark_palette,
+                          const OverlayPalette *light_palette)
 {
     GtkWidget *win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
 
@@ -603,9 +756,13 @@ GtkWidget *overlay_create(void)
 
     /* Allocate and attach overlay data */
     OverlayData *od = g_new0(OverlayData, 1);
-    od->window       = win;
-    od->drawing_area = da;
-    od->state        = OVERLAY_STATE_IDLE;
+    od->window        = win;
+    od->drawing_area  = da;
+    od->state         = OVERLAY_STATE_IDLE;
+    od->theme_mode    = OVERLAY_THEME_SYSTEM;
+    od->system_dark   = TRUE;
+    od->dark_palette  = *dark_palette;
+    od->light_palette = *light_palette;
     for (int i = 0; i < ITEM_COUNT; i++) {
         od->bar_heights[i] = BAR_MIN_HEIGHT;
         od->bar_targets[i] = BAR_MIN_HEIGHT;
@@ -613,8 +770,9 @@ GtkWidget *overlay_create(void)
 
     g_object_set_data(G_OBJECT(win), "overlay-data", od);
 
-    /* Connect draw callback */
+    /* Connect draw and system-appearance callbacks. */
     g_signal_connect(da, "draw", G_CALLBACK(on_draw), od);
+    g_signal_connect(win, "style-updated", G_CALLBACK(on_style_updated), od);
 
     /* Suppress delete-window */
     g_signal_connect(win, "delete-event", G_CALLBACK(gtk_true), NULL);
@@ -665,6 +823,8 @@ GtkWidget *overlay_create(void)
        override-redirect needs. */
     gtk_widget_show_all(da);
 
+    watch_system_appearance(od);
+    apply_resolved_palette(od);
     return win;
 }
 
@@ -815,6 +975,32 @@ void overlay_push_fill_async(GtkWidget *win, double fill)
     arg->win  = win;
     arg->fill = fill;
     gdk_threads_add_idle(idle_push_fill, arg);
+}
+
+static gboolean idle_set_theme(gpointer data)
+{
+    IdleThemeArg *arg = (IdleThemeArg *)data;
+    OverlayData *od = (OverlayData *)g_object_get_data(G_OBJECT(arg->win), "overlay-data");
+    if (od) {
+        od->theme_mode = arg->mode;
+        od->dark_palette = arg->dark_palette;
+        od->light_palette = arg->light_palette;
+        apply_resolved_palette(od);
+    }
+    g_free(arg);
+    return G_SOURCE_REMOVE;
+}
+
+void overlay_set_theme_async(GtkWidget *win, int mode,
+                             const OverlayPalette *dark_palette,
+                             const OverlayPalette *light_palette)
+{
+    IdleThemeArg *arg = g_new(IdleThemeArg, 1);
+    arg->win = win;
+    arg->mode = mode;
+    arg->dark_palette = *dark_palette;
+    arg->light_palette = *light_palette;
+    gdk_threads_add_idle(idle_set_theme, arg);
 }
 
 /* ------------------------------------------------------------------ */

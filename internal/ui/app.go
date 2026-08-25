@@ -16,6 +16,11 @@ type Manager struct {
 	overlay  Overlay
 	settings *settingsWindow
 
+	// themeCallback applies a successfully saved appearance change. Settings
+	// and native UI callbacks can arrive on different goroutines.
+	themeMu       sync.RWMutex
+	themeCallback func(config.Theme)
+
 	// Channels for thread-safe state delivery from pipeline goroutines.
 	stateChangeCh chan ViewModel
 	rmsCh         chan float32
@@ -78,8 +83,9 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 // Run initialises the overlay and settings window, starts the tray, and
 // enters the GTK/NSApp main loop.  It blocks until Quit() is called.
 func (m *Manager) Run() {
-	// 1. Create the platform overlay (GTK3 on Linux, NSPanel on macOS).
+	// 1. Create and theme the platform overlay before it can be shown.
 	m.overlay = newOverlay()
+	m.configureOverlayTheme()
 
 	// 2. Create the webview settings window (hidden).
 	m.settings = newSettingsWindow(m)

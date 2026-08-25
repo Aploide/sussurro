@@ -6,16 +6,23 @@ package ui
 #cgo CFLAGS: -x objective-c -Wno-deprecated-declarations
 #cgo LDFLAGS: -framework Cocoa -framework QuartzCore -framework CoreVideo
 #include "overlay_state.h"
+#include "overlay_palette.h"
 
-extern void* overlay_create_macos(void);
+extern void* overlay_create_macos(const OverlayPalette *dark_palette,
+                                  const OverlayPalette *light_palette);
 extern void  overlay_set_state_macos(int state);
 extern void  overlay_push_rms_macos(float rms);
+extern void  overlay_set_theme_macos(int mode,
+                                     const OverlayPalette *dark_palette,
+                                     const OverlayPalette *light_palette);
 extern void  overlay_show_macos(void);
 extern void  overlay_hide_macos(void);
 extern void  overlay_set_context_menu_callbacks_macos(void);
 extern void  overlay_terminate_macos(void);
 */
 import "C"
+
+import "github.com/aploide/sussurro/internal/config"
 
 var (
 	contextMenuOpenSettings func()
@@ -47,8 +54,35 @@ func overlaySetContextMenuCallbacks(openSettings, quit func()) {
 type darwinOverlay struct{}
 
 func newOverlay() Overlay {
-	C.overlay_create_macos()
+	dark := nativeOverlayPalette(darwinDarkOverlayPalette)
+	light := nativeOverlayPalette(lightOverlayPalette)
+	C.overlay_create_macos(&dark, &light)
 	return &darwinOverlay{}
+}
+
+func nativeOverlayColor(color overlayColor) C.OverlayColor {
+	return C.OverlayColor{r: C.double(color.R), g: C.double(color.G), b: C.double(color.B), a: C.double(color.A)}
+}
+
+func nativeOverlayPalette(palette overlayPalette) C.OverlayPalette {
+	return C.OverlayPalette{
+		background:   nativeOverlayColor(palette.Background),
+		border:       nativeOverlayColor(palette.Border),
+		primary:      nativeOverlayColor(palette.Primary),
+		secondary:    nativeOverlayColor(palette.Secondary),
+		provisional:  nativeOverlayColor(palette.Provisional),
+		track:        nativeOverlayColor(palette.Track),
+		fill:         nativeOverlayColor(palette.Fill),
+		warning:      nativeOverlayColor(palette.Warning),
+		shimmer_base: nativeOverlayColor(palette.ShimmerBase),
+		shimmer_peak: nativeOverlayColor(palette.ShimmerPeak),
+	}
+}
+
+func (o *darwinOverlay) SetTheme(theme config.Theme) {
+	dark := nativeOverlayPalette(darwinDarkOverlayPalette)
+	light := nativeOverlayPalette(lightOverlayPalette)
+	C.overlay_set_theme_macos(C.int(overlayThemeMode(theme)), &dark, &light)
 }
 
 func (o *darwinOverlay) Show() {

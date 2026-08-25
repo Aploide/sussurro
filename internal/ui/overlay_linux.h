@@ -5,6 +5,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include "overlay_state.h"
+#include "overlay_palette.h"
 
 /* Conditionally include gtk-layer-shell */
 #ifdef HAVE_GTK_LAYER_SHELL
@@ -37,12 +38,6 @@
 #define PANEL_MIN_MAX_HEIGHT 320
 #define OVERLAY_RADIUS    26.0
 #define ITEM_COUNT         7
-
-/* ---- Colors (#1A1A1A @ 90%) ---- */
-#define BG_R  0.102
-#define BG_G  0.102
-#define BG_B  0.102
-#define BG_A  0.90
 
 /* ---- Bar parameters ---- */
 #define BAR_WIDTH       5.0
@@ -105,10 +100,18 @@ typedef struct {
     double     fill;
 } IdleFillArg;
 
+typedef struct {
+    GtkWidget      *win;
+    int             mode;
+    OverlayPalette  dark_palette;
+    OverlayPalette  light_palette;
+} IdleThemeArg;
+
 /* ---- Public API ---- */
 
 /* Create the overlay window (layer-shell if possible, else always-on-top fallback) */
-GtkWidget *overlay_create(void);
+GtkWidget *overlay_create(const OverlayPalette *dark_palette,
+                          const OverlayPalette *light_palette);
 
 /* Install X11 global hotkey bound to the overlay (no-op on Wayland) */
 /* Installs the recording bindings. Either may be NULL or empty: push-to-talk
@@ -122,6 +125,9 @@ void overlay_install_hotkey(GtkWidget *win, const char *push_to_talk,
 void overlay_set_state_async(GtkWidget *win, int state);
 void overlay_push_rms_async(GtkWidget *win, float rms);
 void overlay_push_fill_async(GtkWidget *win, double fill);
+void overlay_set_theme_async(GtkWidget *win, int mode,
+                             const OverlayPalette *dark_palette,
+                             const OverlayPalette *light_palette);
 
 /* Idle callbacks (called by GLib event loop, not directly from Go) */
 gboolean idle_set_state(gpointer data);
