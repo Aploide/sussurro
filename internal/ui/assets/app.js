@@ -403,6 +403,11 @@ function renderDictionary(terms) {
         draft[index] = input.value;
         markDirty();
       };
+      input.onkeydown = (event) => {
+        if (event.key !== "Enter" || event.isComposing) return;
+        event.preventDefault();
+        save.click();
+      };
 
       const remove = document.createElement("button");
       remove.type = "button";

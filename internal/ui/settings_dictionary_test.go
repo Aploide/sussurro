@@ -82,6 +82,20 @@ func TestDictionaryBridgeRejectsInvalidTermsWithoutApplying(t *testing.T) {
 	}
 }
 
+func TestDictionaryEnterUsesTheVisibleSavePath(t *testing.T) {
+	js := readAsset(t, "app.js")
+	for _, want := range []string{
+		`input.onkeydown = (event) => {`,
+		`if (event.key !== "Enter" || event.isComposing) return;`,
+		"event.preventDefault();",
+		"save.click();",
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("dictionary keyboard save path is missing %q", want)
+		}
+	}
+}
+
 func TestDictionaryInitialDataOwnsItsSlice(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.App.Dictionary = []string{"Sussurro"}
