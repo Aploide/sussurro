@@ -79,7 +79,7 @@ appearance:
 when it changes while Sussurro is running. `light` and `dark` override that
 preference. The same choice is available under **Settings → Appearance** and
 is saved immediately. The native overlay and Settings window share this value,
-so neither needs a restart after the live overlay callback is connected.
+so neither needs a restart.
 
 Set `SUSSURRO_APPEARANCE_THEME` to override the file for one process.
 

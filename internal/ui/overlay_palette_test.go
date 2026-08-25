@@ -72,11 +72,19 @@ func TestLightOverlayTextAndWaveformContrastAcrossDesktopBackdrops(t *testing.T)
 	for name, backdrop := range backdrops {
 		background := composite(lightOverlayPalette.Background, backdrop)
 		for role, foreground := range map[string]overlayColor{
-			"text": lightOverlayPalette.Primary, "waveform": lightOverlayPalette.Primary,
+			"text":             lightOverlayPalette.Primary,
+			"waveform":         lightOverlayPalette.Primary,
+			"status":           lightOverlayPalette.Secondary,
+			"provisional text": lightOverlayPalette.Provisional,
+			"shimmer base":     lightOverlayPalette.ShimmerBase,
 		} {
 			painted := composite(foreground, background)
-			if ratio := contrastRatio(painted, background); ratio < 7 {
-				t.Errorf("%s on %s contrast = %.2f, want at least 7:1", role, name, ratio)
+			minimum := 4.5
+			if role == "text" || role == "waveform" {
+				minimum = 7
+			}
+			if ratio := contrastRatio(painted, background); ratio < minimum {
+				t.Errorf("%s on %s contrast = %.2f, want at least %.1f:1", role, name, ratio, minimum)
 			}
 		}
 	}
@@ -181,6 +189,10 @@ func TestNativeOverlayPaletteContract(t *testing.T) {
 	}
 
 	darwin := readOverlaySource(t, "overlay_darwin.m")
+	if !strings.Contains(darwin, "effect.appearance = nil;") ||
+		!strings.Contains(darwin, "viewDidChangeEffectiveAppearance") {
+		t.Error("overlay_darwin.m forces an appearance in System mode, which blocks live system changes")
+	}
 	if strings.Count(darwin, "CGContextSetRGBFillColor(") != 1 ||
 		strings.Count(darwin, "CGContextSetRGBStrokeColor(") != 1 ||
 		strings.Contains(darwin, "colorWithWhite:") || strings.Contains(darwin, "whiteColor") {
@@ -189,6 +201,36 @@ func TestNativeOverlayPaletteContract(t *testing.T) {
 	if strings.Count(darwin, "CGContextClearRect(") != 1 ||
 		strings.Count(darwin, "[NSColor clearColor]") != 1 {
 		t.Error("overlay_darwin.m structural transparent clears changed or became visible colours")
+	}
+}
+
+func TestNativeThemeWatchersKeepSystemModeLive(t *testing.T) {
+	linux := readOverlaySource(t, "overlay_linux.c")
+	subscribe := strings.Index(linux, "g_dbus_connection_signal_subscribe(")
+	read := strings.Index(linux, "g_dbus_connection_call(")
+	if subscribe < 0 || read < 0 || subscribe > read || strings.Contains(linux, "g_dbus_connection_call_sync(") {
+		t.Error("Linux must subscribe before reading the portal preference asynchronously")
+	}
+
+	windows := readOverlaySource(t, "overlay_windows.c")
+	if !strings.Contains(windows, "read_system_dark_apps(BOOL *dark)") ||
+		!strings.Contains(windows, "if (read_system_dark_apps(&dark))") ||
+		!strings.Contains(windows, "od->system_dark   = TRUE; /* preserve the existing dark UI when unknown */") {
+		t.Error("Windows must distinguish an unknown registry value from an explicit light preference")
+	}
+
+	darwin := readOverlaySource(t, "overlay_darwin.m")
+	if !strings.Contains(darwin, "[NSApplication sharedApplication]") ||
+		!strings.Contains(darwin, "effect.appearance = nil;") {
+		t.Error("macOS must initialize AppKit and inherit appearance in System mode")
+	}
+
+	mainSource, err := os.ReadFile(filepath.Join("..", "..", "cmd", "sussurro", "main.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(mainSource), "runtime.LockOSThread()") {
+		t.Error("UI startup is not pinned to the OS thread that owns native windows")
 	}
 }
 

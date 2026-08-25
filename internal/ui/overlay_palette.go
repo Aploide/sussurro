@@ -31,7 +31,7 @@ var lightOverlayPalette = overlayPalette{
 	Track:       overlayColor{R: 0.075, G: 0.075, B: 0.075, A: 0.18},
 	Fill:        overlayColor{R: 0.075, G: 0.075, B: 0.075, A: 0.58},
 	Warning:     overlayColor{R: 0.71, G: 0.22, B: 0.035, A: 1.0},
-	ShimmerBase: overlayColor{R: 0.075, G: 0.075, B: 0.075, A: 0.48},
+	ShimmerBase: overlayColor{R: 0.075, G: 0.075, B: 0.075, A: 0.62},
 	ShimmerPeak: overlayColor{R: 0.075, G: 0.075, B: 0.075, A: 0.92},
 }
 

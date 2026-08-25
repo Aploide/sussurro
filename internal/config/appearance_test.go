@@ -153,6 +153,27 @@ func TestSaveThemeCreatesAppearanceSection(t *testing.T) {
 	}
 }
 
+func TestSaveThemeRejectsFlowStyleWithoutCorruptingConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	body := legacyConfig + "appearance: {theme: system}\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := loadAppearanceConfigPath(t, path)
+
+	err := SaveTheme(cfg, ThemeLight)
+	if err == nil || !strings.Contains(err.Error(), "YAML structure") {
+		t.Fatalf("SaveTheme() error = %v, want unsupported structure error", err)
+	}
+	written, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(written) != body {
+		t.Errorf("failed SaveTheme() corrupted config:\n%s", written)
+	}
+}
+
 func TestSaveThemeRejectsInvalidValueBeforeWriting(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(legacyConfig), 0o600); err != nil {

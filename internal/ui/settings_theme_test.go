@@ -104,6 +104,25 @@ func TestSaveThemeRejectsInvalidValueWithoutChangingLiveState(t *testing.T) {
 	}
 }
 
+func TestSaveThemeStaysSavedWhenLiveCallbackPanics(t *testing.T) {
+	mgr, path := loadThemeManager(t)
+	mgr.SetThemeCallback(func(config.Theme) { panic("native theme failure") })
+
+	if got := saveTheme(mgr, "light"); got != "ok" {
+		t.Fatalf("saveTheme() = %q, want ok", got)
+	}
+	if mgr.cfg.Appearance.Theme != config.ThemeLight {
+		t.Errorf("live config theme = %q, want light", mgr.cfg.Appearance.Theme)
+	}
+	written, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(written), `theme: 'light'`) {
+		t.Errorf("saved config has no light theme:\n%s", written)
+	}
+}
+
 func TestThemeCallbacksAreScopedToTheirManager(t *testing.T) {
 	first, _ := loadThemeManager(t)
 	second, _ := loadThemeManager(t)

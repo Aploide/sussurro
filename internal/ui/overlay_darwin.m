@@ -113,8 +113,7 @@ static NSColor *native_color(OverlayColor color, double alphaScale)
 
 - (BOOL)systemIsDark
 {
-    NSAppearance *appearance = self.effectiveAppearance ?: NSApp.effectiveAppearance;
-    NSString *match = [appearance bestMatchFromAppearancesWithNames:@[
+    NSString *match = [NSApp.effectiveAppearance bestMatchFromAppearancesWithNames:@[
         NSAppearanceNameDarkAqua, NSAppearanceNameAqua
     ]];
     return [match isEqualToString:NSAppearanceNameDarkAqua];
@@ -122,14 +121,22 @@ static NSColor *native_color(OverlayColor color, double alphaScale)
 
 - (void)applyResolvedTheme
 {
-    BOOL dark = themeMode == OVERLAY_THEME_DARK ||
-        (themeMode == OVERLAY_THEME_SYSTEM && [self systemIsDark]);
-    palette = dark ? darkPalette : lightPalette;
-
     NSVisualEffectView *effect = [self.superview isKindOfClass:[NSVisualEffectView class]]
         ? (NSVisualEffectView *)self.superview : nil;
-    effect.appearance = [NSAppearance appearanceNamed:
-        dark ? NSAppearanceNameVibrantDark : NSAppearanceNameVibrantLight];
+    BOOL followsSystem = themeMode == OVERLAY_THEME_SYSTEM;
+    if (followsSystem) {
+        /* An explicit appearance stops AppKit propagating later system changes
+           to the view. Clear it before resolving System mode. */
+        effect.appearance = nil;
+    }
+
+    BOOL dark = themeMode == OVERLAY_THEME_DARK ||
+        (followsSystem && [self systemIsDark]);
+    palette = dark ? darkPalette : lightPalette;
+    if (!followsSystem) {
+        effect.appearance = [NSAppearance appearanceNamed:
+            dark ? NSAppearanceNameVibrantDark : NSAppearanceNameVibrantLight];
+    }
     self.window.hasShadow = dark ? NO : YES;
     [self setNeedsDisplay:YES];
 }
@@ -360,6 +367,9 @@ static SussurroView  *g_view  = nil;
 void* overlay_create_macos(const OverlayPalette *dark_palette,
                            const OverlayPalette *light_palette)
 {
+    /* The overlay is created before the webview, so initialise AppKit before
+       consulting NSApp.effectiveAppearance. */
+    [NSApplication sharedApplication];
     OverlayPalette dark = *dark_palette;
     OverlayPalette light = *light_palette;
     NSScreen *screen = [NSScreen mainScreen];

@@ -674,6 +674,30 @@ static void on_style_updated(GtkWidget *widget, gpointer user_data)
     if (!od->portal_known) update_system_dark(od, gtk_style_is_dark(widget));
 }
 
+static void on_portal_read_ready(GObject *source_object,
+                                 GAsyncResult *result,
+                                 gpointer user_data)
+{
+    OverlayData *od = (OverlayData *)user_data;
+    GError *error = NULL;
+    GVariant *reply = g_dbus_connection_call_finish(
+        G_DBUS_CONNECTION(source_object), result, &error);
+    if (!reply) {
+        g_clear_error(&error);
+        return;
+    }
+
+    GVariant *wrapped = NULL;
+    g_variant_get(reply, "(@v)", &wrapped);
+    gboolean dark = FALSE;
+    if (portal_color_scheme(wrapped, &dark)) {
+        od->portal_known = TRUE;
+        update_system_dark(od, dark);
+    }
+    g_variant_unref(wrapped);
+    g_variant_unref(reply);
+}
+
 static void watch_system_appearance(OverlayData *od)
 {
     GError *error = NULL;
@@ -684,31 +708,9 @@ static void watch_system_appearance(OverlayData *od)
         return;
     }
 
-    GVariant *reply = g_dbus_connection_call_sync(
-        od->portal_connection,
-        "org.freedesktop.portal.Desktop",
-        "/org/freedesktop/portal/desktop",
-        "org.freedesktop.portal.Settings",
-        "Read",
-        g_variant_new("(ss)", "org.freedesktop.appearance", "color-scheme"),
-        G_VARIANT_TYPE("(v)"),
-        G_DBUS_CALL_FLAGS_NONE,
-        300,
-        NULL,
-        &error);
-    if (reply) {
-        GVariant *wrapped = NULL;
-        g_variant_get(reply, "(@v)", &wrapped);
-        gboolean dark = FALSE;
-        od->portal_known = portal_color_scheme(wrapped, &dark);
-        if (od->portal_known) od->system_dark = dark;
-        g_variant_unref(wrapped);
-        g_variant_unref(reply);
-    } else {
-        g_clear_error(&error);
-    }
-    if (!od->portal_known) od->system_dark = gtk_style_is_dark(od->window);
-
+    /* Subscribe before reading so a change cannot fall into the gap between
+       the initial value and the live watcher. The read is asynchronous: a
+       cold portal may take time to activate, but it must not delay startup. */
     od->portal_subscription = g_dbus_connection_signal_subscribe(
         od->portal_connection,
         "org.freedesktop.portal.Desktop",
@@ -720,6 +722,21 @@ static void watch_system_appearance(OverlayData *od)
         on_portal_setting_changed,
         od,
         NULL);
+
+    update_system_dark(od, gtk_style_is_dark(od->window));
+    g_dbus_connection_call(
+        od->portal_connection,
+        "org.freedesktop.portal.Desktop",
+        "/org/freedesktop/portal/desktop",
+        "org.freedesktop.portal.Settings",
+        "Read",
+        g_variant_new("(ss)", "org.freedesktop.appearance", "color-scheme"),
+        G_VARIANT_TYPE("(v)"),
+        G_DBUS_CALL_FLAGS_NONE,
+        -1,
+        NULL,
+        on_portal_read_ready,
+        od);
 }
 
 /* ------------------------------------------------------------------ */

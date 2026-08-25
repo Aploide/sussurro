@@ -14,6 +14,7 @@
 #include <windows.h>
 #include <objidl.h>
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 #include <gdiplus.h>
 
@@ -83,7 +84,7 @@ static ARGB overlay_argb(OverlayColor color, double alpha_scale)
     return ((ARGB)a << 24) | ((ARGB)r << 16) | ((ARGB)g << 8) | (ARGB)b;
 }
 
-static BOOL system_uses_dark_apps(void)
+static BOOL read_system_dark_apps(BOOL *dark)
 {
     HKEY key = NULL;
     LONG result = RegOpenKeyExW(
@@ -100,7 +101,9 @@ static BOOL system_uses_dark_apps(void)
     result = RegQueryValueExW(key, L"AppsUseLightTheme", NULL, &type,
                               (BYTE *)&light, &size);
     RegCloseKey(key);
-    return result == ERROR_SUCCESS && type == REG_DWORD ? light == 0 : FALSE;
+    if (result != ERROR_SUCCESS || type != REG_DWORD) return FALSE;
+    *dark = light == 0;
+    return TRUE;
 }
 
 static BOOL resolved_dark(const OverlayData *od)
@@ -358,9 +361,12 @@ static LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPAR
     case WM_SETTINGCHANGE:
     case WM_THEMECHANGED:
         if (od) {
-            od->system_dark = system_uses_dark_apps();
-            apply_resolved_palette(od);
-            render_frame(od);
+            BOOL dark = FALSE;
+            if (read_system_dark_apps(&dark)) {
+                od->system_dark = dark;
+                apply_resolved_palette(od);
+                render_frame(od);
+            }
         }
         return 0;
 
@@ -443,7 +449,8 @@ void *overlay_create(const OverlayPalette *dark_palette,
     od->pos_x         = x;
     od->pos_y         = y;
     od->theme_mode    = OVERLAY_THEME_SYSTEM;
-    od->system_dark   = system_uses_dark_apps();
+    od->system_dark   = TRUE; /* preserve the existing dark UI when unknown */
+    read_system_dark_apps(&od->system_dark);
     od->dark_palette  = *dark_palette;
     od->light_palette = *light_palette;
     apply_resolved_palette(od);

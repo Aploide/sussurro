@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 
 	"github.com/aploide/sussurro/internal/asr"
@@ -41,8 +42,11 @@ func main() {
 		// that golang.design/x/hotkey works correctly on X11 and macOS.
 		mainthread.Init(run)
 	} else {
-		// UI mode: gtk_main() / [NSApp run] owns the main thread.
-		// Hotkeys on X11 are handled via GDK XGrabKey (no mainthread.Init needed).
+		// Native windows and their event loops must stay on the OS thread that
+		// created them. Hotkeys on X11 use GDK XGrabKey, so the CLI wrapper is
+		// unnecessary in UI mode.
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
 		run()
 	}
 }

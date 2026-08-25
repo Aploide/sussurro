@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"os"
+
+	"go.yaml.in/yaml/v3"
 )
 
 // Theme controls whether app surfaces follow the desktop colour scheme or use
@@ -60,6 +62,10 @@ func SaveTheme(cfg *Config, theme Theme) error {
 	updated, err := SetNestedValue(string(data), "appearance.theme", YAMLString(string(theme)))
 	if err != nil {
 		return fmt.Errorf("set appearance.theme: %w", err)
+	}
+	var document yaml.Node
+	if err := yaml.Unmarshal([]byte(updated), &document); err != nil {
+		return fmt.Errorf("appearance.theme cannot be saved without changing this config's YAML structure: %w", err)
 	}
 	if err := writeConfigAtomically(configFile, []byte(updated)); err != nil {
 		return fmt.Errorf("write config atomically: %w", err)
