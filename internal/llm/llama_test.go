@@ -211,6 +211,18 @@ func TestCleanupAppliesTheDictionary(t *testing.T) {
 	}
 }
 
+func TestNormalizeDictionaryCannotCreateTranscription(t *testing.T) {
+	engine := &Engine{}
+	engine.SetDictionary([]string{"dolt", "sshfs"})
+
+	if got := engine.NormalizeDictionary(""); got != "" {
+		t.Errorf("NormalizeDictionary(empty) = %q, want empty", got)
+	}
+	if got := engine.NormalizeDictionary("Mount with sshfs."); got != "Mount with sshfs." {
+		t.Errorf("NormalizeDictionary(recognized text) = %q", got)
+	}
+}
+
 func TestSetDictionaryReplacesAndClearsLiveCleanupVocabulary(t *testing.T) {
 	engine := &Engine{}
 	terms := []string{"Kubernetes"}

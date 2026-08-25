@@ -125,10 +125,10 @@ func run() {
 	}
 	defer llmEngine.Close()
 
-	// Prime the decoder and install the same exact spellings for cleanup.
-	// Keeping both consumers behind one fan-out also makes later Settings saves
-	// follow this same path.
-	dictionary := dictionaryFanout{asrEngine, llmEngine}
+	// Dictionary terms are normalized only after recognition. Using them as a
+	// Whisper initial prompt can turn ambient noise into a phantom dictionary
+	// term (sussurro-99o).
+	dictionary := dictionaryFanout{llmEngine}
 	dictionary.SetDictionary(cfg.App.Dictionary)
 	llmEngine.SetExtendedPrompt(cfg.Models.LLM.ExtendedPrompt)
 

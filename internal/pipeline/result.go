@@ -57,7 +57,10 @@ type segmentingTranscriber interface {
 	SegmentsWithContext(samples []float32, preceding string) ([]asr.Segment, error)
 }
 
-// cleaner post-processes raw transcriptions.
+// cleaner post-processes raw transcriptions. Dictionary normalization is
+// separate from model cleanup so the configured spellings remain available on
+// the fast raw-output path.
 type cleaner interface {
 	CleanupText(rawText string) (string, error)
+	NormalizeDictionary(text string) string
 }

@@ -33,11 +33,13 @@ app:
     - "Kubernetes"
 ```
 
-`dictionary` lists names and terms Whisper should prefer while decoding and
-the cleanup stage must spell exactly as written. If Whisper still mishears one
-of them, such as "Susserow" for "Sussurro", cleanup replaces it with the saved
-spelling. The list can also be edited under **Settings → Dictation → Personal
-dictionary**; changes saved there apply to the next dictation without a restart.
+`dictionary` lists names and terms that must use the saved spelling. Sussurro
+normalizes recognized text deterministically after Whisper returns it, including
+on the fast raw-output path. It deliberately does not put vocabulary into
+Whisper's initial prompt: on ambient noise, Whisper can decode that prompt as
+speech that was never said. The list can also be edited under **Settings →
+Dictation → Personal dictionary**; changes saved there apply to the next
+dictation without a restart.
 
 ### Cleanup behavior
 
@@ -59,8 +61,9 @@ contextual examples. Set `models.llm.extended_prompt: true` with a general
 instruct model to use narrower correction-only instructions instead. The same
 output validator applies to both modes.
 
-When cleanup is enabled, the personal dictionary is applied after contextual
-correction, followed by deterministic formatting of dictated enumerations
+The personal dictionary is applied after recognition regardless of whether LLM
+cleanup is enabled. With cleanup enabled, dictionary normalization follows
+contextual correction and deterministic formatting turns dictated enumerations
 ("first... second... third...") into numbered lines. A spoken series must start
 with "first" and contain at least two in-order markers to trigger.
 

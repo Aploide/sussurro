@@ -800,13 +800,19 @@ func (p *Pipeline) finishSegment(text, minimumText string, start time.Time, asrD
 		cleanupDuration = time.Since(cleanupStart)
 		if err != nil {
 			p.log.Error("LLM cleanup failed", "error", err)
-			// Fallback to raw text
-			cleanedText = text
+			// Preserve deterministic dictionary normalization even when model
+			// inference fails.
+			cleanedText = p.llmEngine.NormalizeDictionary(text)
 		} else {
 			cleaned = true
 		}
 	} else {
 		p.log.Debug("Skipping LLM cleanup (raw output enabled)")
+		// The personal dictionary is deterministic and must remain useful on
+		// the fast path. Applying it here can only normalize recognised text;
+		// putting the same terms in Whisper's prompt allowed ambient noise to
+		// materialize a dictionary entry as speech (sussurro-99o).
+		cleanedText = p.llmEngine.NormalizeDictionary(text)
 	}
 
 	if finalPassShorter(cleanedText, minimumText) {

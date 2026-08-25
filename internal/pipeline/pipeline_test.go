@@ -44,9 +44,11 @@ func (s *sequenceTranscriber) Transcribe([]float32) (string, error) {
 }
 
 type stubCleaner struct {
-	text  string
-	err   error
-	calls int
+	text            string
+	err             error
+	calls           int
+	dictionaryText  string
+	dictionaryCalls int
 }
 
 func (s *stubCleaner) CleanupText(rawText string) (string, error) {
@@ -57,6 +59,14 @@ func (s *stubCleaner) CleanupText(rawText string) (string, error) {
 	return s.text, nil
 }
 
+func (s *stubCleaner) NormalizeDictionary(text string) string {
+	s.dictionaryCalls++
+	if s.dictionaryText != "" {
+		return s.dictionaryText
+	}
+	return text
+}
+
 type passthroughCleaner struct {
 	calls int
 }
@@ -65,6 +75,8 @@ func (c *passthroughCleaner) CleanupText(text string) (string, error) {
 	c.calls++
 	return text, nil
 }
+
+func (c *passthroughCleaner) NormalizeDictionary(text string) string { return text }
 
 type stubContext struct {
 	info *ctxProvider.ContextInfo
@@ -148,6 +160,9 @@ func TestProcessSegmentRawModeSkipsCleanup(t *testing.T) {
 	if llm.calls != 0 {
 		t.Fatalf("CleanupText called %d times in raw mode, want 0", llm.calls)
 	}
+	if llm.dictionaryCalls != 1 {
+		t.Fatalf("NormalizeDictionary called %d times in raw mode, want 1", llm.dictionaryCalls)
+	}
 	if len(consumer.results) != 1 {
 		t.Fatalf("got %d results, want 1", len(consumer.results))
 	}
@@ -160,6 +175,27 @@ func TestProcessSegmentRawModeSkipsCleanup(t *testing.T) {
 	}
 }
 
+func TestProcessSegmentRawModeNormalizesRecognizedDictionaryTerm(t *testing.T) {
+	asr := &stubTranscriber{text: "Mount it with SSH FS."}
+	llm := &stubCleaner{dictionaryText: "Mount it with sshfs."}
+	consumer := &recordingConsumer{}
+
+	p := newTestPipeline(t, asr, llm, stubContext{info: &ctxProvider.ContextInfo{}})
+	p.SetResultConsumer(consumer)
+	p.SetSkipLLMCleanup(true)
+	run(p, samplesFor(3))
+
+	if llm.calls != 0 {
+		t.Fatalf("CleanupText called %d times in raw mode, want 0", llm.calls)
+	}
+	if len(consumer.results) != 1 {
+		t.Fatalf("got %d results, want 1", len(consumer.results))
+	}
+	if got := consumer.results[0].Text; got != llm.dictionaryText {
+		t.Errorf("Text = %q, want dictionary-normalized %q", got, llm.dictionaryText)
+	}
+}
+
 func TestProcessSegmentCleanupFailureFallsBackToRaw(t *testing.T) {
 	asr := &stubTranscriber{text: "the quick brown fox"}
 	llm := &stubCleaner{err: errors.New("model unavailable")}
@@ -169,6 +205,9 @@ func TestProcessSegmentCleanupFailureFallsBackToRaw(t *testing.T) {
 	p.SetResultConsumer(consumer)
 	run(p, samplesFor(3))
 
+	if llm.dictionaryCalls != 1 {
+		t.Fatalf("NormalizeDictionary called %d times after cleanup failure, want 1", llm.dictionaryCalls)
+	}
 	if len(consumer.results) != 1 {
 		t.Fatalf("got %d results, want 1", len(consumer.results))
 	}

@@ -43,7 +43,7 @@ func TestPromptIsClearedWhenNoDictionaryIsConfigured(t *testing.T) {
 	e := &Engine{context: ctx}
 
 	e.mutex.Lock()
-	e.context.SetInitialPrompt(composePrompt(e.dictionary, "text from a streaming pass"))
+	e.context.SetInitialPrompt("text from a streaming pass")
 	e.resetPromptLocked()
 	e.mutex.Unlock()
 
@@ -53,47 +53,22 @@ func TestPromptIsClearedWhenNoDictionaryIsConfigured(t *testing.T) {
 	}
 }
 
-// With a dictionary the standing prompt is the dictionary itself, not the
-// preceding text and not nothing: the terms must survive for later calls.
-func TestPromptFallsBackToTheDictionary(t *testing.T) {
+// A vocabulary list must never become a standing prompt. Whisper can decode
+// an initial prompt as a continuation when the input is ambient noise; in the
+// observed failure, a configured `sshfs` became both the streaming partial and
+// the delivered transcript even though nobody said it (sussurro-99o).
+// Dictionary normalization therefore belongs after recognition, where it can
+// only change text Whisper actually returned.
+func TestPromptResetNeverRetainsVocabulary(t *testing.T) {
 	ctx := &recordingContext{}
-	e := &Engine{context: ctx, dictionary: []string{"Sussurro", "whisper.cpp"}}
+	e := &Engine{context: ctx}
 
 	e.mutex.Lock()
-	e.context.SetInitialPrompt(composePrompt(e.dictionary, "text from a streaming pass"))
+	e.context.SetInitialPrompt("dolt, sshfs")
 	e.resetPromptLocked()
 	e.mutex.Unlock()
 
-	if got, want := ctx.last(), "Sussurro, whisper.cpp"; got != want {
-		t.Errorf("prompt reset to %q, want %q", got, want)
-	}
-}
-
-func TestSetDictionaryCanReplaceAndClearTheLivePrompt(t *testing.T) {
-	ctx := &recordingContext{}
-	e := &Engine{context: ctx}
-	terms := []string{"Sussurro"}
-
-	e.SetDictionary(terms)
-	terms[0] = "mutated by caller"
-	if got := composePrompt(e.dictionary, ""); got != "Sussurro" {
-		t.Errorf("dictionary aliases caller's slice: %q", got)
-	}
-
-	e.SetDictionary(nil)
 	if got := ctx.last(); got != "" {
-		t.Errorf("prompt after clearing dictionary = %q, want empty", got)
-	}
-	if len(e.dictionary) != 0 {
-		t.Errorf("dictionary after clearing = %#v, want empty", e.dictionary)
-	}
-}
-
-// Dictionary terms lead so they survive whisper truncating the prompt to
-// n_text_ctx/2; the preceding transcript is the part that may be cut.
-func TestComposePromptPutsDictionaryFirst(t *testing.T) {
-	got := composePrompt([]string{"Sussurro"}, "some preceding text")
-	if want := "Sussurro. some preceding text"; got != want {
-		t.Errorf("composePrompt = %q, want %q", got, want)
+		t.Errorf("prompt reset to %q, want empty", got)
 	}
 }

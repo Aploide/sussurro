@@ -60,10 +60,6 @@ type Engine struct {
 	context whisper.Context
 	mutex   sync.Mutex
 	debug   bool
-
-	// dictionary is retained rather than only pushed into the context, so a
-	// per-call prompt can be composed from it plus preceding transcript text.
-	dictionary []string
 }
 
 // NewEngine initializes the Whisper model from a file path
@@ -153,29 +149,6 @@ func (e *Engine) EnableVAD(modelPath string, thresholds ...float32) error {
 	return nil
 }
 
-// SetDictionary primes the decoder with the user's vocabulary.
-//
-// whisper conditions on an initial prompt, so listing domain terms makes it
-// prefer them while decoding — "Base" over "bass" in a blockchain sentence,
-// and vice versa in a musical one. That judgement belongs here, where the
-// audio is: a post-hoc text substitution cannot weigh acoustics against
-// context, and cannot change word boundaries.
-//
-// Safe to call while the engine is running; takes effect on the next
-// transcription.
-func (e *Engine) SetDictionary(terms []string) {
-	e.mutex.Lock()
-	defer e.mutex.Unlock()
-
-	// Own the slice so a settings refresh cannot mutate the prompt while it is
-	// being composed. Setting an empty prompt is intentional: removing the last
-	// entry must clear the vocabulary left on the shared whisper context.
-	e.dictionary = append([]string(nil), terms...)
-	// A comma-separated list is the form whisper's own examples use for
-	// vocabulary priming.
-	e.context.SetInitialPrompt(strings.Join(e.dictionary, ", "))
-}
-
 // TranscribeWithContext transcribes samples while conditioning the decoder on
 // text that came before them.
 //
@@ -187,7 +160,7 @@ func (e *Engine) SetDictionary(terms []string) {
 //
 // The prompt is advisory. whisper may still decode against it, and it truncates
 // the prompt to n_text_ctx/2 (224 tokens), so a long preceding transcript is cut
-// by the model. Dictionary terms are placed first to survive that truncation.
+// by the model.
 func (e *Engine) TranscribeWithContext(samples []float32, preceding string) (string, error) {
 	// The prompt is set on the shared whisper context, so it must not be
 	// changed by another caller between being set and being used. The lock is
@@ -195,10 +168,8 @@ func (e *Engine) TranscribeWithContext(samples []float32, preceding string) (str
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
-	if prompt := composePrompt(e.dictionary, preceding); prompt != "" {
+	if prompt := strings.TrimSpace(preceding); prompt != "" {
 		e.context.SetInitialPrompt(prompt)
-		// Restore the standing prompt for callers that supply no context of
-		// their own, whether or not a dictionary exists.
 		defer e.resetPromptLocked()
 	}
 
@@ -215,7 +186,7 @@ func (e *Engine) SegmentsWithContext(samples []float32, preceding string) ([]Seg
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
-	if prompt := composePrompt(e.dictionary, preceding); prompt != "" {
+	if prompt := strings.TrimSpace(preceding); prompt != "" {
 		e.context.SetInitialPrompt(prompt)
 		defer e.resetPromptLocked()
 	}
@@ -223,8 +194,7 @@ func (e *Engine) SegmentsWithContext(samples []float32, preceding string) ([]Seg
 	return e.segmentsLocked(samples)
 }
 
-// resetPromptLocked returns the context to its standing prompt: the dictionary
-// alone, or nothing when there is none.
+// resetPromptLocked clears the per-call preceding-text prompt.
 //
 // The empty case is not a no-op and must not be skipped. Leaving a per-call
 // prompt set leaks it into the next caller, and the next caller is the final
@@ -233,26 +203,7 @@ func (e *Engine) SegmentsWithContext(samples []float32, preceding string) ([]Seg
 // audio and the delivered text arrived with its sentences repeated
 // (sussurro-fkd).
 func (e *Engine) resetPromptLocked() {
-	e.context.SetInitialPrompt(strings.Join(e.dictionary, ", "))
-}
-
-// composePrompt builds the initial prompt from vocabulary and preceding text.
-//
-// Dictionary terms lead: whisper truncates the prompt from the front of its
-// budget, and the terms are the part the user explicitly asked to be
-// recognised, so they must not be the part that is dropped.
-func composePrompt(dictionary []string, preceding string) string {
-	terms := strings.Join(dictionary, ", ")
-	preceding = strings.TrimSpace(preceding)
-
-	switch {
-	case terms != "" && preceding != "":
-		return terms + ". " + preceding
-	case terms != "":
-		return terms
-	default:
-		return preceding
-	}
+	e.context.SetInitialPrompt("")
 }
 
 // Transcribe processes the audio samples and returns the text

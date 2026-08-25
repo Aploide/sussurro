@@ -42,7 +42,7 @@ type Engine struct {
 
 // SetDictionary installs the user's personal vocabulary (from config
 // app.dictionary). It is safe to call while the engine is running and takes
-// effect on the next cleanup.
+// effect on the next normalization.
 func (e *Engine) SetDictionary(terms []string) {
 	e.dictionaryMu.Lock()
 	defer e.dictionaryMu.Unlock()
@@ -134,7 +134,15 @@ func (e *Engine) CleanupText(rawText string) (string, error) {
 	}
 
 	cleaned = e.correctMishearings(cleaned)
-	return listify(e.applyDictionary(cleaned)), nil
+	return listify(e.NormalizeDictionary(cleaned)), nil
+}
+
+// NormalizeDictionary applies configured spellings without model inference.
+// It runs even in raw-output mode: unlike a decoder prompt, this pass can only
+// transform words Whisper actually returned, so silence and ambient noise
+// cannot turn a dictionary entry into transcription.
+func (e *Engine) NormalizeDictionary(text string) string {
+	return e.applyDictionary(text)
 }
 
 // reOrdinal matches a sentence-leading spoken enumeration marker.
