@@ -46,11 +46,42 @@ function naturalSettingsHeight() {
   return Math.ceil(height);
 }
 
+// Retry budget for a viewport that has not yet reached its real width.
+const MAX_NARROW_RETRIES = 30;
+let narrowLayoutRetries = 0;
+
+// The narrowest viewport the settings layout is designed for. Must match
+// settingsContentWidth in settings.go, which is the width below which controls
+// overflow their rows; settings_assets_test.go pins the two together.
+const MIN_SETTINGS_WIDTH = 793;
+
 function requestSettingsSize() {
   if (typeof window.resizeSettingsWindow !== 'function') return;
   const width = Math.ceil(document.documentElement.clientWidth);
   const height = naturalSettingsHeight();
   if (!width || !height) return;
+
+  // Ignore a viewport narrower than the layout supports, but come back for
+  // another look. WebKit reports a transient sliver before the window reaches
+  // its real size, and every height measured against it is wrong twice over:
+  // bogus in itself, and inflated because the narrow width wraps the content.
+  // Sizing from one made the window jump tall and then visibly shrink once the
+  // true measurement arrived, e.g. 138x1074 followed by 794x613.
+  //
+  // Rescheduling matters as much as skipping: this is the only measurement the
+  // page takes on open, so simply returning leaves the window stuck at its
+  // startup minimum with nothing to widen it. See sussurro-bbz.
+  if (width < MIN_SETTINGS_WIDTH) {
+    // Bounded, because HintMin should prevent a genuinely narrow viewport and
+    // an unbounded retry would spin a rAF loop for the window's lifetime.
+    // A handful of frames is ample for WebKit to settle after a resize.
+    if (narrowLayoutRetries < MAX_NARROW_RETRIES) {
+      narrowLayoutRetries += 1;
+      scheduleSettingsLayout();
+    }
+    return;
+  }
+  narrowLayoutRetries = 0;
 
   const size = `${width}x${height}`;
   if (size === lastRequestedSettingsSize) return;

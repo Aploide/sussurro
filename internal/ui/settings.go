@@ -106,7 +106,15 @@ func (sw *settingsWindow) pushDownloadProgress(name string, pct float64) {
 // device pixels.
 func (sw *settingsWindow) resizeToContent(cssWidth, cssHeight int) {
 	sw.w.Dispatch(func() {
-		width, height := settingsSizeForContent(cssWidth, cssHeight, windowScale())
+		scale := windowScale()
+		width, height := settingsSizeForContent(cssWidth, cssHeight, scale)
+		// Logged because this call shrinks as readily as it grows: one frame
+		// of under-measured content snaps the window smaller with nothing to
+		// restore it, and that is invisible from the outside. See
+		// sussurro-bbz, where a transient 138px viewport did exactly that.
+		slog.Debug("Resizing the settings window to content",
+			"cssWidth", cssWidth, "cssHeight", cssHeight,
+			"scale", scale, "device", fmt.Sprintf("%dx%d", width, height))
 		sw.w.SetSize(width, height, webview.HintNone)
 	})
 }

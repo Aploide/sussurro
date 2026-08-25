@@ -2,9 +2,11 @@ package ui
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -277,7 +279,7 @@ func TestThemePalettesCoverOverridesAndSystemPreference(t *testing.T) {
 		`--surface2:             #222224`,
 		`--border:               #2e2e30`,
 		`--text:                 #e8e8ea`,
-		`--muted:                #6b6b70`,
+		`--muted:                #95959c`,
 		`--accent:               #30d158`,
 		`--red:                  #ff453a`,
 		`--blue:                 #0a84ff`,
@@ -290,7 +292,7 @@ func TestThemePalettesCoverOverridesAndSystemPreference(t *testing.T) {
 		`--preview-bg:           rgba(255, 255, 255, 0.05)`,
 		`--info-bg:              rgba(10, 132, 255, 0.10)`,
 		`--info-border:          rgba(10, 132, 255, 0.25)`,
-		`fill='%236b6b70'`,
+		`fill='%2395959c'`,
 	} {
 		if !strings.Contains(css, declaration) {
 			t.Errorf("dark palette no longer contains %q", declaration)
@@ -330,5 +332,93 @@ func TestExactlyOneTabStartsSelected(t *testing.T) {
 	}
 	if visible != 1 {
 		t.Errorf("%d panels start visible, want exactly 1", visible)
+	}
+}
+
+// hexColor parses a six-digit sRGB hex value into the normalized form the
+// overlay palette tests already work in, so both surfaces share one contrast
+// implementation.
+func hexColor(t *testing.T, hex string) overlayColor {
+	t.Helper()
+	hex = strings.TrimPrefix(hex, "#")
+	if len(hex) != 6 {
+		t.Fatalf("colour %q is not a six-digit hex value", hex)
+	}
+	channel := func(offset int) float64 {
+		value, err := strconv.ParseUint(hex[offset:offset+2], 16, 8)
+		if err != nil {
+			t.Fatalf("parsing colour %q: %v", hex, err)
+		}
+		return float64(value) / 255
+	}
+	return overlayColor{R: channel(0), G: channel(2), B: channel(4), A: 1}
+}
+
+// paletteValue reads one token from a palette block of the stylesheet.
+func paletteValue(t *testing.T, css, selector, token string) string {
+	t.Helper()
+	start := strings.Index(css, selector)
+	if start < 0 {
+		t.Fatalf("stylesheet has no %q block", selector)
+	}
+	block := css[start:]
+	if end := strings.Index(block, "}"); end >= 0 {
+		block = block[:end]
+	}
+	match := regexp.MustCompile(token + `:\s*(#[0-9a-fA-F]{6})`).FindStringSubmatch(block)
+	if match == nil {
+		t.Fatalf("%q block does not define %s as a hex colour", selector, token)
+	}
+	return match[1]
+}
+
+// Secondary text must stay legible against every surface it can sit on. A
+// pinned hex only catches drift; this catches a palette edit that looks fine
+// on --bg but fails on the raised surfaces, which is how --muted originally
+// shipped below the threshold on all three.
+func TestMutedTextMeetsContrastMinimums(t *testing.T) {
+	css := readAsset(t, "style.css")
+
+	// WCAG 2.1 AA for normal text. Every var(--muted) usage renders at
+	// 11-15px, so the 3:1 large-text allowance never applies here.
+	const minimumAA = 4.5
+
+	for _, palette := range []struct {
+		name     string
+		selector string
+	}{
+		{"dark", `:root[data-theme="dark"]`},
+		{"light", `:root[data-theme="light"]`},
+	} {
+		muted := hexColor(t, paletteValue(t, css, palette.selector, "--muted"))
+		for _, surface := range []string{"--bg", "--surface", "--surface2"} {
+			token := paletteValue(t, css, palette.selector, surface)
+			if ratio := contrastRatio(muted, hexColor(t, token)); ratio < minimumAA {
+				t.Errorf("%s palette: --muted on %s %s is %.2f:1, want at least %.1f:1",
+					palette.name, surface, token, ratio, minimumAA)
+			}
+		}
+	}
+}
+
+// The page refuses to measure a viewport narrower than the layout supports,
+// because a transient sliver yields a height that is wrong twice over: bogus
+// in itself, and inflated by the wrapping the narrow width causes. Sizing from
+// one made the window jump tall and then visibly shrink. The JS cannot import
+// the Go constant, so pin them together here rather than letting them drift.
+func TestPageMinimumWidthMatchesTheLayoutRequirement(t *testing.T) {
+	js := readAsset(t, "app.js")
+	want := fmt.Sprintf("const MIN_SETTINGS_WIDTH = %d;", settingsContentWidth)
+	if !strings.Contains(js, want) {
+		t.Errorf("app.js does not declare %q; it must match settingsContentWidth", want)
+	}
+	if !strings.Contains(js, "if (width < MIN_SETTINGS_WIDTH) {") {
+		t.Error("app.js does not reject a viewport narrower than MIN_SETTINGS_WIDTH")
+	}
+	// Skipping alone is not enough: this is the only measurement the page takes
+	// on open, so a narrow reading must reschedule or the window stays stuck at
+	// its startup minimum. That regression shipped once already.
+	if !strings.Contains(js, "narrowLayoutRetries") {
+		t.Error("app.js does not retry after a too-narrow measurement")
 	}
 }
