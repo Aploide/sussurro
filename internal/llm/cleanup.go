@@ -39,15 +39,23 @@ var fillers = map[string]bool{
 func removeFillers(text string) string {
 	fields := strings.Fields(text)
 	out := make([]string, 0, len(fields))
+	capitalizeNext := false
+	capitalizeWords := make(map[int]bool)
 
 	for _, word := range fields {
 		if isFiller(word) {
+			// Only case the word this deletion exposes. Scanning the complete
+			// transcript for sentence boundaries corrupts dotted abbreviations.
+			if len(out) == 0 || previousEndsStrongSentence(out) {
+				capitalizeNext = true
+			}
 			continue
 		}
 		// Collapse an immediate repetition ("the the the" -> "the"), which is
 		// a stutter rather than emphasis. Compared on the bare word so
 		// punctuation does not defeat the match.
-		if len(out) > 0 && sameWord(out[len(out)-1], word) {
+		if !capitalizeNext && len(out) > 0 && !previousEndsSentencePunctuation(out) &&
+			sameWord(out[len(out)-1], word) {
 			// Keep whichever copy carries the punctuation, so "the the."
 			// ends up as "the." rather than "the".
 			if len(bareWord(word)) < len(word) {
@@ -56,43 +64,54 @@ func removeFillers(text string) string {
 			continue
 		}
 		out = append(out, word)
+		if capitalizeNext {
+			capitalizeWords[len(out)-1] = true
+			capitalizeNext = false
+		}
 	}
 
-	return recapitalize(repairSpacing(strings.Join(out, " ")))
+	for i := range capitalizeWords {
+		out[i] = recapitalize(out[i])
+	}
+	return repairSpacing(strings.Join(out, " "))
 }
 
-// recapitalize restores a capital letter where deleting a filler exposed a
-// lowercase word at a sentence start: "Hello? Ah, no, ..." loses its
-// capitalised opener and leaves "Hello? no, ...".
-//
-// This changes case only, never which word was said, so it stays inside the
-// no-rewording contract. A word that is not all-lowercase is left alone, so
-// deliberate capitalisation and acronyms survive untouched.
+// recapitalize raises only the first all-lowercase word in text. Callers use
+// it on the one token exposed by a deleted sentence-opening filler, never on a
+// whole transcript whose periods may belong to abbreviations.
 func recapitalize(text string) string {
 	runes := []rune(text)
-	atSentenceStart := true
-
-	for i := 0; i < len(runes); i++ {
-		r := runes[i]
-
-		if atSentenceStart && unicode.IsLetter(r) {
-			if unicode.IsLower(r) && wordIsLower(runes, i) {
-				runes[i] = unicode.ToUpper(r)
-			}
-			atSentenceStart = false
+	for i, r := range runes {
+		if !unicode.IsLetter(r) {
 			continue
 		}
-
-		// A terminator opens the next sentence, once past any closing quote
-		// or bracket that belongs to the one just ended.
-		if r == '.' || r == '?' || r == '!' {
-			atSentenceStart = true
-		} else if !unicode.IsSpace(r) && r != '"' && r != '\'' && r != ')' && r != ']' {
-			atSentenceStart = false
+		if unicode.IsLower(r) && wordIsLower(runes, i) {
+			runes[i] = unicode.ToUpper(r)
 		}
+		break
 	}
-
 	return string(runes)
+}
+
+func previousEndsStrongSentence(words []string) bool {
+	mark := previousSentenceMark(words)
+	return mark == '?' || mark == '!'
+}
+
+func previousEndsSentencePunctuation(words []string) bool {
+	mark := previousSentenceMark(words)
+	return mark == '.' || mark == '?' || mark == '!'
+}
+
+func previousSentenceMark(words []string) rune {
+	previous := strings.TrimRightFunc(words[len(words)-1], func(r rune) bool {
+		return r == '"' || r == '\'' || unicode.Is(unicode.Pe, r) || unicode.Is(unicode.Pf, r)
+	})
+	if previous == "" {
+		return 0
+	}
+	runes := []rune(previous)
+	return runes[len(runes)-1]
 }
 
 // wordIsLower reports whether the word starting at i is entirely lowercase.
