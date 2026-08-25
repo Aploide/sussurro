@@ -125,10 +125,11 @@ func run() {
 	}
 	defer llmEngine.Close()
 
-	// Dictionary terms are normalized only after recognition. Using them as a
-	// Whisper initial prompt can turn ambient noise into a phantom dictionary
-	// term (sussurro-99o).
-	dictionary := dictionaryFanout{llmEngine}
+	// Prime Whisper for recognition and retain deterministic normalization for
+	// its output. Prompting is intentionally optimized for a correctly selected
+	// speech input; non-speech sources such as an output monitor can echo the
+	// vocabulary because Whisper treats an initial prompt as prior transcript.
+	dictionary := dictionaryFanout{asrEngine, llmEngine}
 	dictionary.SetDictionary(cfg.App.Dictionary)
 	llmEngine.SetExtendedPrompt(cfg.Models.LLM.ExtendedPrompt)
 

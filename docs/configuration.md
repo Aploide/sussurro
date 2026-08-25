@@ -33,13 +33,14 @@ app:
     - "Kubernetes"
 ```
 
-`dictionary` lists names and terms that must use the saved spelling. Sussurro
-normalizes recognized text deterministically after Whisper returns it, including
-on the fast raw-output path. It deliberately does not put vocabulary into
-Whisper's initial prompt: on ambient noise, Whisper can decode that prompt as
-speech that was never said. The list can also be edited under **Settings →
-Dictation → Personal dictionary**; changes saved there apply to the next
-dictation without a restart.
+`dictionary` lists names and terms Whisper should prefer while decoding and
+then normalizes recognized text to the saved spelling, including on the fast
+raw-output path. The decoder bias can improve names, technical terms, and word
+boundaries that post-processing alone cannot recover. Whisper treats its initial
+prompt as prior transcript, so a wrongly selected non-speech source such as an
+output monitor can echo a dictionary term; choose the intended microphone. The
+list can also be edited under **Settings → Dictation → Personal dictionary**;
+changes saved there apply to the next dictation without a restart.
 
 ### Cleanup behavior
 

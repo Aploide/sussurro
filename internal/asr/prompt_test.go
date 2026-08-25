@@ -53,22 +53,47 @@ func TestPromptIsClearedWhenNoDictionaryIsConfigured(t *testing.T) {
 	}
 }
 
-// A vocabulary list must never become a standing prompt. Whisper can decode
-// an initial prompt as a continuation when the input is ambient noise; in the
-// observed failure, a configured `sshfs` became both the streaming partial and
-// the delivered transcript even though nobody said it (sussurro-99o).
-// Dictionary normalization therefore belongs after recognition, where it can
-// only change text Whisper actually returned.
-func TestPromptResetNeverRetainsVocabulary(t *testing.T) {
+// With a dictionary, the standing prompt is restored after the preceding text
+// used by one streaming window. This deliberately optimizes recognition on a
+// correctly selected speech input; an unrelated non-speech source can echo the
+// vocabulary because Whisper treats prompts as prior transcript.
+func TestPromptFallsBackToTheDictionary(t *testing.T) {
 	ctx := &recordingContext{}
-	e := &Engine{context: ctx}
+	e := &Engine{context: ctx, dictionary: []string{"Sussurro", "whisper.cpp"}}
 
 	e.mutex.Lock()
-	e.context.SetInitialPrompt("dolt, sshfs")
+	e.context.SetInitialPrompt(composePrompt(e.dictionary, "text from a streaming pass"))
 	e.resetPromptLocked()
 	e.mutex.Unlock()
 
+	if got, want := ctx.last(), "Sussurro, whisper.cpp"; got != want {
+		t.Errorf("prompt reset to %q, want %q", got, want)
+	}
+}
+
+func TestSetDictionaryCanReplaceAndClearTheLivePrompt(t *testing.T) {
+	ctx := &recordingContext{}
+	e := &Engine{context: ctx}
+	terms := []string{"Sussurro"}
+
+	e.SetDictionary(terms)
+	terms[0] = "mutated by caller"
+	if got := composePrompt(e.dictionary, ""); got != "Sussurro" {
+		t.Errorf("dictionary aliases caller's slice: %q", got)
+	}
+
+	e.SetDictionary(nil)
 	if got := ctx.last(); got != "" {
-		t.Errorf("prompt reset to %q, want empty", got)
+		t.Errorf("prompt after clearing dictionary = %q, want empty", got)
+	}
+	if len(e.dictionary) != 0 {
+		t.Errorf("dictionary after clearing = %#v, want empty", e.dictionary)
+	}
+}
+
+func TestComposePromptPutsDictionaryFirst(t *testing.T) {
+	got := composePrompt([]string{"Sussurro"}, "some preceding text")
+	if want := "Sussurro. some preceding text"; got != want {
+		t.Errorf("composePrompt = %q, want %q", got, want)
 	}
 }

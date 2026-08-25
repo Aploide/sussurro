@@ -60,6 +60,10 @@ type Engine struct {
 	context whisper.Context
 	mutex   sync.Mutex
 	debug   bool
+
+	// dictionary is retained rather than only pushed into the context, so a
+	// per-call prompt can be composed from it plus preceding transcript text.
+	dictionary []string
 }
 
 // NewEngine initializes the Whisper model from a file path
@@ -149,6 +153,21 @@ func (e *Engine) EnableVAD(modelPath string, thresholds ...float32) error {
 	return nil
 }
 
+// SetDictionary primes the decoder with the user's vocabulary. Initial prompts
+// can dominate non-speech audio, but the common case is a correctly selected
+// microphone carrying real speech, where the vocabulary improves recognition
+// of names, technical terms, and their word boundaries.
+//
+// Safe to call while the engine is running; takes effect on the next
+// transcription.
+func (e *Engine) SetDictionary(terms []string) {
+	e.mutex.Lock()
+	defer e.mutex.Unlock()
+
+	e.dictionary = append([]string(nil), terms...)
+	e.context.SetInitialPrompt(strings.Join(e.dictionary, ", "))
+}
+
 // TranscribeWithContext transcribes samples while conditioning the decoder on
 // text that came before them.
 //
@@ -160,7 +179,7 @@ func (e *Engine) EnableVAD(modelPath string, thresholds ...float32) error {
 //
 // The prompt is advisory. whisper may still decode against it, and it truncates
 // the prompt to n_text_ctx/2 (224 tokens), so a long preceding transcript is cut
-// by the model.
+// by the model. Dictionary terms lead so they survive that truncation.
 func (e *Engine) TranscribeWithContext(samples []float32, preceding string) (string, error) {
 	// The prompt is set on the shared whisper context, so it must not be
 	// changed by another caller between being set and being used. The lock is
@@ -168,7 +187,7 @@ func (e *Engine) TranscribeWithContext(samples []float32, preceding string) (str
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
-	if prompt := strings.TrimSpace(preceding); prompt != "" {
+	if prompt := composePrompt(e.dictionary, preceding); prompt != "" {
 		e.context.SetInitialPrompt(prompt)
 		defer e.resetPromptLocked()
 	}
@@ -186,7 +205,7 @@ func (e *Engine) SegmentsWithContext(samples []float32, preceding string) ([]Seg
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
-	if prompt := strings.TrimSpace(preceding); prompt != "" {
+	if prompt := composePrompt(e.dictionary, preceding); prompt != "" {
 		e.context.SetInitialPrompt(prompt)
 		defer e.resetPromptLocked()
 	}
@@ -194,16 +213,29 @@ func (e *Engine) SegmentsWithContext(samples []float32, preceding string) ([]Seg
 	return e.segmentsLocked(samples)
 }
 
-// resetPromptLocked clears the per-call preceding-text prompt.
-//
-// The empty case is not a no-op and must not be skipped. Leaving a per-call
-// prompt set leaks it into the next caller, and the next caller is the final
-// pass: whisper continues an initial prompt rather than merely conditioning on
-// it, so the whole accumulated transcript was re-emitted ahead of the real
-// audio and the delivered text arrived with its sentences repeated
+// resetPromptLocked returns the context to its standing dictionary prompt.
+// The empty case is not a no-op: leaving a per-call preceding-text prompt set
+// leaks it into the final pass and can duplicate the streaming transcript
 // (sussurro-fkd).
 func (e *Engine) resetPromptLocked() {
-	e.context.SetInitialPrompt("")
+	e.context.SetInitialPrompt(strings.Join(e.dictionary, ", "))
+}
+
+// composePrompt combines standing vocabulary with the transcript preceding a
+// streaming window. Dictionary terms lead so prompt truncation drops ordinary
+// preceding text first.
+func composePrompt(dictionary []string, preceding string) string {
+	terms := strings.Join(dictionary, ", ")
+	preceding = strings.TrimSpace(preceding)
+
+	switch {
+	case terms != "" && preceding != "":
+		return terms + ". " + preceding
+	case terms != "":
+		return terms
+	default:
+		return preceding
+	}
 }
 
 // Transcribe processes the audio samples and returns the text
