@@ -5,6 +5,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 
 	llama "github.com/AshkanYarmoradi/go-llama.cpp"
 	"github.com/aploide/sussurro/internal/logger"
@@ -28,8 +29,10 @@ type Engine struct {
 
 	// dictionary holds user-provided terms that must be spelled exactly as
 	// written; they are applied as a deterministic post-processing pass after
-	// context-sensitive correction.
-	dictionary []string
+	// context-sensitive correction. The settings window can replace it while a
+	// cleanup is running, so readers take a snapshot under dictionaryMu.
+	dictionaryMu sync.RWMutex
+	dictionary   []string
 
 	// extendedPrompt selects strict correction-only instructions for general
 	// instruct models. The bundled qwen3-sussurro model instead needs its
@@ -38,9 +41,12 @@ type Engine struct {
 }
 
 // SetDictionary installs the user's personal vocabulary (from config
-// app.dictionary). Safe to call once after NewEngine, before use.
+// app.dictionary). It is safe to call while the engine is running and takes
+// effect on the next cleanup.
 func (e *Engine) SetDictionary(terms []string) {
-	e.dictionary = terms
+	e.dictionaryMu.Lock()
+	defer e.dictionaryMu.Unlock()
+	e.dictionary = append([]string(nil), terms...)
 }
 
 // SetExtendedPrompt enables strict correction-only instructions (config
@@ -416,13 +422,16 @@ func edgeAnchored(rawWords, cleanedWords []string, stopWords map[string]bool, he
 // only accepted for capitalized words that are not sentence-initial (the way
 // ASR renders unknown proper nouns); lowercase windows must be near-exact.
 func (e *Engine) applyDictionary(text string) string {
-	if len(e.dictionary) == 0 || text == "" {
+	e.dictionaryMu.RLock()
+	dictionary := append([]string(nil), e.dictionary...)
+	e.dictionaryMu.RUnlock()
+	if len(dictionary) == 0 || text == "" {
 		return text
 	}
 
 	words := strings.Fields(text)
 
-	for _, term := range e.dictionary {
+	for _, term := range dictionary {
 		termWords := strings.Fields(term)
 		n := len(termWords)
 		if n == 0 {

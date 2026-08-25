@@ -329,6 +329,53 @@ kbd {
 }
 .hotkey-wayland-note a { color: var(--blue); text-decoration: none; }
 
+/* ---- Personal dictionary ---- */
+.dictionary-intro {
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.dictionary-list {
+  border-top: 1px solid var(--border);
+}
+
+.dictionary-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+}
+
+.dictionary-entry + .dictionary-entry {
+  border-top: 1px solid var(--border);
+}
+
+.dictionary-input {
+  width: auto;
+  min-width: 0;
+  flex: 1 1 auto;
+  user-select: text;
+}
+
+.dictionary-remove-btn {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.dictionary-empty {
+  padding: 12px 14px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.dictionary-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+}
+
 /* ---- Review workflow controls ---- */
 
 /* .setting-select adds sizing to the base select rule and must not restate

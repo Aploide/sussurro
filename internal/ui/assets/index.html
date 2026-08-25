@@ -139,7 +139,51 @@
       </div>
     </div>
 
-    <!-- Global Hotkey -->
+    <div class="section foldable" data-section-id="dictionary">
+      <button
+        class="section-header"
+        type="button"
+        data-section-toggle
+        aria-expanded="true"
+      >
+        <span class="section-label">Personal dictionary</span>
+        <span class="section-caret" aria-hidden="true">⌄</span>
+      </button>
+      <div class="section-body">
+        <div class="dictionary-intro">
+          <div class="toggle-desc">
+            Names and terms Sussurro should recognise and spell exactly.
+            Saved changes apply to the next dictation.
+          </div>
+        </div>
+        <div id="dictionary-list" class="dictionary-list"></div>
+        <div class="dictionary-actions">
+          <button
+            class="hotkey-edit-btn"
+            id="dictionary-add-btn"
+            type="button"
+          >
+            Add term
+          </button>
+          <button
+            class="download-btn"
+            id="dictionary-save-btn"
+            type="button"
+            disabled
+          >
+            Save dictionary
+          </button>
+        </div>
+        <div
+          class="setting-note"
+          id="dictionary-status"
+          role="status"
+          aria-live="polite"
+          hidden
+        ></div>
+      </div>
+    </div>
+
     </div>
     <div class="tab-panel" data-tab-panel="output" hidden>
     <div class="section foldable" data-section-id="output">

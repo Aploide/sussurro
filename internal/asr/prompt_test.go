@@ -69,6 +69,26 @@ func TestPromptFallsBackToTheDictionary(t *testing.T) {
 	}
 }
 
+func TestSetDictionaryCanReplaceAndClearTheLivePrompt(t *testing.T) {
+	ctx := &recordingContext{}
+	e := &Engine{context: ctx}
+	terms := []string{"Sussurro"}
+
+	e.SetDictionary(terms)
+	terms[0] = "mutated by caller"
+	if got := composePrompt(e.dictionary, ""); got != "Sussurro" {
+		t.Errorf("dictionary aliases caller's slice: %q", got)
+	}
+
+	e.SetDictionary(nil)
+	if got := ctx.last(); got != "" {
+		t.Errorf("prompt after clearing dictionary = %q, want empty", got)
+	}
+	if len(e.dictionary) != 0 {
+		t.Errorf("dictionary after clearing = %#v, want empty", e.dictionary)
+	}
+}
+
 // Dictionary terms lead so they survive whisper truncating the prompt to
 // n_text_ctx/2; the preceding transcript is the part that may be cut.
 func TestComposePromptPutsDictionaryFirst(t *testing.T) {

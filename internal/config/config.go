@@ -18,6 +18,10 @@ type Config struct {
 	// Workflow holds the opt-in streaming review settings. Absent from
 	// pre-review configs, where Normalize supplies immediate-mode defaults.
 	Workflow WorkflowConfig `mapstructure:"workflow"`
+
+	// sourcePath is the file LoadConfig selected. Settings writes must update
+	// this file, including when the process was started with --config.
+	sourcePath string
 }
 
 type AppConfig struct {
@@ -152,6 +156,8 @@ type InjectionConfig struct {
 // SaveLanguage rewrites only the models.asr.language field in the YAML config file.
 // If the key does not exist (old config), it inserts it after the threads: line in the asr: section.
 func SaveLanguage(cfg *Config, language string) error {
+	configSaveMu.Lock()
+	defer configSaveMu.Unlock()
 	configFile, err := userConfigPath()
 	if err != nil {
 		return fmt.Errorf("resolve user config path: %w", err)
@@ -214,6 +220,8 @@ func SaveLanguage(cfg *Config, language string) error {
 // SaveLowercaseOutput rewrites only the app.lowercase_output field in the YAML config file.
 // If the key does not exist (old config), it inserts it after the log_level: line in the app: section.
 func SaveLowercaseOutput(cfg *Config, enabled bool) error {
+	configSaveMu.Lock()
+	defer configSaveMu.Unlock()
 	configFile, err := userConfigPath()
 	if err != nil {
 		return fmt.Errorf("resolve user config path: %w", err)
@@ -260,6 +268,8 @@ func SaveLowercaseOutput(cfg *Config, enabled bool) error {
 // If the key does not exist (old config), it inserts it after lowercase_output:
 // (or after log_level: if lowercase_output: is also missing).
 func SaveSkipLLMCleanup(cfg *Config, enabled bool) error {
+	configSaveMu.Lock()
+	defer configSaveMu.Unlock()
 	configFile, err := userConfigPath()
 	if err != nil {
 		return fmt.Errorf("resolve user config path: %w", err)
@@ -386,6 +396,7 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 
+	cfg.sourcePath = viper.ConfigFileUsed()
 	return &cfg, nil
 }
 

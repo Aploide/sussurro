@@ -31,6 +31,8 @@ func SetNestedValue(content, dottedKey, value string) (string, error) {
 
 // SaveWorkflowValue persists one workflow setting to the user's config file.
 func SaveWorkflowValue(dottedKey, value string) error {
+	configSaveMu.Lock()
+	defer configSaveMu.Unlock()
 	configFile, err := userConfigPath()
 	if err != nil {
 		return err

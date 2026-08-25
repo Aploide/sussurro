@@ -32,6 +32,10 @@ type Manager struct {
 	// Called when the user toggles LLM cleanup bypass in Settings.
 	onSkipLLMCleanup func(bool)
 
+	// Called after the personal dictionary is persisted, so both recognition
+	// engines can use it for the next dictation without restarting.
+	onDictionary func([]string)
+
 	// fillSource reports how full the recording buffer is, from 0 to 1, and
 	// whether a meaningful cap exists. It is sampled on the UI goroutine
 	// rather than pushed from the audio callback: reading the fill takes the
@@ -385,6 +389,18 @@ func (m *Manager) SetLowercaseOutputCallback(fn func(bool)) {
 func (m *Manager) applyLowercaseOutput(v bool) {
 	if m.onLowercaseOutput != nil {
 		m.onLowercaseOutput(v)
+	}
+}
+
+// SetDictionaryCallback stores the live-application hook for personal
+// vocabulary changed in Settings.
+func (m *Manager) SetDictionaryCallback(fn func([]string)) {
+	m.onDictionary = fn
+}
+
+func (m *Manager) applyDictionary(terms []string) {
+	if m.onDictionary != nil {
+		m.onDictionary(append([]string(nil), terms...))
 	}
 }
 

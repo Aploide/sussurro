@@ -81,6 +81,10 @@ type Pipeline struct {
 	mu              sync.Mutex // Protects stopped, isTranscribing, output options, audioBuffer, and recordingStart
 	maxDuration     string
 
+	// afterCurrent runs settings updates after the active recording and cleanup
+	// have both finished, but before a new recording can start. Guarded by mu.
+	afterCurrent []func()
+
 	// recordingStart is when the current recording began, so a stop can
 	// report how long it ran. Without it a premature stop is
 	// indistinguishable in the log from a normal one.
@@ -186,6 +190,41 @@ func (p *Pipeline) SetSkipLLMCleanup(v bool) {
 	p.mu.Lock()
 	p.skipLLMCleanup = v
 	p.mu.Unlock()
+}
+
+// RunWhenIdle applies callback immediately when no dictation is active, or
+// queues it after the current recording and cleanup. The callback runs while
+// the pipeline state lock excludes a new recording and must not call Pipeline
+// methods itself.
+func (p *Pipeline) RunWhenIdle(callback func()) {
+	if callback == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.isRecording.Load() || p.isTranscribing {
+		p.afterCurrent = append(p.afterCurrent, callback)
+		return
+	}
+	callback()
+}
+
+// runAfterCurrentLocked drains deferred settings changes before the current
+// dictation releases its isTranscribing gate. A bad callback is isolated so it
+// cannot leave the pipeline permanently busy.
+func (p *Pipeline) runAfterCurrentLocked() {
+	callbacks := p.afterCurrent
+	p.afterCurrent = nil
+	for _, callback := range callbacks {
+		func() {
+			defer func() {
+				if r := recover(); r != nil && p.log != nil {
+					p.log.Error("Recovered from deferred settings update", "error", r)
+				}
+			}()
+			callback()
+		}()
+	}
 }
 
 // SetOnCompletion sets a callback to be called when processing is done
@@ -604,6 +643,7 @@ func (p *Pipeline) processSegmentWithPartial(samples []float32, partial string) 
 			p.log.Error("Recovered from panic in processSegment", "error", r)
 		}
 		p.mu.Lock()
+		p.runAfterCurrentLocked()
 		p.isTranscribing = false
 		p.mu.Unlock()
 		p.notifyFinished(p.takeFinalText())
@@ -694,6 +734,7 @@ func (p *Pipeline) completeFromPartial(text string) {
 			p.log.Error("Recovered from panic in completeFromPartial", "error", r)
 		}
 		p.mu.Lock()
+		p.runAfterCurrentLocked()
 		p.isTranscribing = false
 		p.mu.Unlock()
 		p.notifyFinished(p.takeFinalText())

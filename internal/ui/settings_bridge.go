@@ -35,6 +35,7 @@ type initialData struct {
 	Language         string      `json:"language"`
 	LowercaseOutput  bool        `json:"lowercaseOutput"`
 	SkipLLMCleanup   bool        `json:"skipLLMCleanup"`
+	Dictionary       []string    `json:"dictionary"`
 	// Workflow carries the review controls and this host's capabilities.
 	Workflow workflowSettings `json:"workflow"`
 }
@@ -142,6 +143,16 @@ func bindBridge(sw *settingsWindow) {
 		return "ok"
 	})
 
+	sw.w.Bind("saveDictionary", func(encoded string) (result string) {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("panic in saveDictionary", "error", r)
+				result = fmt.Sprintf("error: panic: %v", r)
+			}
+		}()
+		return saveDictionary(mgr, encoded)
+	})
+
 	sw.w.Bind("downloadModel", func(modelID string) {
 		go func() {
 			defer func() {
@@ -210,6 +221,20 @@ func bindBridge(sw *settingsWindow) {
 	sw.w.Bind("closeSettings", func() {
 		sw.Hide()
 	})
+}
+
+func saveDictionary(mgr *Manager, encoded string) string {
+	var terms []string
+	if err := json.Unmarshal([]byte(encoded), &terms); err != nil {
+		return fmt.Sprintf("error: decode dictionary: %v", err)
+	}
+	normalized, err := config.SaveDictionary(mgr.cfg, terms)
+	if err != nil {
+		return fmt.Sprintf("error: %v", err)
+	}
+	mgr.cfg.App.Dictionary = append([]string(nil), normalized...)
+	mgr.applyDictionary(normalized)
+	return "ok"
 }
 
 // sussurroModelsDir returns the canonical path to the directory where Sussurro
@@ -282,6 +307,7 @@ func buildInitialData(mgr *Manager) initialData {
 		Language:         mgr.cfg.Models.ASR.Language,
 		LowercaseOutput:  mgr.cfg.App.LowercaseOutput,
 		SkipLLMCleanup:   mgr.cfg.App.SkipLLMCleanup,
+		Dictionary:       append([]string(nil), mgr.cfg.App.Dictionary...),
 		Workflow:         buildWorkflowSettings(mgr.cfg, hostCapabilities()),
 	}
 }

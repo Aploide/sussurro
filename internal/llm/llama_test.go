@@ -211,6 +211,22 @@ func TestCleanupAppliesTheDictionary(t *testing.T) {
 	}
 }
 
+func TestSetDictionaryReplacesAndClearsLiveCleanupVocabulary(t *testing.T) {
+	engine := &Engine{}
+	terms := []string{"Kubernetes"}
+	engine.SetDictionary(terms)
+	terms[0] = "mutated by caller"
+
+	if got := engine.applyDictionary("Use kubernetes here."); got != "Use Kubernetes here." {
+		t.Errorf("applyDictionary() after caller mutation = %q", got)
+	}
+
+	engine.SetDictionary(nil)
+	if got := engine.applyDictionary("Use kubernetes here."); got != "Use kubernetes here." {
+		t.Errorf("applyDictionary() after clearing = %q", got)
+	}
+}
+
 func TestCleanupRunsContextCorrectionBeforeDictionary(t *testing.T) {
 	model := &fakePredictor{output: "Use the Base blockchain."}
 	engine := &Engine{model: model, debug: true}

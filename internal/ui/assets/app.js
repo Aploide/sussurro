@@ -40,6 +40,7 @@ function render(data) {
   // Lowercase output
   renderLowercaseOutput(data.lowercaseOutput);
   renderSkipLLMCleanup(data.skipLLMCleanup);
+  renderDictionary(data.dictionary || []);
   renderWorkflow(data.workflow);
 }
 
@@ -244,6 +245,147 @@ function renderSkipLLMCleanup(enabled) {
   toggle.onchange = async () => {
     await window.saveSkipLLMCleanup(toggle.checked);
   };
+}
+
+// ---- Personal dictionary ----
+// Model downloads and window reopens refresh all settings. Keep an unsaved
+// dictionary draft outside renderDictionary so those unrelated refreshes do
+// not discard text the user is still editing.
+let dictionaryDraft = null;
+let dictionaryDirty = false;
+let dictionarySaving = false;
+let dictionarySaveGeneration = 0;
+
+function showDictionaryStatus(message, isError) {
+  const status = document.getElementById("dictionary-status");
+  if (!status) return;
+  status.hidden = !message;
+  status.textContent = message || "";
+  status.classList.toggle("setting-note-error", !!isError);
+}
+
+function renderDictionary(terms) {
+  const list = document.getElementById("dictionary-list");
+  const add = document.getElementById("dictionary-add-btn");
+  const save = document.getElementById("dictionary-save-btn");
+  if (!list || !add || !save) return;
+
+  const draft = dictionaryDirty
+    ? Array.from(dictionaryDraft || [])
+    : Array.from(terms || []);
+  dictionaryDraft = Array.from(draft);
+  const markDirty = () => {
+    dictionaryDraft = Array.from(draft);
+    dictionaryDirty = true;
+    save.disabled = false;
+    showDictionaryStatus("Unsaved changes", false);
+  };
+
+  const renderRows = () => {
+    list.replaceChildren();
+    if (draft.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "dictionary-empty";
+      empty.textContent = "No personal terms yet";
+      list.appendChild(empty);
+      return;
+    }
+
+    draft.forEach((term, index) => {
+      const row = document.createElement("div");
+      row.className = "dictionary-entry";
+
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = "setting-input dictionary-input";
+      input.value = term;
+      input.autocomplete = "off";
+      input.spellcheck = false;
+      input.placeholder = "Sussurro";
+      input.setAttribute("aria-label", `Dictionary term ${index + 1}`);
+      input.oninput = () => {
+        draft[index] = input.value;
+        markDirty();
+      };
+
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "hotkey-edit-btn dictionary-remove-btn";
+      remove.textContent = "Remove";
+      remove.setAttribute(
+        "aria-label",
+        `Remove dictionary term ${index + 1}`,
+      );
+      remove.onclick = () => {
+        draft.splice(index, 1);
+        renderRows();
+        markDirty();
+        const inputs = list.querySelectorAll("input");
+        if (inputs.length === 0) {
+          add.focus();
+        } else {
+          inputs[Math.min(index, inputs.length - 1)].focus();
+        }
+      };
+
+      row.append(input, remove);
+      list.appendChild(row);
+    });
+  };
+
+  add.onclick = () => {
+    draft.push("");
+    renderRows();
+    markDirty();
+    const inputs = list.querySelectorAll("input");
+    inputs[inputs.length - 1]?.focus();
+  };
+
+  const setControlsDisabled = (disabled) => {
+    add.disabled = disabled;
+    save.disabled = disabled;
+    list.querySelectorAll("input, button").forEach((control) => {
+      control.disabled = disabled;
+    });
+  };
+
+  save.onclick = async () => {
+    const normalized = draft.map((term) => term.trim());
+    const generation = ++dictionarySaveGeneration;
+    dictionarySaving = true;
+    setControlsDisabled(true);
+    showDictionaryStatus("Saving…", false);
+    try {
+      const result = await window.saveDictionary(JSON.stringify(normalized));
+      if (generation !== dictionarySaveGeneration) return;
+      dictionarySaving = false;
+      if (typeof result === "string" && result.startsWith("error:")) {
+        renderDictionary(dictionaryDraft);
+        showDictionaryStatus(result.slice("error:".length).trim(), true);
+        return;
+      }
+      dictionaryDraft = Array.from(normalized);
+      dictionaryDirty = false;
+      renderDictionary(normalized);
+      showDictionaryStatus(
+        "Saved. Changes apply to the next dictation",
+        false,
+      );
+    } catch (error) {
+      if (generation !== dictionarySaveGeneration) return;
+      dictionarySaving = false;
+      renderDictionary(dictionaryDraft);
+      showDictionaryStatus(`Could not save dictionary: ${error}`, true);
+    }
+  };
+
+  renderRows();
+  setControlsDisabled(dictionarySaving);
+  save.disabled = dictionarySaving || !dictionaryDirty;
+  showDictionaryStatus(
+    dictionarySaving ? "Saving…" : dictionaryDirty ? "Unsaved changes" : "",
+    false,
+  );
 }
 
 // ---- Review workflow ----

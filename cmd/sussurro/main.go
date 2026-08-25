@@ -124,13 +124,12 @@ func run() {
 		os.Exit(1)
 	}
 	defer llmEngine.Close()
-	llmEngine.SetDictionary(cfg.App.Dictionary)
 
-	// Prime the decoder with the same vocabulary. whisper weighs the prompt
-	// against the audio while decoding, so domain terms win where they fit
-	// and lose where they do not — correction at the point the words are
-	// chosen, rather than substitution after the fact.
-	asrEngine.SetDictionary(cfg.App.Dictionary)
+	// Prime the decoder and install the same exact spellings for cleanup.
+	// Keeping both consumers behind one fan-out also makes later Settings saves
+	// follow this same path.
+	dictionary := dictionaryFanout{asrEngine, llmEngine}
+	dictionary.SetDictionary(cfg.App.Dictionary)
 	llmEngine.SetExtendedPrompt(cfg.Models.LLM.ExtendedPrompt)
 
 	// Initialize Injector
@@ -229,6 +228,9 @@ func run() {
 		uiMgr.SetBufferFillSource(pipe.BufferFill)
 		uiMgr.SetLowercaseOutputCallback(func(v bool) { pipe.SetLowercaseOutput(v) })
 		uiMgr.SetSkipLLMCleanupCallback(func(v bool) { pipe.SetSkipLLMCleanup(v) })
+		uiMgr.SetDictionaryCallback(func(terms []string) {
+			pipe.RunWhenIdle(func() { dictionary.SetDictionary(terms) })
+		})
 
 		// Push-to-talk and toggle are independent bindings, so their callbacks
 		// no longer depend on a mode: each key does what it is bound to do.

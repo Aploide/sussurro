@@ -161,18 +161,19 @@ func (e *Engine) EnableVAD(modelPath string, thresholds ...float32) error {
 // audio is: a post-hoc text substitution cannot weigh acoustics against
 // context, and cannot change word boundaries.
 //
-// Safe to call before use; takes effect on the next transcription.
+// Safe to call while the engine is running; takes effect on the next
+// transcription.
 func (e *Engine) SetDictionary(terms []string) {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
-	if len(terms) == 0 {
-		return
-	}
-	e.dictionary = terms
+	// Own the slice so a settings refresh cannot mutate the prompt while it is
+	// being composed. Setting an empty prompt is intentional: removing the last
+	// entry must clear the vocabulary left on the shared whisper context.
+	e.dictionary = append([]string(nil), terms...)
 	// A comma-separated list is the form whisper's own examples use for
 	// vocabulary priming.
-	e.context.SetInitialPrompt(strings.Join(terms, ", "))
+	e.context.SetInitialPrompt(strings.Join(e.dictionary, ", "))
 }
 
 // TranscribeWithContext transcribes samples while conditioning the decoder on
