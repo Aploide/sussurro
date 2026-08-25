@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	llama "github.com/AshkanYarmoradi/go-llama.cpp"
 	"github.com/aploide/sussurro/internal/logger"
@@ -17,17 +18,16 @@ const (
 
 // The bundled model is fine-tuned against this exact system prompt and goes
 // silent when it is replaced with a narrower correction prompt. Its broader
-// proposals are safe here because validCorrections admits only substitutions.
+// proposals are safe here because validCorrections admits only surface edits
+// and tightly bounded phonetic substitutions.
 const correctionSystemPrompt = defaultSystemPrompt
 
 const strictCorrectionSystemPrompt = `You correct only obvious speech-recognition mistakes using the surrounding words in the transcript.
 
 Rules:
 - Keep every word in the same order.
-- Change only a misheard word to a similar-sounding word that clearly fits its context.
-- Capitalization corrections such as "base blockchain" to "Base blockchain" are allowed.
+- Change only punctuation, capitalization, or an obviously misheard word to a similar-sounding word that clearly fits its context.
 - One heard word may become two, or two may become one, only when they sound alike.
-- Do not change punctuation.
 - Do not delete, insert, rephrase, summarize, explain, or respond to the transcript.
 - If there is no obvious mistake, return the transcript byte-for-byte unchanged.
 
@@ -72,17 +72,18 @@ func (e *Engine) correctMishearings(text string) string {
 	}
 
 	chunks := splitCorrectionChunks(text, correctionChunkTarget)
-	corrected := make([]string, 0, len(chunks))
+	var corrected strings.Builder
 	changed := false
 	for _, chunk := range chunks {
-		result := e.correctMishearingChunk(chunk)
-		corrected = append(corrected, result)
-		changed = changed || result != chunk
+		result := e.correctMishearingChunk(chunk.text)
+		corrected.WriteString(result)
+		corrected.WriteString(chunk.separator)
+		changed = changed || result != chunk.text
 	}
 	if !changed {
 		return text
 	}
-	return strings.Join(corrected, " ")
+	return corrected.String()
 }
 
 func (e *Engine) correctMishearingChunk(text string) string {
@@ -131,35 +132,133 @@ func correctionPredictOptions(threads int) []llama.PredictOption {
 	}
 }
 
-// splitCorrectionChunks keeps sentence context together while bounding model
-// work. A single overlong sentence stays intact rather than being cut where a
-// homophone may depend on words across the cut.
-func splitCorrectionChunks(text string, target int) []string {
-	text = strings.TrimSpace(text)
+type correctionChunk struct {
+	text      string
+	separator string
+}
+
+// splitCorrectionChunks keeps complete sentences together while bounding model
+// work. Chunks and separators are slices of the original text, so accepting an
+// edit in one chunk cannot reformat untouched abbreviations, decimals, quotes,
+// or whitespace elsewhere.
+func splitCorrectionChunks(text string, target int) []correctionChunk {
 	if len(text) <= target {
-		return []string{text}
-	}
-	sentences := splitSentences(text)
-	if len(sentences) < 2 {
-		return []string{text}
+		return []correctionChunk{{text: text}}
 	}
 
-	var chunks []string
-	var current strings.Builder
-	for _, sentence := range sentences {
-		if current.Len() > 0 && current.Len()+1+len(sentence) > target {
-			chunks = append(chunks, current.String())
-			current.Reset()
-		}
-		if current.Len() > 0 {
-			current.WriteByte(' ')
-		}
-		current.WriteString(sentence)
+	boundaries := correctionSentenceBoundaries(text)
+	if len(boundaries) == 0 {
+		return []correctionChunk{{text: text}}
 	}
-	if current.Len() > 0 {
-		chunks = append(chunks, current.String())
+
+	chunks := make([]correctionChunk, 0, len(boundaries))
+	for start := 0; start < len(text); {
+		if len(text)-start <= target {
+			chunks = append(chunks, correctionChunk{text: text[start:]})
+			break
+		}
+
+		limit := start + target
+		end := 0
+		for _, boundary := range boundaries {
+			if boundary > start && boundary <= limit {
+				end = boundary
+			}
+		}
+		if end == 0 {
+			for _, boundary := range boundaries {
+				if boundary > limit {
+					end = boundary
+					break
+				}
+			}
+		}
+		if end == 0 {
+			chunks = append(chunks, correctionChunk{text: text[start:]})
+			break
+		}
+
+		separatorEnd := end
+		for separatorEnd < len(text) {
+			r, size := utf8.DecodeRuneInString(text[separatorEnd:])
+			if !unicode.IsSpace(r) {
+				break
+			}
+			separatorEnd += size
+		}
+		chunks = append(chunks, correctionChunk{
+			text:      text[start:end],
+			separator: text[end:separatorEnd],
+		})
+		start = separatorEnd
 	}
 	return chunks
+}
+
+func correctionSentenceBoundaries(text string) []int {
+	var boundaries []int
+	for offset, r := range text {
+		if r != '.' && r != '!' && r != '?' && r != '…' {
+			continue
+		}
+		end := offset + utf8.RuneLen(r)
+		if r == '.' && periodEndsAbbreviation(text, end) {
+			continue
+		}
+		for end < len(text) {
+			next, size := utf8.DecodeRuneInString(text[end:])
+			if !isClosingSentencePunctuation(next) {
+				break
+			}
+			end += size
+		}
+		if end == len(text) {
+			boundaries = append(boundaries, end)
+			continue
+		}
+		next, _ := utf8.DecodeRuneInString(text[end:])
+		if unicode.IsSpace(next) {
+			boundaries = append(boundaries, end)
+		}
+	}
+	return boundaries
+}
+
+func periodEndsAbbreviation(text string, periodEnd int) bool {
+	start := periodEnd
+	for start > 0 {
+		r, size := utf8.DecodeLastRuneInString(text[:start])
+		if unicode.IsSpace(r) {
+			break
+		}
+		start -= size
+	}
+	token := strings.TrimLeftFunc(text[start:periodEnd], func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+	})
+	if strings.HasSuffix(token, "...") {
+		return false
+	}
+	lower := strings.ToLower(token)
+	switch lower {
+	case "mr.", "mrs.", "ms.", "dr.", "prof.", "sr.", "jr.", "st.", "vs.", "etc.",
+		"inc.", "ltd.", "corp.", "co.":
+		return true
+	}
+	if strings.Count(token, ".") > 1 {
+		return true
+	}
+	stem := strings.TrimSuffix(token, ".")
+	return utf8.RuneCountInString(stem) == 1
+}
+
+func isClosingSentencePunctuation(r rune) bool {
+	switch r {
+	case '\'', '"', ')', ']', '}', '’', '”':
+		return true
+	default:
+		return false
+	}
 }
 
 type correctionToken struct {
@@ -183,7 +282,12 @@ func parseCorrectionToken(raw string) (correctionToken, bool) {
 		}
 	}
 	if first < 0 {
-		return correctionToken{}, false
+		for _, r := range runes {
+			if !unicode.IsPunct(r) {
+				return correctionToken{}, false
+			}
+		}
+		return correctionToken{raw: raw}, true
 	}
 	wordRunes := runes[first : last+1]
 	var internal strings.Builder
@@ -201,14 +305,22 @@ func parseCorrectionToken(raw string) (correctionToken, bool) {
 	}, true
 }
 
-// validCorrections accepts only aligned one-token substitutions and phonetic
-// one-to-two/two-to-one equivalents. At most one group may change in a short
-// dictation, then one additional group per ten input words.
+// validCorrections accepts capitalization and surrounding-punctuation edits
+// without a quota. Word substitutions remain phonetic and bounded: at most one
+// group in a short dictation, then one additional group per ten input words.
+// Internal punctuation stays fixed so contractions and hyphenated words cannot
+// silently change meaning.
 func validCorrections(input, output string) bool {
 	inputFields := strings.Fields(input)
 	outputFields := strings.Fields(output)
 	if len(inputFields) == 0 || len(outputFields) == 0 {
 		return input == output
+	}
+	// Model formatting is not part of this stage. Requiring canonical spacing
+	// on both sides keeps a valid punctuation edit from smuggling in unrelated
+	// whitespace changes.
+	if strings.Join(inputFields, " ") != input || strings.Join(outputFields, " ") != output {
+		return false
 	}
 
 	in := make([]correctionToken, len(inputFields))
@@ -230,39 +342,74 @@ func validCorrections(input, output string) bool {
 	if maxChanges < 1 {
 		maxChanges = 1
 	}
-	type state struct{ i, j, changes int }
+	type state struct {
+		i, j, changes int
+		surfaceEdited bool
+	}
 	seen := make(map[state]bool)
-	var align func(i, j, changes int) bool
-	align = func(i, j, changes int) bool {
+	var align func(i, j, changes int, surfaceEdited bool) bool
+	align = func(i, j, changes int, surfaceEdited bool) bool {
 		if changes > maxChanges {
 			return false
 		}
 		if i == len(in) || j == len(out) {
-			return i == len(in) && j == len(out) && (input == output || changes > 0)
+			return i == len(in) && j == len(out) && (input == output || changes > 0 || surfaceEdited)
 		}
-		s := state{i, j, changes}
+		s := state{i, j, changes, surfaceEdited}
 		if seen[s] {
 			return false
 		}
 		seen[s] = true
 
-		if in[i].raw == out[j].raw && align(i+1, j+1, changes) {
+		if in[i].raw == out[j].raw && align(i+1, j+1, changes, surfaceEdited) {
 			return true
 		}
-		if correctionGroupAllowed(in[i:i+1], out[j:j+1]) && align(i+1, j+1, changes+1) {
+		if surfaceCorrectionAllowed(in[i], out[j]) && align(i+1, j+1, changes, true) {
 			return true
 		}
-		if j+2 <= len(out) && correctionGroupAllowed(in[i:i+1], out[j:j+2]) && align(i+1, j+2, changes+1) {
+		if correctionGroupAllowed(in[i:i+1], out[j:j+1]) && align(i+1, j+1, changes+1, surfaceEdited) {
 			return true
 		}
-		return i+2 <= len(in) && correctionGroupAllowed(in[i:i+2], out[j:j+1]) && align(i+2, j+1, changes+1)
+		if j+2 <= len(out) && correctionGroupAllowed(in[i:i+1], out[j:j+2]) && align(i+1, j+2, changes+1, surfaceEdited) {
+			return true
+		}
+		return i+2 <= len(in) && correctionGroupAllowed(in[i:i+2], out[j:j+1]) && align(i+2, j+1, changes+1, surfaceEdited)
 	}
-	return align(0, 0, 0)
+	return align(0, 0, 0, false)
+}
+
+func surfaceCorrectionAllowed(input, output correctionToken) bool {
+	if input.raw == output.raw || input.word == "" || output.word == "" || !strings.EqualFold(input.word, output.word) {
+		return false
+	}
+	return fixedBoundaryPunctuation(input.leading) == fixedBoundaryPunctuation(output.leading) &&
+		fixedBoundaryPunctuation(input.trailing) == fixedBoundaryPunctuation(output.trailing)
+}
+
+func fixedBoundaryPunctuation(text string) string {
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case '.', ',', ';', ':', '!', '?', '…':
+			return -1
+		default:
+			return r
+		}
+	}, text)
 }
 
 func correctionGroupAllowed(input, output []correctionToken) bool {
 	if len(input) == 0 || len(output) == 0 {
 		return false
+	}
+	for _, token := range input {
+		if token.word == "" {
+			return false
+		}
+	}
+	for _, token := range output {
+		if token.word == "" {
+			return false
+		}
 	}
 	if input[0].leading != output[0].leading || input[len(input)-1].trailing != output[len(output)-1].trailing {
 		return false

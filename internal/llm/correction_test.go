@@ -4,9 +4,11 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	llama "github.com/AshkanYarmoradi/go-llama.cpp"
 )
 
-func TestValidCorrectionsAllowsOnlyBoundedPhoneticSubstitutions(t *testing.T) {
+func TestValidCorrectionsAllowsSurfaceEditsAndBoundedPhoneticSubstitutions(t *testing.T) {
 	tests := []struct {
 		name   string
 		input  string
@@ -24,7 +26,18 @@ func TestValidCorrectionsAllowsOnlyBoundedPhoneticSubstitutions(t *testing.T) {
 		{name: "reordering", input: "keep words in order", output: "keep order in words", want: false},
 		{name: "rephrasing", input: "Please delete all files now.", output: "I will erase every file now.", want: false},
 		{name: "distant replacement", input: "the cat sat here", output: "the dog sat here", want: false},
-		{name: "punctuation rewrite", input: "Keep this, please.", output: "Keep this. please.", want: false},
+		{name: "punctuation rewrite", input: "Keep this, please.", output: "Keep this. Please.", want: true},
+		{name: "many surface edits", input: "ONE sentence HAS several CASE errors", output: "One sentence has several case errors.", want: true},
+		{name: "standalone punctuation preserved", input: "ONE — sentence IS wrong", output: "One — sentence is wrong.", want: true},
+		{name: "standalone punctuation inserted", input: "Hello world.", output: "Hello — world.", want: false},
+		{name: "standalone punctuation deleted", input: "Hello — world.", output: "Hello world.", want: false},
+		{name: "currency inserted", input: "It costs 100 today.", output: "It costs $100 today.", want: false},
+		{name: "sign inserted", input: "The result is 5.", output: "The result is -5.", want: false},
+		{name: "percentage inserted", input: "Progress is 100.", output: "Progress is 100%.", want: false},
+		{name: "quote moved", input: "\"Hello world.\"", output: "Hello \"world.\"", want: false},
+		{name: "possessive apostrophe inserted", input: "The workers agreed.", output: "The workers' agreed.", want: false},
+		{name: "combining mark removed", input: "Cafe\u0301 is OPEN.", output: "Cafe is open.", want: false},
+		{name: "control inserted", input: "This works.", output: "This\u200e works.", want: false},
 		{name: "contraction added", input: "We can finish.", output: "We can't finish.", want: false},
 		{name: "contraction removed", input: "We weren't late.", output: "We werent late.", want: false},
 		{name: "apostrophe moved", input: "We're finished.", output: "Wer'e finished.", want: false},
@@ -32,6 +45,8 @@ func TestValidCorrectionsAllowsOnlyBoundedPhoneticSubstitutions(t *testing.T) {
 		{name: "hyphen becomes split", input: "Use the well-known method.", output: "Use the well known method.", want: false},
 		{name: "unchanged contraction", input: "We can't wait.", output: "We can't wait.", want: true},
 		{name: "whitespace rewrite", input: "Keep this exact.", output: "Keep  this exact.", want: false},
+		{name: "trailing whitespace removed", input: "Keep this exact. ", output: "Keep this exact.", want: false},
+		{name: "whitespace removed with case edit", input: "keep  this exact. ", output: "Keep this exact.", want: false},
 		{name: "too many substitutions", input: "base notes use the B3 model", output: "bass notes use the v3 model", want: false},
 	}
 
@@ -65,6 +80,76 @@ func TestCleanupRejectsAnythingBeyondSubstitution(t *testing.T) {
 		})
 	}
 }
+
+func TestCleanupAcceptsCaseAndPunctuationOnlyModelEdit(t *testing.T) {
+	const raw = "this works, But CAPITALIZATION needs fixing"
+	const candidate = "This works. But capitalization needs fixing."
+	engine := &Engine{model: &fakePredictor{output: candidate}, debug: true}
+	got, err := engine.CleanupText(raw)
+	if err != nil {
+		t.Fatalf("CleanupText() error = %v", err)
+	}
+	if got != candidate {
+		t.Errorf("CleanupText() = %q, want %q", got, candidate)
+	}
+}
+
+func TestCorrectMishearingsPreservesUntouchedLongText(t *testing.T) {
+	const sentence = "The U.S. value is 3.14 and she said “keep it.” "
+	raw := "opening sentence. " + strings.Repeat(sentence, 14)
+	chunks := splitCorrectionChunks(raw, correctionChunkTarget)
+	if len(chunks) < 2 {
+		t.Fatal("fixture did not produce multiple correction chunks")
+	}
+
+	outputs := make([]string, len(chunks))
+	for i, chunk := range chunks {
+		outputs[i] = chunk.text
+	}
+	outputs[0] = strings.Replace(outputs[0], "opening sentence.", "Opening sentence!", 1)
+	engine := &Engine{model: &sequencePredictor{outputs: outputs}, debug: true}
+	got := engine.correctMishearings(raw)
+	want := strings.Replace(raw, "opening sentence.", "Opening sentence!", 1)
+	if got != want {
+		t.Errorf("correctMishearings() changed untouched text:\n got: %q\nwant: %q", got, want)
+	}
+}
+
+func TestCorrectionChunksRespectAbbreviationsAndEllipses(t *testing.T) {
+	for _, abbreviation := range []string{
+		"We discuss the U.S. value until the sentence really ends. Next sentence.",
+		"Acme Inc. sells products until the sentence really ends. Next sentence.",
+		"Example Ltd. provides services until the sentence really ends. Next sentence.",
+	} {
+		target := strings.Index(abbreviation, ". ") + 1
+		chunks := splitCorrectionChunks(abbreviation, target)
+		if len(chunks) == 0 || !strings.Contains(chunks[0].text, "really ends.") {
+			t.Errorf("splitCorrectionChunks() split after abbreviation: %#v", chunks)
+		}
+	}
+
+	ellipsis := strings.Repeat("word ", 20) + "pause… " + strings.Repeat("more ", 20) + "done."
+	chunks := splitCorrectionChunks(ellipsis, strings.Index(ellipsis, "…")+len("…"))
+	if len(chunks) < 2 || !strings.HasSuffix(chunks[0].text, "…") {
+		t.Errorf("splitCorrectionChunks() did not split at Unicode ellipsis: %#v", chunks)
+	}
+}
+
+type sequencePredictor struct {
+	outputs []string
+	calls   int
+}
+
+func (p *sequencePredictor) Predict(_ string, _ ...llama.PredictOption) (string, error) {
+	if p.calls >= len(p.outputs) {
+		return "", errors.New("unexpected prediction call")
+	}
+	output := p.outputs[p.calls]
+	p.calls++
+	return output, nil
+}
+
+func (p *sequencePredictor) Free() {}
 
 func TestCleanupLeavesCorrectDictationUnchanged(t *testing.T) {
 	const raw = "The Polygon and Base blockchains are working correctly."

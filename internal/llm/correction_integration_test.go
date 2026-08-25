@@ -26,6 +26,7 @@ func TestCorrectionWithRealModel(t *testing.T) {
 		{"I compare the Polygon blockchain and the base blockchain.", "I compare the Polygon blockchain and the Base blockchain."},
 		{"The music software can generate base notes.", "The music software can generate bass notes."},
 		{"Run this under the large B3 turbo model.", "Run this under the large v3 turbo model."},
+		{"this sentence has incorrect punctuation, And CAPITALIZATION", "This sentence has incorrect punctuation. And capitalization."},
 		{"The Polygon and Base blockchains are working correctly.", "The Polygon and Base blockchains are working correctly."},
 		{"The base of the statue is made of stone.", "The base of the statue is made of stone."},
 		{"The bass player performs the lowest notes.", "The bass player performs the lowest notes."},
