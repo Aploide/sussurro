@@ -247,13 +247,13 @@ func run() {
 		bindings := ui.HotkeyBindings{
 			PushToTalk: cfg.Hotkey.PushToTalk,
 			Toggle:     cfg.Hotkey.Toggle,
-			OnPress:   func() { input.Dispatch(session.InputPress) },
-			OnRelease: func() { input.Dispatch(session.InputRelease) },
-			OnToggle:  func() { input.Dispatch(session.InputToggle) },
+			OnPress:    func() { input.Dispatch(session.InputPress) },
+			OnRelease:  func() { input.Dispatch(session.InputRelease) },
+			OnToggle:   func() { input.Dispatch(session.InputToggle) },
 		}
 
 		// Set up input handler before entering the UI main loop.
-		if stop := startTriggerServer(flow, input, log); stop != nil {
+		if stop := startTriggerServer(flow, input, uiMgr, log); stop != nil {
 			defer stop()
 		}
 
@@ -277,7 +277,9 @@ func run() {
 	// ---- Headless / CLI mode (--no-ui) ----
 	log.Info("Headless mode — no overlay")
 
-	if stop := startTriggerServer(flow, input, log); stop != nil {
+	// No UI here, so the settings command is refused rather than raising a
+	// window that was never created.
+	if stop := startTriggerServer(flow, input, nil, log); stop != nil {
 		defer stop()
 	}
 

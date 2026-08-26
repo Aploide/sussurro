@@ -147,7 +147,13 @@ func selectDeliveryBackend(cfg *config.Config, injector delivery.Injector, log *
 // Failure to start is not fatal. On Wayland it is the only input route, but
 // elsewhere the hotkeys still work, so a taken socket degrades rather than
 // preventing dictation entirely.
-func startTriggerServer(flow workflow, input session.InputDispatcher, log *slog.Logger) func() {
+//
+// uiMgr is the running interface, or nil in headless mode, and gates the
+// settings command. It is taken as the concrete type rather than trigger.UI so
+// that a nil Manager stays a nil interface: passing a typed nil pointer into an
+// interface parameter would leave the server's nil check false and panic on the
+// first settings command.
+func startTriggerServer(flow workflow, input session.InputDispatcher, uiMgr *ui.Manager, log *slog.Logger) func() {
 	server, err := trigger.NewServer(log)
 	if err != nil {
 		log.Error("Trigger socket unavailable", "error", err)
@@ -156,6 +162,10 @@ func startTriggerServer(flow workflow, input session.InputDispatcher, log *slog.
 
 	if flow.controller != nil {
 		server.SetHandler(flow.controller)
+	}
+
+	if uiMgr != nil {
+		server.SetUI(uiMgr)
 	}
 
 	if err := server.Start(input); err != nil {

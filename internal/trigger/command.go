@@ -27,6 +27,10 @@ const (
 	CommandDeliver Command = "deliver"
 	// CommandSubmit inserts the reviewed text and then sends Enter.
 	CommandSubmit Command = "submit"
+	// CommandSettings raises the settings window. Alone among the commands it
+	// drives no recording state, so a desktop binding can send it purely to
+	// reach the UI of an instance that is already running.
+	CommandSettings Command = "settings"
 )
 
 // commands lists every accepted command, for validation and diagnostics.
@@ -37,6 +41,7 @@ var commands = []Command{
 	CommandCancel,
 	CommandDeliver,
 	CommandSubmit,
+	CommandSettings,
 }
 
 // ParseCommand interprets one line of socket input. Surrounding whitespace and
@@ -96,4 +101,15 @@ type Handler interface {
 	Cancel()
 	// Deliver inserts the reviewed text, optionally followed by Enter.
 	Deliver(submit bool) error
+}
+
+// UI reaches the parts of the running interface that are not workflow actions.
+// It is kept separate from Handler because the two are unset independently:
+// Handler is absent in immediate mode, where review has no meaning, while the
+// UI is absent under --no-ui. Folding settings into Handler would have made it
+// unreachable in immediate mode for no reason.
+type UI interface {
+	// ToggleSettings shows the settings window, or hides it when it is already
+	// visible. Implementations must be safe to call from the socket goroutine.
+	ToggleSettings()
 }

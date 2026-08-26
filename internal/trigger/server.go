@@ -28,6 +28,9 @@ type Server struct {
 	// handler performs cancel and delivery. Nil in immediate mode, where
 	// those commands have no meaning.
 	handler Handler
+	// ui reaches the settings window. Nil under --no-ui, where there is no
+	// window to raise.
+	ui UI
 
 	// notify sends a desktop notification. Replaced in tests.
 	notify func(summary, body string)
@@ -91,6 +94,13 @@ const staleSocketTimeout = 200 * time.Millisecond
 // correct for immediate mode where they have no meaning.
 func (s *Server) SetHandler(handler Handler) {
 	s.handler = handler
+}
+
+// SetUI installs the interface used by the settings command. Must be called
+// before Start. Leaving it unset refuses settings, which is correct under
+// --no-ui where no window exists to raise.
+func (s *Server) SetUI(ui UI) {
+	s.ui = ui
 }
 
 // Start begins listening. The dispatcher receives every recording gesture, so
@@ -176,6 +186,17 @@ func (s *Server) Execute(raw string) string {
 
 	if event, isGesture := command.InputEvent(); isGesture {
 		return s.gesture(command, event)
+	}
+
+	// Settings is checked before the review-mode guard below: it needs the UI,
+	// not the controller, and is valid in immediate mode.
+	if command == CommandSettings {
+		if s.ui == nil {
+			s.log.Warn("Trigger command requires the UI", "command", command)
+			return "ERROR settings requires the UI (not available under --no-ui)"
+		}
+		s.ui.ToggleSettings()
+		return "SETTINGS"
 	}
 
 	if s.handler == nil {

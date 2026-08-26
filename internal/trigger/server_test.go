@@ -35,6 +35,24 @@ func (d *fakeDispatcher) recorded() []session.InputEvent {
 	return append([]session.InputEvent(nil), d.events...)
 }
 
+// fakeUI records settings toggle requests.
+type fakeUI struct {
+	mu    sync.Mutex
+	shown int
+}
+
+func (u *fakeUI) ToggleSettings() {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.shown++
+}
+
+func (u *fakeUI) shows() int {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.shown
+}
+
 // fakeHandler records review actions.
 type fakeHandler struct {
 	mu       sync.Mutex
@@ -317,6 +335,68 @@ func TestServerRespondsOverTheSocket(t *testing.T) {
 	}
 	if events := dispatch.recorded(); len(events) != 1 || events[0] != session.InputPress {
 		t.Errorf("events = %v, want one press", events)
+	}
+}
+
+func TestSettingsTogglesTheWindow(t *testing.T) {
+	dispatch := &fakeDispatcher{}
+	server := newTestServer(dispatch, &fakeHandler{})
+	ui := &fakeUI{}
+	server.SetUI(ui)
+
+	if reply := server.Execute("settings\n"); reply != "SETTINGS" {
+		t.Errorf("reply = %q, want SETTINGS", reply)
+	}
+	if ui.shows() != 1 {
+		t.Errorf("ToggleSettings called %d times, want 1", ui.shows())
+	}
+	// Raising a window must not touch the recording state machine.
+	if events := dispatch.recorded(); len(events) != 0 {
+		t.Errorf("events = %v, want none", events)
+	}
+}
+
+// A second command must reach the UI too. The server deliberately holds no
+// visibility state of its own -- the window is the only authority on whether
+// it is open -- so a repeat must not be swallowed here as a duplicate.
+func TestRepeatedSettingsCommandsEachReachTheUI(t *testing.T) {
+	server := newTestServer(&fakeDispatcher{}, &fakeHandler{})
+	ui := &fakeUI{}
+	server.SetUI(ui)
+
+	for i := range 3 {
+		if reply := server.Execute("settings\n"); reply != "SETTINGS" {
+			t.Errorf("call %d: reply = %q, want SETTINGS", i+1, reply)
+		}
+	}
+	if ui.shows() != 3 {
+		t.Errorf("ToggleSettings called %d times, want 3", ui.shows())
+	}
+}
+
+// Settings is a UI action, not a review action, so it must work in immediate
+// mode where no controller exists. This is why UI is a separate interface from
+// Handler rather than another method on it.
+func TestSettingsWorksInImmediateMode(t *testing.T) {
+	server := newTestServer(&fakeDispatcher{}, nil)
+	ui := &fakeUI{}
+	server.SetUI(ui)
+
+	if reply := server.Execute("settings\n"); reply != "SETTINGS" {
+		t.Errorf("reply = %q, want SETTINGS", reply)
+	}
+	if ui.shows() != 1 {
+		t.Errorf("ToggleSettings called %d times, want 1", ui.shows())
+	}
+}
+
+// Under --no-ui there is no window to raise, so the command is refused rather
+// than silently accepted.
+func TestSettingsRefusedWithoutUI(t *testing.T) {
+	server := newTestServer(&fakeDispatcher{}, &fakeHandler{})
+
+	if reply := server.Execute("settings\n"); !strings.HasPrefix(reply, "ERROR") {
+		t.Errorf("reply = %q, want an error", reply)
 	}
 }
 

@@ -263,6 +263,25 @@ func (m *Manager) Quit() {
 	})
 }
 
+// ToggleSettings shows the settings window, or hides it when it is already
+// visible. Safe to call from any goroutine: settingsWindow.Toggle marshals
+// onto the UI thread itself.
+//
+// It toggles rather than only raising because its caller is a key binding, and
+// a key that opens a window should close it again. The tray menu keeps using
+// Show, where "Settings" should never mean "close settings".
+//
+// The nil check is not defensive padding. m.settings is created inside Run(),
+// so a trigger command arriving between process start and that assignment
+// would otherwise dereference nil. Dropping the request is right here — the
+// window the user asked for does not exist yet.
+func (m *Manager) ToggleSettings() {
+	if m.settings == nil {
+		return
+	}
+	m.settings.Toggle()
+}
+
 // --- StateNotifier implementation (compatible with pipeline.StateNotifier) ---
 
 // OnStateChange is called by the pipeline from its own goroutine.

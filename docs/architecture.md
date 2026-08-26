@@ -108,7 +108,11 @@ application. Every part is off by default; see
   from device I/O. `auto` never opens `/dev/input`, so ordinary hosts need no
   `input` group membership.
 - **Trigger socket**: Accepts explicit `press`, `release`, `cancel`, `deliver`,
-  and `submit` alongside the original `toggle`.
+  and `submit` alongside the original `toggle`, plus `settings` to show the
+  settings window, or hide it when already visible. `settings` drives no
+  recording state, so it works in immediate mode as well as review mode, and is
+  refused under `--no-ui`. Visibility is read from the window itself rather
+  than cached, so closing it from the titlebar keeps the toggle in step.
 
 #### Delivery backends (`internal/delivery`)
 - **Role**: Insert reviewed text through `Deliver` or `DeliverAndSubmit`.
