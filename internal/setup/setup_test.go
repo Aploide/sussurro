@@ -91,6 +91,12 @@ func TestDefaultConfigTemplateWithWindowsPaths(t *testing.T) {
 	if got := v.GetString("models.llm.path"); got != llm {
 		t.Errorf("models.llm.path = %q, want %q", got, llm)
 	}
+	if got := v.GetInt("models.llm.context_size"); got != 4096 {
+		t.Errorf("models.llm.context_size = %d, want 4096", got)
+	}
+	if got := v.GetInt("models.llm.gpu_layers"); got != 99 {
+		t.Errorf("models.llm.gpu_layers = %d, want 99", got)
+	}
 	if got := v.GetString("hotkey.trigger"); got != "ctrl+shift+space" {
 		t.Errorf("hotkey.trigger = %q", got)
 	}

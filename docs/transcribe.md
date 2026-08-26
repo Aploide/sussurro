@@ -136,8 +136,8 @@ models:
   llm:
     path: ~/.sussurro/models/qwen3-sussurro.gguf
     threads: 4
-    context_size: 2048
-    gpu_layers: 0
+    context_size: 4096
+    gpu_layers: 99          # Uses Vulkan/Metal when built; CPU-only builds ignore it
 ```
 
 To use a completely separate configuration (different models, different language):

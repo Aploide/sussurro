@@ -2,7 +2,9 @@ package llm
 
 import (
 	"os"
+	"strconv"
 	"testing"
+	"time"
 )
 
 // TestCorrectionWithRealModel is opt-in because it loads a GGUF model. It
@@ -14,7 +16,13 @@ func TestCorrectionWithRealModel(t *testing.T) {
 		t.Skip("set SUSSURRO_LLM_TEST_MODEL to run the real-model correction test")
 	}
 
-	engine, err := NewEngine(modelPath, 4, 32768, 0, false)
+	threads := integrationEnvInt(t, "SUSSURRO_LLM_TEST_THREADS", 4)
+	contextSize := integrationEnvInt(t, "SUSSURRO_LLM_TEST_CONTEXT", 4096)
+	gpuLayers := integrationEnvInt(t, "SUSSURRO_LLM_TEST_GPU_LAYERS", 99)
+	debug := os.Getenv("SUSSURRO_LLM_TEST_DEBUG") != ""
+	t.Logf("model configuration: threads=%d context=%d gpu_layers=%d debug=%t", threads, contextSize, gpuLayers, debug)
+
+	engine, err := NewEngine(modelPath, threads, contextSize, gpuLayers, debug)
 	if err != nil {
 		t.Fatalf("NewEngine() error = %v", err)
 	}
@@ -33,7 +41,10 @@ func TestCorrectionWithRealModel(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.raw, func(t *testing.T) {
+			started := time.Now()
 			got, err := engine.CleanupText(tt.raw)
+			duration := time.Since(started)
+			t.Logf("cleanup duration: %s", duration)
 			if err != nil {
 				t.Fatalf("CleanupText() error = %v", err)
 			}
@@ -42,4 +53,17 @@ func TestCorrectionWithRealModel(t *testing.T) {
 			}
 		})
 	}
+}
+
+func integrationEnvInt(t *testing.T, name string, fallback int) int {
+	t.Helper()
+	value := os.Getenv(name)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		t.Fatalf("%s=%q is not an integer: %v", name, value, err)
+	}
+	return parsed
 }

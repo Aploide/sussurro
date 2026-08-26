@@ -361,7 +361,7 @@ func TestSetNestedValueEditsTheShippedDefaults(t *testing.T) {
 	if cfg.Workflow.Delivery.Backend != DeliveryAuto || cfg.Workflow.Mode != ModeImmediate {
 		t.Errorf("workflow = %+v, want only the input backend changed", cfg.Workflow)
 	}
-	if cfg.Models.LLM.ContextSize != 32768 {
+	if cfg.Models.LLM.ContextSize != 4096 {
 		t.Errorf("Models.LLM.ContextSize = %d, want it preserved", cfg.Models.LLM.ContextSize)
 	}
 }

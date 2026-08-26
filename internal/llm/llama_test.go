@@ -273,8 +273,8 @@ func TestCleanupRunsBoundedCorrectionInference(t *testing.T) {
 	if !strings.Contains(model.prompt, "<|im_start|>user\nThe build is broken.<|im_end|>") {
 		t.Errorf("prompt does not contain the deterministically cleaned transcript: %q", model.prompt)
 	}
-	if model.options.Tokens != correctionMaxTokens || model.options.Threads != 4 {
-		t.Errorf("prediction options = %+v, want tokens=%d threads=4", model.options, correctionMaxTokens)
+	if model.options.Tokens != correctionMaxTokens || model.options.Threads != 4 || !model.options.DebugMode {
+		t.Errorf("prediction options = %+v, want tokens=%d threads=4 debug enabled", model.options, correctionMaxTokens)
 	}
 }
 

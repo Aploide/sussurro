@@ -24,17 +24,25 @@ LLAMA_DIR := third_party/go-llama.cpp
 # GO_LLAMA_COMMIT is the fork's main HEAD (llama.cpp submodule recent enough for Qwen3).
 WHISPER_COMMIT ?= 764482c3175d9c3bc6089c1ec84df7d1b9537d83
 GO_LLAMA_COMMIT ?= b2c101738f26f466f1a30317d50a88ce7c0ada12
+WHISPER_BACKEND := cpu
+LLAMA_BACKEND := cpu
+WHISPER_CMAKE_EXTRA := -DWSP_GGML_VULKAN=OFF
+LLAMA_CMAKE_ARGS := -DGGML_VULKAN=OFF
+EXE :=
+WIN_LDFLAGS :=
+GGML_VULKAN_PATH :=
+VULKAN_LDFLAGS :=
 
 # Stamp files marking a completed native build, so `deps` is a no-op once the
-# libraries exist. Each stamp is named after the commit it was built from, so
-# bumping a pin invalidates it and forces the rebuild that pin requires.
+# libraries exist. Each stamp includes the commit and native backend, so a pin
+# or backend change invalidates it and forces the required reconfiguration.
 #
 # Without these, every `make build` and `make test` reconfigured whisper.cpp and
 # ran `make clean` on go-llama.cpp before recompiling it from scratch, which
 # cost about four and a half minutes per invocation even when nothing had
 # changed at all.
-WHISPER_STAMP := $(WHISPER_DIR)/.stamp-$(WHISPER_COMMIT)
-LLAMA_STAMP   := $(LLAMA_DIR)/.stamp-$(GO_LLAMA_COMMIT)
+WHISPER_STAMP = $(WHISPER_DIR)/.stamp-$(WHISPER_COMMIT)-$(WHISPER_BACKEND)
+LLAMA_STAMP   = $(LLAMA_DIR)/.stamp-$(GO_LLAMA_COMMIT)-$(LLAMA_BACKEND)
 
 # Detect number of CPU cores for parallel builds
 # Build parallelism. Defaults to 50% of the cores so a rebuild leaves the
@@ -59,6 +67,10 @@ UNAME_M := $(shell uname -m)
 # shellcheck disable=SC1073,SC1065,SC1064,SC1072
 ifeq ($(UNAME_S),Darwin)
 	BUILD_TYPE := metal
+	WHISPER_BACKEND := metal
+	WHISPER_CMAKE_EXTRA := -DWSP_GGML_METAL=ON -DWSP_GGML_VULKAN=OFF
+	LLAMA_CMAKE_ARGS := -DLLAMA_METAL=ON -DGGML_VULKAN=OFF
+	LLAMA_BACKEND := metal
 	GGML_METAL_PATH := -L$(WHISPER_DIR)/build/ggml/src/ggml-metal
 else
 	BUILD_TYPE :=
@@ -66,17 +78,16 @@ else
 endif
 
 # Windows (MSYS2 MINGW64): Vulkan-accelerated whisper.cpp, CPU go-llama.cpp.
-# go-llama.cpp has no vulkan BUILD_TYPE upstream, and enabling Vulkan in both
-# ggml copies would collide on the generated SPIR-V shader symbols that the
-# wsp_ rename in patch-whisper.sh does not cover.
+# go-llama.cpp has no Vulkan BUILD_TYPE in its upstream cross-build Makefile.
 ifeq ($(OS),Windows_NT)
 	EXE := .exe
+	WHISPER_BACKEND := vulkan
 	# patch-whisper.sh renames the GGML_ CMake options too, hence WSP_GGML_VULKAN.
 	WHISPER_CMAKE_EXTRA := -G Ninja -DWSP_GGML_VULKAN=ON
 	GGML_VULKAN_PATH := -L$(WHISPER_DIR)/build/ggml/src/ggml-vulkan
 	# go-llama.cpp: skip llama.cpp's cli/server tools, and give the vendored
 	# cpp-httplib a Windows 10 baseline (MinGW's default _WIN32_WINNT is older).
-	LLAMA_CMAKE_ARGS := -DLLAMA_BUILD_TOOLS=OFF -DLLAMA_BUILD_APP=OFF -DLLAMA_BUILD_SERVER=OFF \
+	LLAMA_CMAKE_ARGS := -DGGML_VULKAN=OFF -DLLAMA_BUILD_TOOLS=OFF -DLLAMA_BUILD_APP=OFF -DLLAMA_BUILD_SERVER=OFF \
 		-DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0A00
 	# --start-group makes ld re-scan the static archives regardless of ordering;
 	# trailing libs cover the Vulkan loader, libstdc++ for ggml-vulkan, and the
@@ -93,35 +104,25 @@ ifeq ($(OS),Windows_NT)
 	# bindings carry their own -I/-L flags, so the env vars are not needed.
 	C_INCLUDE_PATH :=
 	LIBRARY_PATH :=
-else
-	EXE :=
-	WIN_LDFLAGS :=
-	# Linux: offload whisper to the GPU through Vulkan when the SDK is
-	# present. Vulkan is the portable choice — it covers AMD, Intel and
-	# NVIDIA without a vendor runtime install, which is why other local
-	# dictation apps ship it rather than ROCm or CUDA.
+else ifeq ($(UNAME_S),Linux)
+	# Linux: offload the bundled LLM through Vulkan when the SDK is present.
+	# Whisper remains on CPU because the two dependencies vendor different GGML
+	# revisions; loading both Vulkan runtimes in one process is not ABI-safe.
+	# Vulkan covers AMD, Intel, and NVIDIA without a vendor runtime install.
 	#
-	# Opt out with WHISPER_VULKAN=0 for a pure CPU build.
-	WHISPER_VULKAN ?= auto
-	ifeq ($(WHISPER_VULKAN),auto)
+	# Opt out with LLAMA_VULKAN=0 for a pure CPU build.
+	LLAMA_VULKAN ?= auto
+	ifeq ($(LLAMA_VULKAN),auto)
 		HAS_VULKAN := $(shell pkg-config --exists vulkan 2>/dev/null && command -v glslc >/dev/null 2>&1 && echo yes || echo no)
-	else ifeq ($(WHISPER_VULKAN),0)
+	else ifeq ($(LLAMA_VULKAN),0)
 		HAS_VULKAN := no
 	else
 		HAS_VULKAN := yes
 	endif
 	ifeq ($(HAS_VULKAN),yes)
-		# patch-whisper.sh renames the GGML_ CMake options, hence WSP_.
-		WHISPER_CMAKE_EXTRA := -DWSP_GGML_VULKAN=ON
-		GGML_VULKAN_PATH := -L$(WHISPER_DIR)/build/ggml/src/ggml-vulkan
-		# Passed via CGO_LDFLAGS rather than the bindings' #cgo directives:
-		# the bindings are a vendored upstream file, and the backend is only
-		# present when whisper was configured with Vulkan enabled.
-		VULKAN_LDFLAGS := -lggml-vulkan -lvulkan
-	else
-		WHISPER_CMAKE_EXTRA :=
-		GGML_VULKAN_PATH :=
-		VULKAN_LDFLAGS :=
+		LLAMA_CMAKE_ARGS := -DGGML_VULKAN=ON
+		LLAMA_BACKEND := vulkan
+		VULKAN_LDFLAGS := -lvulkan
 	endif
 endif
 
@@ -294,21 +295,24 @@ $(LLAMA_STAMP):
 		git -C $(LLAMA_DIR) checkout --quiet $(GO_LLAMA_COMMIT); \
 		git -C $(LLAMA_DIR) submodule update --init --recursive; \
 	fi
+	@# A backend or pin change must reconfigure CMake and rebuild the archive.
+	@# The dependency Makefile does not declare binding.cpp as an object input,
+	@# and otherwise trusts build/build_complete from the previous backend.
+	@rm -f $(LLAMA_DIR)/build/build_complete $(LLAMA_DIR)/binding.o $(LLAMA_DIR)/libbinding.a
 ifeq ($(OS),Windows_NT)
 	@echo "Patching go-llama.cpp for Windows..."
 	@chmod +x scripts/patch-llama-windows.sh
 	@./scripts/patch-llama-windows.sh
 endif
 	@echo "Building go-llama.cpp library..."
-	@# No `make clean` here. It used to run unconditionally, deleting the whole
-	@# build tree and every object file before recompiling from scratch, which
-	@# was the bulk of a four and a half minute no-op build. The stamp is what
-	@# guarantees a rebuild when the pin moves; a wipe on every invocation is
-	@# not needed for that, and `clean` remains available for a forced one.
+	@# Do not run `make clean` here: it deletes the whole build tree and turns a
+	@# backend switch into a four-minute rebuild. Removing the three targets
+	@# above keeps the CMake object cache while forcing correct reconfiguration,
+	@# binding compilation, and archive assembly.
 ifeq ($(OS),Windows_NT)
 	@$(NICE) $(MAKE) -j $(NPROCS) -C $(LLAMA_DIR) libbinding.a BUILD_TYPE=$(BUILD_TYPE) CMAKE_ARGS="$(LLAMA_CMAKE_ARGS)"
 else
-	@$(NICE) $(MAKE) -j $(NPROCS) -C $(LLAMA_DIR) libbinding.a BUILD_TYPE=$(BUILD_TYPE)
+	@$(NICE) $(MAKE) -j $(NPROCS) -C $(LLAMA_DIR) libbinding.a BUILD_TYPE=$(BUILD_TYPE) CMAKE_ARGS="$(LLAMA_CMAKE_ARGS)"
 endif
 	@rm -f $(LLAMA_DIR)/.stamp-*
 	@touch $@

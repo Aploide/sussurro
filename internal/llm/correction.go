@@ -106,7 +106,11 @@ func (e *Engine) correctMishearingChunk(text string) string {
 		defer restore()
 	}
 
-	candidate, err := e.model.Predict(prompt, correctionPredictOptions(e.threads)...)
+	options := correctionPredictOptions(e.threads)
+	if e.debug {
+		options = append(options, llama.Debug)
+	}
+	candidate, err := e.model.Predict(prompt, options...)
 	if err != nil {
 		slog.Debug("LLM correction failed; keeping input", "error", err)
 		return text

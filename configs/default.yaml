@@ -40,8 +40,8 @@ models:
     language: "en"
   llm:
     path: "models/qwen3-sussurro-q4_k_m.gguf"
-    context_size: 32768
-    gpu_layers: 0
+    context_size: 4096
+    gpu_layers: 99
     threads: 4
     # Strict correction-only instructions. Leave false for the bundled
     # qwen3-sussurro model; set true when using a general instruct model.

@@ -125,8 +125,8 @@ models:
     threads: 4
   llm:
     path: {{LLM_PATH}}
-    context_size: 32768
-    gpu_layers: 0
+    context_size: 4096
+    gpu_layers: 99
     threads: 4
 
 hotkey:
