@@ -97,10 +97,10 @@ func representativeSettingsData(t *testing.T) string {
 		"language": "en", "lowercaseOutput": false, "skipLLMCleanup": false,
 		"dictionary": []string{"Sussurro", "Kubernetes", "PostgreSQL"},
 		"models": []map[string]any{
-			{"id": "small", "name": "Small", "desc": "Fast English recognition model", "size": "466 MB", "installed": true, "active": true, "type": "whisper"},
-			{"id": "medium", "name": "Medium", "desc": "More accurate multilingual recognition model", "size": "1.5 GB", "installed": true, "active": false, "type": "whisper"},
-			{"id": "large", "name": "Large v3 Turbo", "desc": "Highest accuracy recognition model", "size": "1.6 GB", "installed": false, "active": false, "type": "whisper"},
-			{"id": "qwen", "name": "Qwen cleanup", "desc": "Local transcription cleanup model", "size": "1.3 GB", "installed": true, "active": true, "type": "llm"},
+			{"id": "small", "name": "Small", "desc": "Fast English recognition model", "size": "466 MB", "installed": true, "active": true, "downloadable": true, "selectable": true, "type": "whisper"},
+			{"id": "medium", "name": "Medium", "desc": "More accurate multilingual recognition model", "size": "1.5 GB", "installed": true, "active": false, "downloadable": true, "selectable": true, "type": "whisper"},
+			{"id": "large", "name": "Large v3 Turbo", "desc": "Highest accuracy recognition model", "size": "1.6 GB", "installed": false, "active": false, "downloadable": true, "selectable": false, "type": "whisper"},
+			{"id": "qwen", "name": "Qwen cleanup", "desc": "Local transcription cleanup model", "size": "1.3 GB", "installed": true, "active": true, "downloadable": true, "selectable": true, "type": "llm"},
 		},
 		"workflow": map[string]any{
 			"mode": "review", "streamingEnabled": true, "streamingInterval": "750ms",

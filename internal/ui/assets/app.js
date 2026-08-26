@@ -214,19 +214,23 @@ function renderModelList(containerId, models, groupName) {
     const status = document.createElement('div');
     status.className = 'model-status';
     status.id = `status-${m.id}`;
-    status.appendChild(m.installed ? installedBadge() : downloadArea(m.id));
+    if (m.installed) {
+      status.appendChild(installedBadge());
+    } else if (m.downloadable) {
+      status.appendChild(downloadArea(m.id));
+    } else {
+      status.appendChild(unavailableBadge());
+    }
     item.append(radio, info, status);
 
-    // LLM has only one model — disable the radio, nothing to switch to
-    if (m.type === 'llm') {
-      radio.disabled = true;
-    } else {
+    radio.disabled = !m.selectable;
+    if (m.selectable) {
       radio.addEventListener('change', async () => {
         if (!radio.checked) return;
-        if (!m.installed) { radio.checked = false; return; }
+        if (!m.installed) { await reloadSettings(); return; }
 
         const res = await window.setActiveModel(m.id);
-        if (res.startsWith('error')) { radio.checked = false; return; }
+        if (res.startsWith('error')) { await reloadSettings(); return; }
 
         // Config written — refresh the active badge then show the restart banner.
         await reloadSettings();
@@ -237,7 +241,7 @@ function renderModelList(containerId, models, groupName) {
     container.appendChild(item);
 
     // Attach download handler
-    if (!m.installed) {
+    if (!m.installed && m.downloadable) {
       const btn = item.querySelector('.download-btn');
       if (btn) btn.addEventListener('click', e => { e.stopPropagation(); startDownload(m.id); });
     }
@@ -255,6 +259,13 @@ function installedBadge() {
   const badge = document.createElement('span');
   badge.className = 'installed-badge';
   badge.textContent = '✓ Installed';
+  return badge;
+}
+
+function unavailableBadge() {
+  const badge = document.createElement('span');
+  badge.className = 'installed-badge';
+  badge.textContent = 'Not found';
   return badge;
 }
 

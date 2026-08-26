@@ -227,6 +227,10 @@ ifeq ($(UNAME_S),Linux)
 	CGO_CFLAGS="$(LAYER_CFLAGS) $(WV_CFLAGS)" \
 	CGO_LDFLAGS="$(WHISPER_LDFLAGS) $(LAYER_LDFLAGS) $(WV_LDFLAGS)" \
 	$(NICE) go test -tags settings_geometry -count=1 -timeout 25s -run '^TestRenderedSettingsGeometryReportsEveryTab$$' ./internal/ui
+	PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_UI)" \
+	CGO_CFLAGS="$(LAYER_CFLAGS) $(WV_CFLAGS)" \
+	CGO_LDFLAGS="$(WHISPER_LDFLAGS) $(LAYER_LDFLAGS) $(WV_LDFLAGS)" \
+	$(NICE) go test -tags settings_geometry -count=1 -timeout 25s -run '^TestRenderedModelSelectionFlow$$' ./internal/ui
 else
 	@echo "test-settings-geometry is currently supported only on Linux/WebKit"; exit 1
 endif

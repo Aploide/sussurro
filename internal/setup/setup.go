@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"github.com/aploide/sussurro/internal/config"
 	"go.yaml.in/yaml/v3"
@@ -18,23 +17,10 @@ import (
 // pct is 0–100; downloaded and total are byte counts.
 type ProgressCallback func(name string, pct float64, downloaded, total int64)
 
-var (
-	progressMu sync.Mutex
-	progressCB ProgressCallback
-)
-
-// SetProgressCallback installs a callback that receives download progress.
-// Pass nil to clear. Safe to call from any goroutine.
-func SetProgressCallback(cb ProgressCallback) {
-	progressMu.Lock()
-	progressCB = cb
-	progressMu.Unlock()
-}
-
-// DownloadModel downloads a model file from url to destPath with the given
-// display name.  Progress is reported via the installed ProgressCallback if any.
-func DownloadModel(url, destPath, name string) error {
-	if err := downloadFile(url, destPath, name); err != nil {
+// DownloadModel downloads a model file and reports progress only to this
+// download's callback, so concurrent downloads cannot cross-wire their UI.
+func DownloadModel(url, destPath, name string, progress ProgressCallback) error {
+	if err := downloadFileWithProgress(url, destPath, name, progress); err != nil {
 		return fmt.Errorf("download %s: %w", name, err)
 	}
 	return nil
@@ -64,38 +50,37 @@ func EnsureVADModel(destPath string, outputs ...io.Writer) error {
 	return nil
 }
 
-// SetActiveModel updates config.yaml to use the given model ID as the active
-// ASR model.  modelID is one of: "whisper-small", "whisper-large-v3-turbo".
-func SetActiveModel(modelID string) error {
+// ActivateModel persists and activates an installed model from the supported catalog.
+func ActivateModel(cfg *config.Config, modelID string) error {
+	model, ok := FindModel(modelID)
+	if !ok {
+		return fmt.Errorf("unknown model ID: %s", modelID)
+	}
+
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("resolve home directory: %w", err)
 	}
-	modelsDir := filepath.Join(homeDir, ".sussurro", "models")
-	configFile := filepath.Join(homeDir, ".sussurro", "config.yaml")
-
-	configBytes, err := os.ReadFile(configFile)
+	newPath := filepath.Join(homeDir, ".sussurro", "models", model.Filename)
+	info, err := os.Stat(newPath)
 	if err != nil {
-		return fmt.Errorf("read configuration: %w", err)
+		return fmt.Errorf("model is not installed: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("model is not a regular file: %s", newPath)
 	}
 
-	var newPath string
-	switch modelID {
-	case "whisper-small":
-		newPath = filepath.Join(modelsDir, fileASRSmall)
-	case "whisper-large-v3-turbo":
-		newPath = filepath.Join(modelsDir, fileASRLarge)
-	default:
-		return fmt.Errorf("unknown model ID: %s", modelID)
+	role := config.ModelRoleASR
+	if model.Kind == ModelKindLLM {
+		role = config.ModelRoleLLM
 	}
-
-	// Replace either known ASR path with the new one
-	updated := string(configBytes)
-	updated = config.ReplacePathInYAML(updated, filepath.Join(modelsDir, fileASRSmall), newPath)
-	updated = config.ReplacePathInYAML(updated, filepath.Join(modelsDir, fileASRLarge), newPath)
-
-	if err := os.WriteFile(configFile, []byte(updated), 0644); err != nil {
-		return fmt.Errorf("write configuration: %w", err)
+	if err := config.SaveModelPath(cfg, role, newPath); err != nil {
+		return err
+	}
+	if model.Kind == ModelKindLLM {
+		cfg.Models.LLM.Path = newPath
+	} else {
+		cfg.Models.ASR.Path = newPath
 	}
 	return nil
 }
@@ -149,11 +134,25 @@ injection:
 	// Silero voice-activity model used by whisper.cpp
 	sizeVAD = "885 KB"
 	fileVAD = config.DefaultVADModelFilename
-
-	// Qwen 3 Sussurro GGUF
-	urlLLM  = "https://huggingface.co/cesp99/qwen3-sussurro/resolve/main/qwen3-sussurro-q4_k_m.gguf"
-	sizeLLM = "1.28 GB"
 )
+
+func configuredLLMPath(configFile, fallback string) string {
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		return fallback
+	}
+	var paths struct {
+		Models struct {
+			LLM struct {
+				Path string `yaml:"path"`
+			} `yaml:"llm"`
+		} `yaml:"models"`
+	}
+	if yaml.Unmarshal(data, &paths) != nil || paths.Models.LLM.Path == "" {
+		return fallback
+	}
+	return paths.Models.LLM.Path
+}
 
 func configuredVADPath(configFile, fallback string) string {
 	if path := os.Getenv("SUSSURRO_MODELS_ASR_VAD_PATH"); path != "" {
@@ -188,6 +187,9 @@ func EnsureSetup(configPaths ...string) error {
 	sussurroDir := filepath.Join(homeDir, ".sussurro")
 	modelsDir := filepath.Join(sussurroDir, "models")
 	configFile := filepath.Join(sussurroDir, "config.yaml")
+	if len(configPaths) > 0 && configPaths[0] != "" {
+		configFile = configPaths[0]
+	}
 
 	// 1. Create .sussurro directory if it doesn't exist
 	if _, err := os.Stat(sussurroDir); os.IsNotExist(err) {
@@ -230,12 +232,12 @@ func EnsureSetup(configPaths ...string) error {
 			asrPath = filepath.Join(modelsDir, fileASRLarge)
 		}
 	}
-	vadConfigFile := configFile
-	if len(configPaths) > 0 && configPaths[0] != "" {
-		vadConfigFile = configPaths[0]
+	vadPath := configuredVADPath(configFile, filepath.Join(modelsDir, fileVAD))
+	llmPath := configuredLLMPath(configFile, filepath.Join(modelsDir, "qwen3-sussurro-q4_k_m.gguf"))
+	llmModel, managedLLM := FindModelByFilename(filepath.Base(llmPath))
+	if !managedLLM {
+		llmModel, _ = FindModel("qwen3-sussurro-q4-k-m")
 	}
-	vadPath := configuredVADPath(vadConfigFile, filepath.Join(modelsDir, fileVAD))
-	llmPath := filepath.Join(modelsDir, "qwen3-sussurro-q4_k_m.gguf")
 
 	// 3. Check for old model files from versions before v1.3
 	entries, err := os.ReadDir(modelsDir)
@@ -245,9 +247,11 @@ func EnsureSetup(configPaths ...string) error {
 				continue
 			}
 			filename := entry.Name()
-			// If it's a .gguf file but NOT the new sussurro model, it's an old model
-			if strings.HasSuffix(filename, ".gguf") && filename != "qwen3-sussurro-q4_k_m.gguf" {
+			if strings.HasSuffix(filename, ".gguf") {
 				oldModelPath := filepath.Join(modelsDir, filename)
+				if _, supported := FindModelByFilename(filename); supported || filepath.Clean(oldModelPath) == filepath.Clean(llmPath) {
+					continue
+				}
 				fmt.Println("\n========================================")
 				fmt.Println("  OLD MODEL DETECTED - UPDATE REQUIRED")
 				fmt.Println("========================================")
@@ -255,7 +259,7 @@ func EnsureSetup(configPaths ...string) error {
 				fmt.Println("\nSussurro v1.3+ uses a new fine-tuned model: Qwen 3 Sussurro")
 				fmt.Println("The new model provides better transcription cleanup and accuracy.")
 				fmt.Printf("\nOld model location: %s\n", oldModelPath)
-				fmt.Printf("New model size: %s\n", sizeLLM)
+				fmt.Printf("New model size: %s\n", defaultLLMSize)
 				fmt.Print("\nWould you like to remove the old model and download the new one? (Y/n): ")
 
 				reader := bufio.NewReader(os.Stdin)
@@ -268,22 +272,6 @@ func EnsureSetup(configPaths ...string) error {
 						fmt.Printf("Warning: Could not remove old model: %v\n", err)
 					} else {
 						fmt.Println("Old model removed successfully.")
-					}
-
-					// Update config file to point to new model
-					fmt.Println("Updating configuration file...")
-					configContent, err := os.ReadFile(configFile)
-					if err == nil {
-						// Replace old model path with new one
-						oldPathInConfig := filepath.Join(modelsDir, filename)
-						newPathInConfig := llmPath
-						updatedConfig := config.ReplacePathInYAML(string(configContent), oldPathInConfig, newPathInConfig)
-
-						if err := os.WriteFile(configFile, []byte(updatedConfig), 0644); err != nil {
-							fmt.Printf("Warning: Could not update config file: %v\n", err)
-						} else {
-							fmt.Println("Configuration updated successfully.")
-						}
 					}
 				}
 				break // Only prompt once even if multiple old models exist
@@ -303,6 +291,9 @@ func EnsureSetup(configPaths ...string) error {
 		missingVAD = true
 	}
 	if _, err := os.Stat(llmPath); os.IsNotExist(err) {
+		if !managedLLM {
+			return fmt.Errorf("configured LLM model is missing and cannot be downloaded automatically: %s", llmPath)
+		}
 		missingLLM = true
 	}
 
@@ -349,20 +340,16 @@ func EnsureSetup(configPaths ...string) error {
 			fmt.Printf(" - Silero voice activity model: %s (%s)\n", vadPath, sizeVAD)
 		}
 		if missingLLM {
-			fmt.Printf(" - LLM Model (Qwen 3 Sussurro): %s (%s)\n", llmPath, sizeLLM)
+			fmt.Printf(" - %s (LLM): %s (%s)\n", llmModel.Name, llmPath, llmModel.Size)
 		}
 
 		totalSize := ""
 		if missingASR && missingLLM {
-			if chosenASRName == "Whisper Large v3 Turbo" {
-				totalSize = " (Total: ~2.90 GB)"
-			} else {
-				totalSize = " (Total: ~1.77 GB)"
-			}
+			totalSize = fmt.Sprintf(" (%s + %s)", chosenASRSize, llmModel.Size)
 		} else if missingASR {
 			totalSize = fmt.Sprintf(" (Total: %s)", chosenASRSize)
 		} else if missingLLM {
-			totalSize = fmt.Sprintf(" (Total: %s)", sizeLLM)
+			totalSize = fmt.Sprintf(" (Total: %s)", llmModel.Size)
 		} else {
 			totalSize = fmt.Sprintf(" (Total: %s)", sizeVAD)
 		}
@@ -384,7 +371,7 @@ func EnsureSetup(configPaths ...string) error {
 				}
 			}
 			if missingLLM {
-				if err := downloadFile(urlLLM, llmPath, "LLM Model"); err != nil {
+				if err := downloadFile(llmModel.DownloadURL, llmPath, llmModel.Name); err != nil {
 					return fmt.Errorf("failed to download LLM model: %w", err)
 				}
 			}
@@ -500,13 +487,21 @@ func SwitchWhisperModel() error {
 // indicator. The final path appears only after a complete download, so a
 // network failure cannot leave a partial model that future setup runs trust.
 func downloadFile(url, destPath, name string) error {
-	if err := downloadFileToWriter(url, destPath, name, os.Stdout); err != nil {
+	return downloadFileWithProgress(url, destPath, name, nil)
+}
+
+func downloadFileWithProgress(url, destPath, name string, progress ProgressCallback) error {
+	if err := downloadFileToWriterWithProgress(url, destPath, name, os.Stdout, progress); err != nil {
 		return fmt.Errorf("download %s: %w", name, err)
 	}
 	return nil
 }
 
 func downloadFileToWriter(url, destPath, name string, output io.Writer) error {
+	return downloadFileToWriterWithProgress(url, destPath, name, output, nil)
+}
+
+func downloadFileToWriterWithProgress(url, destPath, name string, output io.Writer, progress ProgressCallback) error {
 	fmt.Fprintf(output, "Downloading %s...\n", name)
 
 	resp, err := http.Get(url)
@@ -526,10 +521,11 @@ func downloadFileToWriter(url, destPath, name string, output io.Writer) error {
 	defer os.Remove(tmpPath)
 
 	reader := &progressReader{
-		Reader: resp.Body,
-		Total:  resp.ContentLength,
-		Name:   name,
-		Output: output,
+		Reader:   resp.Body,
+		Total:    resp.ContentLength,
+		Name:     name,
+		Output:   output,
+		Callback: progress,
 	}
 	if _, err := io.Copy(out, reader); err != nil {
 		if closeErr := out.Close(); closeErr != nil {
@@ -559,16 +555,14 @@ func downloadFileToWriter(url, destPath, name string, output io.Writer) error {
 }
 
 func (pr *progressReader) invokeCallback() {
-	progressMu.Lock()
-	cb := progressCB
-	progressMu.Unlock()
-	if cb != nil {
-		pct := 0.0
-		if pr.Total > 0 {
-			pct = float64(pr.Current) / float64(pr.Total) * 100
-		}
-		cb(pr.Name, pct, pr.Current, pr.Total)
+	if pr.Callback == nil {
+		return
 	}
+	pct := 0.0
+	if pr.Total > 0 {
+		pct = float64(pr.Current) / float64(pr.Total) * 100
+	}
+	pr.Callback(pr.Name, pct, pr.Current, pr.Total)
 }
 
 type progressReader struct {
@@ -577,7 +571,8 @@ type progressReader struct {
 	Current int64
 	Name    string
 	Last    int64
-	Output  io.Writer
+	Output   io.Writer
+	Callback ProgressCallback
 }
 
 func (pr *progressReader) Read(p []byte) (int, error) {

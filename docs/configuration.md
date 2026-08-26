@@ -124,9 +124,16 @@ the offload request. A 4096-token context keeps the bundled model below roughly
 2 GB of GPU/shared memory while covering Sussurro's bounded prompts; increase it
 only for unusually long direct model operations. Setup does not rewrite an
 existing config: after upgrading, set `context_size: 4096` and `gpu_layers: 99`
-under `models.llm` to opt into the lower-latency defaults. `vad_path` selects the Silero
-model that keeps silence and non-speech noise out of Whisper; this prevents
-stock subtitle phrases from appearing at the end of dictations. Existing
+under `models.llm` to opt into the lower-latency defaults.
+
+Settings recognizes the official Qwen 3 Sussurro F16, Q8_0, Q5_K_M, and Q4_K_M
+quantizations. Other GGUF files are not advertised as compatible automatically;
+an externally configured active model remains visible with an explicit
+compatibility warning.
+
+`vad_path` selects the Silero model that keeps silence and non-speech noise out
+of Whisper; this prevents stock subtitle phrases from appearing at the end of
+dictations. Existing
 configs may omit it—the default is
 `~/.sussurro/models/ggml-silero-v6.2.0.bin`. `vad_threshold` is Silero's
 speech-probability cutoff from 0 to 1. The measured default (`0.01`) preserves

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 
 	"github.com/aploide/sussurro/internal/config"
@@ -19,9 +20,11 @@ type modelInfo struct {
 	Name        string `json:"name"`
 	Description string `json:"desc"`
 	Size        string `json:"size"`
-	Installed   bool   `json:"installed"`
-	Active      bool   `json:"active"`
-	Type        string `json:"type"` // "whisper" or "llm"
+	Installed    bool   `json:"installed"`
+	Active       bool   `json:"active"`
+	Downloadable bool   `json:"downloadable"`
+	Selectable   bool   `json:"selectable"`
+	Type         string `json:"type"` // "whisper" or "llm"
 }
 
 // initialData is returned by getInitialData().
@@ -179,11 +182,10 @@ func bindBridge(sw *settingsWindow) {
 			if url == "" {
 				return
 			}
-			setup.SetProgressCallback(func(_ string, pct float64, _, _ int64) {
+			progress := func(_ string, pct float64, _, _ int64) {
 				sw.pushDownloadProgress(modelID, pct)
-			})
-			defer setup.SetProgressCallback(nil)
-			if err := setup.DownloadModel(url, dest, name); err != nil {
+			}
+			if err := setup.DownloadModel(url, dest, name, progress); err != nil {
 				sw.w.Dispatch(func() {
 					sw.w.Eval(fmt.Sprintf("onDownloadError('%s', '%v')", modelID, err))
 				})
@@ -202,17 +204,8 @@ func bindBridge(sw *settingsWindow) {
 				result = fmt.Sprintf("error: panic: %v", r)
 			}
 		}()
-		if err := setup.SetActiveModel(modelID); err != nil {
+		if err := setup.ActivateModel(mgr.cfg, modelID); err != nil {
 			return fmt.Sprintf("error: %v", err)
-		}
-		// Mirror the new path into the in-memory config so that the next call to
-		// getInitialData() returns the updated Active flag and the UI stays correct.
-		modelsDir := sussurroModelsDir()
-		switch modelID {
-		case "whisper-small":
-			mgr.cfg.Models.ASR.Path = modelsDir + "/ggml-small.bin"
-		case "whisper-large-v3-turbo":
-			mgr.cfg.Models.ASR.Path = modelsDir + "/ggml-large-v3-turbo.bin"
 		}
 		// Config written — the UI shows a restart banner instead of forcing a
 		// process restart, so in-flight audio/pipeline goroutines are not disrupted.
@@ -271,42 +264,45 @@ func sussurroModelsDir() string {
 
 func buildInitialData(mgr *Manager) initialData {
 	modelsDir := sussurroModelsDir()
-
-	whisperSmallPath := modelsDir + "/ggml-small.bin"
-	whisperLargePath := modelsDir + "/ggml-large-v3-turbo.bin"
-	llmPath := modelsDir + "/qwen3-sussurro-q4_k_m.gguf"
-
 	currentASR := mgr.cfg.Models.ASR.Path
 	currentLLM := mgr.cfg.Models.LLM.Path
 
-	models := []modelInfo{
-		{
-			ID:          "whisper-small",
-			Name:        "Whisper Small",
-			Description: "Faster, lower memory usage",
-			Size:        "~488 MB",
-			Installed:   fileExists(whisperSmallPath),
-			Active:      currentASR == whisperSmallPath,
-			Type:        "whisper",
-		},
-		{
-			ID:          "whisper-large-v3-turbo",
-			Name:        "Whisper Large v3 Turbo",
-			Description: "Higher accuracy, more memory",
-			Size:        "~1.62 GB",
-			Installed:   fileExists(whisperLargePath),
-			Active:      currentASR == whisperLargePath,
-			Type:        "whisper",
-		},
-		{
-			ID:          "qwen3-sussurro",
-			Name:        "Qwen 3 Sussurro",
-			Description: "Fine-tuned for transcription cleanup",
-			Size:        "~1.28 GB",
-			Installed:   fileExists(llmPath),
-			Active:      currentLLM == llmPath,
-			Type:        "llm",
-		},
+	supported := setup.SupportedModels()
+	models := make([]modelInfo, 0, len(supported)+1)
+	activeSupportedLLM := false
+	for _, model := range supported {
+		path := filepath.Join(modelsDir, model.Filename)
+		installed := regularFileExists(path)
+		active := currentASR == path
+		if model.Kind == setup.ModelKindLLM {
+			active = currentLLM == path
+			activeSupportedLLM = activeSupportedLLM || active
+		}
+		models = append(models, modelInfo{
+			ID:           model.ID,
+			Name:         model.Name,
+			Description:  model.Description,
+			Size:         model.Size,
+			Installed:    installed,
+			Active:       active,
+			Downloadable: true,
+			Selectable:   installed,
+			Type:         string(model.Kind),
+		})
+	}
+
+	// Keep an externally configured LLM visible without claiming that every
+	// arbitrary GGUF in the models directory supports Sussurro's cleanup prompt.
+	if currentLLM != "" && !activeSupportedLLM {
+		models = append(models, modelInfo{
+			ID:          "configured-llm",
+			Name:        filepath.Base(currentLLM),
+			Description: "Configured externally; compatibility not verified",
+			Size:        "Custom model",
+			Installed:   regularFileExists(currentLLM),
+			Active:      true,
+			Type:        string(setup.ModelKindLLM),
+		})
 	}
 
 	platform := "LINUX"
@@ -338,28 +334,16 @@ func buildInitialData(mgr *Manager) initialData {
 	}
 }
 
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
+func regularFileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
 }
 
-// resolveModelDownload maps a model ID to its download URL and local path.
+// resolveModelDownload maps a supported model ID to its download details.
 func resolveModelDownload(modelID string) (url, dest, name string) {
-	modelsDir := sussurroModelsDir()
-
-	switch modelID {
-	case "whisper-small":
-		return "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
-			modelsDir + "/ggml-small.bin",
-			"Whisper Small"
-	case "whisper-large-v3-turbo":
-		return "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
-			modelsDir + "/ggml-large-v3-turbo.bin",
-			"Whisper Large v3 Turbo"
-	case "qwen3-sussurro":
-		return "https://huggingface.co/cesp99/qwen3-sussurro/resolve/main/qwen3-sussurro-q4_k_m.gguf",
-			modelsDir + "/qwen3-sussurro-q4_k_m.gguf",
-			"Qwen 3 Sussurro"
+	model, ok := setup.FindModel(modelID)
+	if !ok {
+		return "", "", ""
 	}
-	return "", "", ""
+	return model.DownloadURL, filepath.Join(sussurroModelsDir(), model.Filename), model.Name
 }
