@@ -137,7 +137,7 @@ models:
     path: ~/.sussurro/models/qwen3-sussurro.gguf
     threads: 4
     context_size: 4096
-    gpu_layers: 99          # Uses Vulkan/Metal when built; CPU-only builds ignore it
+    gpu_layers: 99          # Offloads layers when the cleanup backend supports it
 ```
 
 To use a completely separate configuration (different models, different language):

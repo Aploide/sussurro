@@ -113,18 +113,20 @@ models:
   llm:
     path: "/home/you/.sussurro/models/qwen3-sussurro-q4_k_m.gguf" # Path to Qwen 3 model
     context_size: 4096                    # Fits bounded cleanup and edit prompts
-    gpu_layers: 99                        # Offload all available layers when GPU support is built
+    gpu_layers: 99                        # Offload layers when the cleanup backend supports it
     threads: 4
 ```
 
 Use absolute paths for model files. The first run setup writes a config file
-with absolute paths based on your home directory. Linux builds use Vulkan when
-the SDK is available, macOS builds use Metal, and CPU-only builds safely ignore
-the offload request. A 4096-token context keeps the bundled model below roughly
-2 GB of GPU/shared memory while covering Sussurro's bounded prompts; increase it
-only for unusually long direct model operations. Setup does not rewrite an
-existing config: after upgrading, set `context_size: 4096` and `gpu_layers: 99`
-under `models.llm` to opt into the lower-latency defaults.
+with absolute paths based on your home directory. Linux builds use Vulkan for
+Whisper when the SDK is available; the cleanup model temporarily remains on CPU
+because its separately vendored GGML runtime is not safe to load alongside
+Whisper's Vulkan runtime in one process. macOS builds use Metal, and CPU-only
+builds safely ignore the offload request. A 4096-token context bounds cleanup
+memory use while covering Sussurro's prompts; increase it only for unusually
+long direct model operations. Setup does not rewrite an existing config: after
+upgrading, set `context_size: 4096` and `gpu_layers: 99` under `models.llm` to
+use lower-memory defaults and GPU offload where the build supports it.
 
 Settings recognizes the official Qwen 3 Sussurro F16, Q8_0, Q5_K_M, and Q4_K_M
 quantizations. Other GGUF files are not advertised as compatible automatically;

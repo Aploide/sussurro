@@ -105,24 +105,26 @@ ifeq ($(OS),Windows_NT)
 	C_INCLUDE_PATH :=
 	LIBRARY_PATH :=
 else ifeq ($(UNAME_S),Linux)
-	# Linux: offload the bundled LLM through Vulkan when the SDK is present.
-	# Whisper remains on CPU because the two dependencies vendor different GGML
-	# revisions; loading both Vulkan runtimes in one process is not ABI-safe.
-	# Vulkan covers AMD, Intel, and NVIDIA without a vendor runtime install.
+	# Linux: keep live and final Whisper decoding on Vulkan. The bundled LLM
+	# remains on CPU until it can run in a separate process; the dependencies
+	# vendor incompatible GGML revisions and cannot safely load both Vulkan
+	# runtimes into this process.
 	#
-	# Opt out with LLAMA_VULKAN=0 for a pure CPU build.
-	LLAMA_VULKAN ?= auto
-	ifeq ($(LLAMA_VULKAN),auto)
+	# Opt out with WHISPER_VULKAN=0 for a pure CPU build.
+	WHISPER_VULKAN ?= auto
+	ifeq ($(WHISPER_VULKAN),auto)
 		HAS_VULKAN := $(shell pkg-config --exists vulkan 2>/dev/null && command -v glslc >/dev/null 2>&1 && echo yes || echo no)
-	else ifeq ($(LLAMA_VULKAN),0)
+	else ifeq ($(WHISPER_VULKAN),0)
 		HAS_VULKAN := no
 	else
 		HAS_VULKAN := yes
 	endif
 	ifeq ($(HAS_VULKAN),yes)
-		LLAMA_CMAKE_ARGS := -DGGML_VULKAN=ON
-		LLAMA_BACKEND := vulkan
-		VULKAN_LDFLAGS := -lvulkan
+		WHISPER_BACKEND := vulkan
+		# patch-whisper.sh renames the GGML_ CMake options too, hence WSP_ here.
+		WHISPER_CMAKE_EXTRA := -DWSP_GGML_VULKAN=ON
+		GGML_VULKAN_PATH := -L$(WHISPER_DIR)/build/ggml/src/ggml-vulkan
+		VULKAN_LDFLAGS := -lggml-vulkan -lvulkan
 	endif
 endif
 
