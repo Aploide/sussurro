@@ -46,7 +46,7 @@ On first run Sussurro will guide you through downloading the AI models.
 - **Flexible ASR**: Whisper Small (fast) or Large v3 Turbo (accurate), switchable from the UI
 - **Live Hotkey Config**: Change the global hotkey from Settings — takes effect instantly, no restart
 - **Hotkey Mode**: Switch between *Push to Talk* (hold to record, release to transcribe) and *Toggle* (press once to start, press again to transcribe) directly from Settings *(X11, macOS & Windows — not Wayland)*
-- **GPU Acceleration**: Metal on macOS, Vulkan on Windows
+- **GPU Acceleration**: Metal on macOS; Vulkan Whisper on Linux and Windows, plus Vulkan cleanup on Linux
 - **Transcription Language**: Choose the language Whisper listens for (or use Auto Detect) directly from Settings
 - **Headless Mode**: `--no-ui` flag for CLI/scripting use on any platform
 - **Review Mode** *(opt-in)*: Hold the transcription before it is delivered — read it, dictate a correction, or discard it, then insert it when you are ready. Off by default; see [Review workflow](#review-workflow)
@@ -56,7 +56,7 @@ On first run Sussurro will guide you through downloading the AI models.
 ## Quick Reference
 
 | Platform | Default hotkey | Default mode | Access Settings |
-|----------|---------------|-------------|----------------|
+| ---------- | --------------- | ------------- | ---------------- |
 | Linux X11 | `Ctrl+Shift+Space` | Push to Talk | System tray or right-click capsule |
 | Linux Wayland | configured in DE | n/a (external shortcut) | System tray or right-click capsule |
 | macOS | `Cmd+Shift+Space` | Push to Talk | System tray or right-click capsule |
@@ -141,7 +141,7 @@ Requires GTK3 and WebKit2GTK dev headers on Linux. On Windows, build under MSYS2
 When Sussurro runs (Linux, macOS, or Windows), a sleek pill-shaped capsule appears at the bottom-center of your screen:
 
 | State | Appearance |
-|-------|-----------|
+| ------- | ----------- |
 | **Idle** | 7 softly pulsing white dots |
 | **Recording** | 7 waveform bars animated by your voice |
 | **Transcribing** | "transcribing" text with a shimmer effect |
@@ -191,16 +191,19 @@ A standalone CLI for transcribing audio files using the same local models. Requi
 #### Install
 
 macOS & Linux:
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/aploide/sussurro/master/scripts/install-transcribe.sh | bash
 ```
 
 Windows (PowerShell):
+
 ```powershell
 irm https://raw.githubusercontent.com/aploide/sussurro/master/scripts/install-transcribe.ps1 | iex
 ```
 
 #### Usage
+
 ```bash
 sussurro-transcribe -i recording.mp3              # raw Whisper output to stdout
 sussurro-transcribe -i recording.wav -clean       # with LLM cleanup
@@ -209,7 +212,6 @@ sussurro-transcribe -i audio.mp3 -lang en -debug  # force language, verbose
 ```
 
 See [File Transcription](docs/transcribe.md) for full documentation.
-
 
 ---
 

@@ -40,8 +40,10 @@ esac
 
 # Binary name differs on Windows
 BIN_NAME="sussurro-transcribe"
+HELPER_NAME="sussurro-llm-helper"
 if [[ "${PLATFORM}" == "windows" ]]; then
     BIN_NAME="sussurro-transcribe.exe"
+    HELPER_NAME="sussurro-llm-helper.exe"
 fi
 
 # ── Setup ──────────────────────────────────────────────────────────────────────
@@ -56,8 +58,8 @@ rm -rf release
 mkdir -p "${RELEASE_DIR}"
 
 # Check if binary exists
-if [ ! -f "bin/${BIN_NAME}" ]; then
-    echo "Error: bin/${BIN_NAME} not found. Run 'make build-transcribe' first."
+if [ ! -f "bin/${BIN_NAME}" ] || [ ! -f "bin/${HELPER_NAME}" ]; then
+    echo "Error: bin/${BIN_NAME} or bin/${HELPER_NAME} not found. Run 'make build-transcribe' first."
     exit 1
 fi
 
@@ -65,7 +67,8 @@ fi
 
 echo "Copying binary..."
 cp "bin/${BIN_NAME}" "${RELEASE_DIR}/${BIN_NAME}"
-chmod +x "${RELEASE_DIR}/${BIN_NAME}"
+cp "bin/${HELPER_NAME}" "${RELEASE_DIR}/${HELPER_NAME}"
+chmod +x "${RELEASE_DIR}/${BIN_NAME}" "${RELEASE_DIR}/${HELPER_NAME}"
 
 echo "Copying example config..."
 cp configs/default.yaml "${RELEASE_DIR}/config.example.yaml"
@@ -78,14 +81,14 @@ cp configs/default.yaml "${RELEASE_DIR}/config.example.yaml"
     echo ""
     echo "Quick Start:"
     if [[ "${PLATFORM}" == "macos" ]]; then
-        echo "1. Make the binary executable:  chmod +x sussurro-transcribe"
-        echo "2. Remove macOS quarantine:     xattr -d com.apple.quarantine sussurro-transcribe"
+        echo "1. Make the binaries executable: chmod +x sussurro-transcribe sussurro-llm-helper"
+        echo "2. Remove macOS quarantine:      xattr -d com.apple.quarantine sussurro-transcribe sussurro-llm-helper"
         echo "3. Run:                         ./sussurro-transcribe -i audio.mp3"
     elif [[ "${PLATFORM}" == "windows" ]]; then
         echo "1. Open a terminal in this folder"
         echo "2. Run:                         .\\sussurro-transcribe.exe -i audio.mp3"
     else
-        echo "1. Make the binary executable:  chmod +x sussurro-transcribe"
+        echo "1. Make the binaries executable: chmod +x sussurro-transcribe sussurro-llm-helper"
         echo "2. Run:                         ./sussurro-transcribe -i audio.mp3"
     fi
     echo ""

@@ -2,6 +2,7 @@ package llm
 
 import (
 	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
@@ -14,6 +15,16 @@ func TestCorrectionWithRealModel(t *testing.T) {
 	modelPath := os.Getenv("SUSSURRO_LLM_TEST_MODEL")
 	if modelPath == "" {
 		t.Skip("set SUSSURRO_LLM_TEST_MODEL to run the real-model correction test")
+	}
+	if os.Getenv(helperOverrideEnv) == "" {
+		helper, err := filepath.Abs(filepath.Join("..", "..", "bin", helperBinaryName()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(helper); err != nil {
+			t.Fatalf("built LLM helper not found at %s; run make build-helper: %v", helper, err)
+		}
+		t.Setenv(helperOverrideEnv, helper)
 	}
 
 	threads := integrationEnvInt(t, "SUSSURRO_LLM_TEST_THREADS", 4)

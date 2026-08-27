@@ -4,28 +4,28 @@ import (
 	"strings"
 	"testing"
 
-	llama "github.com/AshkanYarmoradi/go-llama.cpp"
+	"github.com/aploide/sussurro/internal/llmipc"
 )
 
 type fakePredictor struct {
 	output  string
 	err     error
 	prompt  string
-	options llama.PredictOptions
+	options llmipc.PredictOptions
 	calls   int
 }
 
-func (f *fakePredictor) Predict(prompt string, opts ...llama.PredictOption) (string, error) {
+func (f *fakePredictor) Predict(prompt string, options llmipc.PredictOptions) (string, error) {
 	f.calls++
 	f.prompt = prompt
-	f.options = llama.NewPredictOptions(opts...)
+	f.options = options
 	if f.err != nil {
 		return "", f.err
 	}
 	return f.output, nil
 }
 
-func (f *fakePredictor) Free() {}
+func (f *fakePredictor) Close() {}
 
 // isSubsequence reports whether every word of sub appears in text in order.
 // This is the contract cleanup must satisfy: it may delete words, never
@@ -273,7 +273,7 @@ func TestCleanupRunsBoundedCorrectionInference(t *testing.T) {
 	if !strings.Contains(model.prompt, "<|im_start|>user\nThe build is broken.<|im_end|>") {
 		t.Errorf("prompt does not contain the deterministically cleaned transcript: %q", model.prompt)
 	}
-	if model.options.Tokens != correctionMaxTokens || model.options.Threads != 4 || !model.options.DebugMode {
+	if model.options.Tokens != correctionMaxTokens || model.options.Threads != 4 || !model.options.Debug {
 		t.Errorf("prediction options = %+v, want tokens=%d threads=4 debug enabled", model.options, correctionMaxTokens)
 	}
 }

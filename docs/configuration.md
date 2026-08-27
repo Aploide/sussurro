@@ -119,14 +119,14 @@ models:
 
 Use absolute paths for model files. The first run setup writes a config file
 with absolute paths based on your home directory. Linux builds use Vulkan for
-Whisper when the SDK is available; the cleanup model temporarily remains on CPU
-because its separately vendored GGML runtime is not safe to load alongside
-Whisper's Vulkan runtime in one process. macOS builds use Metal, and CPU-only
-builds safely ignore the offload request. A 4096-token context bounds cleanup
-memory use while covering Sussurro's prompts; increase it only for unusually
-long direct model operations. Setup does not rewrite an existing config: after
-upgrading, set `context_size: 4096` and `gpu_layers: 99` under `models.llm` to
-use lower-memory defaults and GPU offload where the build supports it.
+both Whisper and cleanup; the cleanup model runs in the sibling
+`sussurro-llm-helper` process because the models vendor incompatible GGML
+runtimes. macOS builds use Metal, and CPU-only builds safely ignore the offload
+request. A 4096-token context bounds cleanup memory use while covering
+Sussurro's prompts; increase it only for unusually long direct model operations.
+Setup does not rewrite an existing config: after upgrading, set
+`context_size: 4096` and `gpu_layers: 99` under `models.llm` to use lower-memory
+defaults and GPU offload where the build supports it.
 
 Settings recognizes the official Qwen 3 Sussurro F16, Q8_0, Q5_K_M, and Q4_K_M
 quantizations. Other GGUF files are not advertised as compatible automatically;

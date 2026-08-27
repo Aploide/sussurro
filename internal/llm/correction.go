@@ -7,8 +7,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	llama "github.com/AshkanYarmoradi/go-llama.cpp"
-	"github.com/aploide/sussurro/internal/logger"
+	"github.com/aploide/sussurro/internal/llmipc"
 )
 
 const (
@@ -101,16 +100,9 @@ func (e *Engine) correctMishearingChunk(text string) string {
 <|im_start|>assistant
 `, system, examples, text)
 
-	if !e.debug {
-		restore := logger.SuppressStderr()
-		defer restore()
-	}
-
 	options := correctionPredictOptions(e.threads)
-	if e.debug {
-		options = append(options, llama.Debug)
-	}
-	candidate, err := e.model.Predict(prompt, options...)
+	options.Debug = e.debug
+	candidate, err := e.model.Predict(prompt, options)
 	if err != nil {
 		slog.Debug("LLM correction failed; keeping input", "error", err)
 		return text
@@ -126,13 +118,13 @@ func (e *Engine) correctMishearingChunk(text string) string {
 	return candidate
 }
 
-func correctionPredictOptions(threads int) []llama.PredictOption {
-	return []llama.PredictOption{
-		llama.SetTokens(correctionMaxTokens),
-		llama.SetThreads(threads),
-		llama.SetTemperature(0.1),
-		llama.SetTopP(0.9),
-		llama.SetStopWords("<|im_end|>"),
+func correctionPredictOptions(threads int) llmipc.PredictOptions {
+	return llmipc.PredictOptions{
+		Tokens:      correctionMaxTokens,
+		Threads:     threads,
+		Temperature: 0.1,
+		TopP:        0.9,
+		StopWords:   []string{"<|im_end|>"},
 	}
 }
 

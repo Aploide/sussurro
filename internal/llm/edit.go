@@ -5,8 +5,7 @@ import (
 	"log/slog"
 	"strings"
 
-	llama "github.com/AshkanYarmoradi/go-llama.cpp"
-	"github.com/aploide/sussurro/internal/logger"
+	"github.com/aploide/sussurro/internal/llmipc"
 )
 
 // editMaxTokens bounds edit output. An edit rewrites the text it was given, so
@@ -79,12 +78,9 @@ func (e *Engine) EditText(original, instruction string) (string, error) {
 		editOriginalOpen, original, editOriginalClose,
 		editInstructionOpen, instruction, editInstructionClose)
 
-	if !e.debug {
-		restore := logger.SuppressStderr()
-		defer restore()
-	}
-
-	edited, err := e.model.Predict(prompt, editPredictOptions(e.threads)...)
+	options := editPredictOptions(e.threads)
+	options.Debug = e.debug
+	edited, err := e.model.Predict(prompt, options)
 	if err != nil {
 		// Keep the reviewed text; the user can retry the edit.
 		return original, fmt.Errorf("edit prediction failed: %w", err)
@@ -145,12 +141,12 @@ func validateEdit(original, edited string) bool {
 	return len(edited) <= len(original)*editExpansionLimit
 }
 
-func editPredictOptions(threads int) []llama.PredictOption {
-	return []llama.PredictOption{
-		llama.SetTokens(editMaxTokens),
-		llama.SetThreads(threads),
-		llama.SetTemperature(0.1), // Low temperature for deterministic edits
-		llama.SetTopP(0.9),
-		llama.SetStopWords("<|im_end|>"),
+func editPredictOptions(threads int) llmipc.PredictOptions {
+	return llmipc.PredictOptions{
+		Tokens:      editMaxTokens,
+		Threads:     threads,
+		Temperature: 0.1,
+		TopP:        0.9,
+		StopWords:   []string{"<|im_end|>"},
 	}
 }

@@ -40,8 +40,10 @@ esac
 
 # Binary name differs on Windows
 BIN_NAME="sussurro"
+HELPER_NAME="sussurro-llm-helper"
 if [[ "${PLATFORM}" == "windows" ]]; then
     BIN_NAME="sussurro.exe"
+    HELPER_NAME="sussurro-llm-helper.exe"
 fi
 
 # ── Setup ──────────────────────────────────────────────────────────────────────
@@ -56,8 +58,8 @@ rm -rf release
 mkdir -p "${RELEASE_DIR}"
 
 # Check if binary exists
-if [ ! -f "bin/${BIN_NAME}" ]; then
-    echo "Error: bin/${BIN_NAME} not found. Run 'make build' first."
+if [ ! -f "bin/${BIN_NAME}" ] || [ ! -f "bin/${HELPER_NAME}" ]; then
+    echo "Error: bin/${BIN_NAME} or bin/${HELPER_NAME} not found. Run 'make build' first."
     exit 1
 fi
 
@@ -65,7 +67,8 @@ fi
 
 echo "Copying binary..."
 cp "bin/${BIN_NAME}" "${RELEASE_DIR}/${BIN_NAME}"
-chmod +x "${RELEASE_DIR}/${BIN_NAME}"
+cp "bin/${HELPER_NAME}" "${RELEASE_DIR}/${HELPER_NAME}"
+chmod +x "${RELEASE_DIR}/${BIN_NAME}" "${RELEASE_DIR}/${HELPER_NAME}"
 
 # trigger.sh is a Wayland/X11 helper — only relevant on Linux
 if [[ "${PLATFORM}" == "linux" ]]; then
@@ -85,8 +88,8 @@ cp configs/default.yaml "${RELEASE_DIR}/config.example.yaml"
     echo ""
     echo "Quick Start:"
     if [[ "${PLATFORM}" == "macos" ]]; then
-        echo "1. Make the binary executable:  chmod +x sussurro"
-        echo "2. Remove macOS quarantine:     xattr -d com.apple.quarantine sussurro"
+        echo "1. Make the binaries executable: chmod +x sussurro sussurro-llm-helper"
+        echo "2. Remove macOS quarantine:      xattr -d com.apple.quarantine sussurro sussurro-llm-helper"
         echo "3. Run:                         ./sussurro"
     elif [[ "${PLATFORM}" == "windows" ]]; then
         echo "1. Run sussurro.exe (double-click, or from a terminal for setup prompts)"
@@ -95,7 +98,7 @@ cp configs/default.yaml "${RELEASE_DIR}/config.example.yaml"
         echo "Requirements: Windows 10/11 with the WebView2 runtime (preinstalled"
         echo "on Windows 11). GPU acceleration uses Vulkan via your graphics driver."
     else
-        echo "1. Make the binary executable:  chmod +x sussurro trigger.sh"
+        echo "1. Make the binaries executable: chmod +x sussurro sussurro-llm-helper trigger.sh"
         echo "2. Run:                         ./sussurro"
     fi
     echo "   Follow the prompts to download AI models."

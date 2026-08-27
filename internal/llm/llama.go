@@ -7,8 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	llama "github.com/AshkanYarmoradi/go-llama.cpp"
-	"github.com/aploide/sussurro/internal/logger"
+	"github.com/aploide/sussurro/internal/llmipc"
 )
 
 // Pre-compiled regexes — compiling on every call is expensive.
@@ -17,8 +16,8 @@ var (
 )
 
 type predictor interface {
-	Predict(text string, opts ...llama.PredictOption) (string, error)
-	Free()
+	Predict(text string, options llmipc.PredictOptions) (string, error)
+	Close()
 }
 
 // Engine handles the LLM model and text generation
@@ -61,17 +60,7 @@ func NewEngine(modelPath string, threads int, contextSize int, gpuLayers int, de
 		return nil, fmt.Errorf("model file not found at %s: %w", modelPath, err)
 	}
 
-	if !debug {
-		cleanup := logger.SuppressStderr()
-		defer cleanup()
-	}
-
-	model, err := llama.New(
-		modelPath,
-		llama.SetContext(contextSize),
-		llama.SetGPULayers(gpuLayers),
-	)
-
+	model, err := startHelper(modelPath, contextSize, gpuLayers, debug)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load llm model: %w", err)
 	}
@@ -628,6 +617,6 @@ func editDistance(a, b string) int {
 // Close releases resources
 func (e *Engine) Close() {
 	if e.model != nil {
-		e.model.Free()
+		e.model.Close()
 	}
 }

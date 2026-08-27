@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	llama "github.com/AshkanYarmoradi/go-llama.cpp"
+	"github.com/aploide/sussurro/internal/llmipc"
 )
 
 func TestValidCorrectionsAllowsSurfaceEditsAndBoundedPhoneticSubstitutions(t *testing.T) {
@@ -140,7 +140,7 @@ type sequencePredictor struct {
 	calls   int
 }
 
-func (p *sequencePredictor) Predict(_ string, _ ...llama.PredictOption) (string, error) {
+func (p *sequencePredictor) Predict(_ string, _ llmipc.PredictOptions) (string, error) {
 	if p.calls >= len(p.outputs) {
 		return "", errors.New("unexpected prediction call")
 	}
@@ -149,7 +149,7 @@ func (p *sequencePredictor) Predict(_ string, _ ...llama.PredictOption) (string,
 	return output, nil
 }
 
-func (p *sequencePredictor) Free() {}
+func (p *sequencePredictor) Close() {}
 
 func TestCleanupLeavesCorrectDictationUnchanged(t *testing.T) {
 	const raw = "The Polygon and Base blockchains are working correctly."

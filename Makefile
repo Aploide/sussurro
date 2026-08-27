@@ -32,6 +32,7 @@ EXE :=
 WIN_LDFLAGS :=
 GGML_VULKAN_PATH :=
 VULKAN_LDFLAGS :=
+LLAMA_VULKAN_LDFLAGS :=
 
 # Stamp files marking a completed native build, so `deps` is a no-op once the
 # libraries exist. Each stamp includes the commit and native backend, so a pin
@@ -105,13 +106,14 @@ ifeq ($(OS),Windows_NT)
 	C_INCLUDE_PATH :=
 	LIBRARY_PATH :=
 else ifeq ($(UNAME_S),Linux)
-	# Linux: keep live and final Whisper decoding on Vulkan. The bundled LLM
-	# remains on CPU until it can run in a separate process; the dependencies
-	# vendor incompatible GGML revisions and cannot safely load both Vulkan
-	# runtimes into this process.
+	# Linux uses Vulkan for both engines, but each executable links only one
+	# vendored GGML runtime. The process boundary prevents their incompatible
+	# native globals and Vulkan symbols from colliding.
 	#
-	# Opt out with WHISPER_VULKAN=0 for a pure CPU build.
+	# Opt out with WHISPER_VULKAN=0 for a pure CPU build. LLAMA_VULKAN can be
+	# overridden separately when diagnosing one backend.
 	WHISPER_VULKAN ?= auto
+	LLAMA_VULKAN ?= $(WHISPER_VULKAN)
 	ifeq ($(WHISPER_VULKAN),auto)
 		HAS_VULKAN := $(shell pkg-config --exists vulkan 2>/dev/null && command -v glslc >/dev/null 2>&1 && echo yes || echo no)
 	else ifeq ($(WHISPER_VULKAN),0)
@@ -119,12 +121,24 @@ else ifeq ($(UNAME_S),Linux)
 	else
 		HAS_VULKAN := yes
 	endif
+	ifeq ($(LLAMA_VULKAN),auto)
+		HAS_LLAMA_VULKAN := $(shell pkg-config --exists vulkan 2>/dev/null && command -v glslc >/dev/null 2>&1 && echo yes || echo no)
+	else ifeq ($(LLAMA_VULKAN),0)
+		HAS_LLAMA_VULKAN := no
+	else
+		HAS_LLAMA_VULKAN := yes
+	endif
 	ifeq ($(HAS_VULKAN),yes)
 		WHISPER_BACKEND := vulkan
 		# patch-whisper.sh renames the GGML_ CMake options too, hence WSP_ here.
 		WHISPER_CMAKE_EXTRA := -DWSP_GGML_VULKAN=ON
 		GGML_VULKAN_PATH := -L$(WHISPER_DIR)/build/ggml/src/ggml-vulkan
 		VULKAN_LDFLAGS := -lggml-vulkan -lvulkan
+	endif
+	ifeq ($(HAS_LLAMA_VULKAN),yes)
+		LLAMA_BACKEND := vulkan
+		LLAMA_CMAKE_ARGS := -DGGML_VULKAN=ON
+		LLAMA_VULKAN_LDFLAGS := -lvulkan
 	endif
 endif
 
@@ -183,7 +197,7 @@ endif
 UI_TAGS :=
 endif  # !Windows_NT
 
-# Base CGO link flags (whisper + llama)
+# Whisper CGO link flags
 VULKAN_LDFLAGS ?=
 BASE_LDFLAGS := -L$(WHISPER_DIR)/build/src -L$(WHISPER_DIR)/build/ggml/src \
 	-L$(WHISPER_DIR)/build/ggml/src/ggml-cpu $(GGML_METAL_PATH) \
@@ -197,6 +211,12 @@ WHISPER_LDFLAGS := $(BASE_LDFLAGS) $(GGML_VULKAN_PATH) $(WIN_LDFLAGS)
 else
 WHISPER_LDFLAGS := $(BASE_LDFLAGS) $(GGML_VULKAN_PATH) $(VULKAN_LDFLAGS)
 endif
+ifeq ($(OS),Windows_NT)
+LLAMA_LDFLAGS := -lstdc++ -fopenmp -static
+else
+LLAMA_LDFLAGS := $(LLAMA_VULKAN_LDFLAGS)
+endif
+TEST_LDFLAGS := $(WHISPER_LDFLAGS) $(LLAMA_LDFLAGS)
 
 # Export environment variables for CGO
 export C_INCLUDE_PATH
@@ -204,7 +224,7 @@ export LIBRARY_PATH
 
 # The stamp targets are deliberately absent: they are real files, and marking
 # them phony would defeat the guard entirely.
-.PHONY: all build compat-pc run clean clean-deps check-deps-artefacts deps test test-settings-geometry
+.PHONY: all build build-helper build-transcribe compat-pc run clean clean-deps check-deps-artefacts deps whisper-deps llama-deps test test-settings-geometry
 
 # Packages that link whisper need the same CGO_LDFLAGS as the binary: with
 # Vulkan enabled, a plain "go test ./..." cannot resolve the backend symbols.
@@ -219,7 +239,7 @@ PKGS ?= ./internal/... ./cmd/...
 test: deps compat-pc
 	PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_UI)" \
 	CGO_CFLAGS="$(LAYER_CFLAGS) $(WV_CFLAGS)" \
-	CGO_LDFLAGS="$(WHISPER_LDFLAGS) $(LAYER_LDFLAGS) $(WV_LDFLAGS)" \
+	CGO_LDFLAGS="$(TEST_LDFLAGS) $(LAYER_LDFLAGS) $(WV_LDFLAGS)" \
 	$(NICE) go test $(UI_TAGS) $(if $(RACE),-race) $(GOTESTFLAGS) $(PKGS)
 
 test-settings-geometry: deps compat-pc
@@ -238,6 +258,11 @@ else
 endif
 
 all: build build-transcribe
+
+# Keep dependency edges split so the two production processes never need the
+# other process's native library. The combined deps target remains for tests.
+whisper-deps: check-deps-artefacts $(WHISPER_STAMP)
+llama-deps: check-deps-artefacts $(LLAMA_STAMP)
 
 # deps is satisfied by the two stamps; when both exist and their pins are
 # unchanged, it does nothing at all.
@@ -335,7 +360,7 @@ ifneq ($(COMPAT_PC_DIR),)
 endif
 
 # Build with full UI (overlay + tray + settings window)
-build: deps compat-pc
+build: whisper-deps compat-pc build-helper
 	@echo "Building $(APP_NAME)..."
 	@mkdir -p $(BUILD_DIR)
 ifeq ($(OS),Windows_NT)
@@ -355,8 +380,15 @@ else
 	$(NICE) go build $(UI_TAGS) $(GO_LDFLAGS) -o $(BUILD_DIR)/$(APP_NAME) ./$(CMD_DIR)
 endif
 
+# Build the persistent LLM process with only go-llama.cpp's native runtime.
+build-helper: llama-deps
+	@echo "Building sussurro-llm-helper..."
+	@mkdir -p $(BUILD_DIR)
+	CGO_LDFLAGS="$(LLAMA_LDFLAGS)" \
+	$(NICE) go build $(GO_LDFLAGS) -o $(BUILD_DIR)/sussurro-llm-helper$(EXE) ./cmd/sussurro-llm-helper
+
 # Build sussurro-transcribe CLI (no UI dependencies)
-build-transcribe: deps
+build-transcribe: whisper-deps build-helper
 	@echo "Building sussurro-transcribe..."
 	@mkdir -p $(BUILD_DIR)
 ifeq ($(OS),Windows_NT)
