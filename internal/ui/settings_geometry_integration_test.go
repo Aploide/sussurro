@@ -34,6 +34,32 @@ type renderedPanelGeometry struct {
 	HiddenPanelsZero bool   `json:"hiddenPanelsZero"`
 }
 
+type renderedMutedStyle struct {
+	Theme    string `json:"theme"`
+	Token    string `json:"token"`
+	Computed string `json:"computed"`
+	Error    string `json:"error"`
+}
+
+const mutedStyleProbeScript = `<script>
+(async () => {
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const sample = document.querySelector(".model-desc");
+    const root = document.documentElement;
+    if (root.dataset.theme === "dark" && sample) {
+      reportMutedStyle(JSON.stringify({
+        theme: root.dataset.theme,
+        token: getComputedStyle(root).getPropertyValue("--muted").trim(),
+        computed: getComputedStyle(sample).color,
+      }));
+      return;
+    }
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  reportMutedStyle(JSON.stringify({error: "dark theme did not finish rendering"}));
+})();
+</script>`
+
 func TestRenderedSettingsGeometryReportsEveryTab(t *testing.T) {
 	if testing.Short() {
 		t.Skip("rendered WebKit integration test")
@@ -86,6 +112,76 @@ func TestRenderedSettingsGeometryReportsEveryTab(t *testing.T) {
 		assertRenderedSettingsGeometry(t, payload)
 	default:
 		t.Fatal("timed out waiting for rendered Settings geometry")
+	}
+}
+
+func TestRenderedSettingsUsesDarkMutedStyle(t *testing.T) {
+	if testing.Short() {
+		t.Skip("rendered WebKit integration test")
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	w := webview.New(false)
+	if w == nil {
+		t.Fatal("webview.New returned nil")
+	}
+	defer w.Destroy()
+	w.SetTitle("Sussurro Settings muted-style test")
+	applySettingsSize(w)
+
+	initial := representativeSettingsData(t)
+	if err := w.Bind("getInitialData", func() string { return initial }); err != nil {
+		t.Fatal(err)
+	}
+	sw := &settingsWindow{w: w}
+	if err := w.Bind("resizeSettingsWindow", func(width, height int) int {
+		sw.resizeToContent(width, height)
+		return expectedSettingsViewportHeight(width, height)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	result := make(chan string, 1)
+	if err := w.Bind("reportMutedStyle", func(payload string) {
+		result <- payload
+		w.Terminate()
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	page := strings.Replace(settingsHTML, "</body>", mutedStyleProbeScript+"</body>", 1)
+	w.SetHtml(page)
+	watchdogDone := make(chan struct{})
+	timer := time.AfterFunc(15*time.Second, func() {
+		w.Terminate()
+		close(watchdogDone)
+	})
+	w.Run()
+	if !timer.Stop() {
+		<-watchdogDone
+	}
+
+	select {
+	case payload := <-result:
+		var style renderedMutedStyle
+		if err := json.Unmarshal([]byte(payload), &style); err != nil {
+			t.Fatalf("decode rendered muted style: %v", err)
+		}
+		if style.Error != "" {
+			t.Fatal(style.Error)
+		}
+		if style.Theme != "dark" {
+			t.Errorf("rendered theme = %q, want dark", style.Theme)
+		}
+		if style.Token != "#a0a0a8" {
+			t.Errorf("rendered --muted = %q, want #a0a0a8", style.Token)
+		}
+		if style.Computed != "rgb(160, 160, 168)" {
+			t.Errorf("rendered muted text = %q, want rgb(160, 160, 168)", style.Computed)
+		}
+	default:
+		t.Fatal("timed out waiting for rendered muted style")
 	}
 }
 

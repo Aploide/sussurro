@@ -245,10 +245,15 @@ test: deps compat-pc
 test-settings-geometry: deps compat-pc
 ifeq ($(UNAME_S),Linux)
 	@test -n "$$DISPLAY" || { echo "test-settings-geometry requires an X display (for CI, run under Xvfb)"; exit 1; }
+	# WebKit aborts if it is destroyed and recreated in one Go test process.
 	PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_UI)" \
 	CGO_CFLAGS="$(LAYER_CFLAGS) $(WV_CFLAGS)" \
 	CGO_LDFLAGS="$(WHISPER_LDFLAGS) $(LAYER_LDFLAGS) $(WV_LDFLAGS)" \
 	$(NICE) go test -tags settings_geometry -count=1 -timeout 25s -run '^TestRenderedSettingsGeometryReportsEveryTab$$' ./internal/ui
+	PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_UI)" \
+	CGO_CFLAGS="$(LAYER_CFLAGS) $(WV_CFLAGS)" \
+	CGO_LDFLAGS="$(WHISPER_LDFLAGS) $(LAYER_LDFLAGS) $(WV_LDFLAGS)" \
+	$(NICE) go test -tags settings_geometry -count=1 -timeout 25s -run '^TestRenderedSettingsUsesDarkMutedStyle$$' ./internal/ui
 	PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_UI)" \
 	CGO_CFLAGS="$(LAYER_CFLAGS) $(WV_CFLAGS)" \
 	CGO_LDFLAGS="$(WHISPER_LDFLAGS) $(LAYER_LDFLAGS) $(WV_LDFLAGS)" \

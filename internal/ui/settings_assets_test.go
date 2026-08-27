@@ -271,15 +271,14 @@ func TestThemePalettesCoverOverridesAndSystemPreference(t *testing.T) {
 		}
 	}
 
-	// These are the original dark colours. A theme refactor must not subtly
-	// change the appearance users already have.
+	// Pin the dark palette so appearance changes remain deliberate and reviewed.
 	for _, declaration := range []string{
 		`--bg:                   #111113`,
 		`--surface:              #1a1a1c`,
 		`--surface2:             #222224`,
 		`--border:               #2e2e30`,
 		`--text:                 #e8e8ea`,
-		`--muted:                #95959c`,
+		`--muted:                #a0a0a8`,
 		`--accent:               #30d158`,
 		`--red:                  #ff453a`,
 		`--blue:                 #0a84ff`,
@@ -292,7 +291,7 @@ func TestThemePalettesCoverOverridesAndSystemPreference(t *testing.T) {
 		`--preview-bg:           rgba(255, 255, 255, 0.05)`,
 		`--info-bg:              rgba(10, 132, 255, 0.10)`,
 		`--info-border:          rgba(10, 132, 255, 0.25)`,
-		`fill='%2395959c'`,
+		`fill='%23a0a0a8'`,
 	} {
 		if !strings.Contains(css, declaration) {
 			t.Errorf("dark palette no longer contains %q", declaration)
@@ -379,23 +378,24 @@ func paletteValue(t *testing.T, css, selector, token string) string {
 func TestMutedTextMeetsContrastMinimums(t *testing.T) {
 	css := readAsset(t, "style.css")
 
-	// WCAG 2.1 AA for normal text. Every var(--muted) usage renders at
-	// 11-15px, so the 3:1 large-text allowance never applies here.
-	const minimumAA = 4.5
-
+	// WCAG 2.1 AA for normal text is 4.5:1. Every var(--muted) usage
+	// renders at 11-15px, so the 3:1 large-text allowance never applies.
+	// Human testing found 5.34:1 too dim in the dark palette, so its practical
+	// floor is 6:1 while light retains the standard minimum.
 	for _, palette := range []struct {
-		name     string
-		selector string
+		name            string
+		selector        string
+		minimumContrast float64
 	}{
-		{"dark", `:root[data-theme="dark"]`},
-		{"light", `:root[data-theme="light"]`},
+		{"dark", `:root[data-theme="dark"]`, 6.0},
+		{"light", `:root[data-theme="light"]`, 4.5},
 	} {
 		muted := hexColor(t, paletteValue(t, css, palette.selector, "--muted"))
 		for _, surface := range []string{"--bg", "--surface", "--surface2"} {
 			token := paletteValue(t, css, palette.selector, surface)
-			if ratio := contrastRatio(muted, hexColor(t, token)); ratio < minimumAA {
+			if ratio := contrastRatio(muted, hexColor(t, token)); ratio < palette.minimumContrast {
 				t.Errorf("%s palette: --muted on %s %s is %.2f:1, want at least %.1f:1",
-					palette.name, surface, token, ratio, minimumAA)
+					palette.name, surface, token, ratio, palette.minimumContrast)
 			}
 		}
 	}
