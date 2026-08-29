@@ -499,9 +499,9 @@ kbd {
   --dictionary-entry-width: 240px;
   display: grid;
   grid-template-columns: repeat(
-      auto-fit,
-      minmax(min(100%, var(--dictionary-entry-width)), 1fr)
-    );
+    auto-fit,
+    minmax(min(100%, var(--dictionary-entry-width)), 1fr)
+  );
   border-top: 1px solid var(--border);
   background: var(--surface);
 }

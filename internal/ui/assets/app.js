@@ -838,9 +838,30 @@ function renderHotkey(pushToTalk, toggle, edit, isWayland) {
 
   if (waylandRow) waylandRow.hidden = true;
 
-  bindHotkeyRow(pttRow, "hotkey-display", "hotkey-edit-btn", "hotkey-clear-btn", pushToTalk, window.savePushToTalkHotkey);
-  bindHotkeyRow(toggleRow, "hotkey-toggle-display", "hotkey-toggle-edit-btn", "hotkey-toggle-clear-btn", toggle, window.saveToggleHotkey);
-  bindHotkeyRow(editRow, "hotkey-review-edit-display", "hotkey-review-edit-btn", "hotkey-review-edit-clear-btn", edit, window.saveEditHotkey);
+  bindHotkeyRow(
+    pttRow,
+    "hotkey-display",
+    "hotkey-edit-btn",
+    "hotkey-clear-btn",
+    pushToTalk,
+    window.savePushToTalkHotkey,
+  );
+  bindHotkeyRow(
+    toggleRow,
+    "hotkey-toggle-display",
+    "hotkey-toggle-edit-btn",
+    "hotkey-toggle-clear-btn",
+    toggle,
+    window.saveToggleHotkey,
+  );
+  bindHotkeyRow(
+    editRow,
+    "hotkey-review-edit-display",
+    "hotkey-review-edit-btn",
+    "hotkey-review-edit-clear-btn",
+    edit,
+    window.saveEditHotkey,
+  );
 }
 
 function bindHotkeyRow(row, displayId, buttonId, clearButtonId, trigger, save) {

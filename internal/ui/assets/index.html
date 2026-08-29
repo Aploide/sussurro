@@ -1,335 +1,547 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Sussurro Settings</title>
-  <!--SETTINGS_STYLE-->
-</head>
-<body>
-<div class="window">
-
-  <!-- Scrollable content -->
-  <div class="content">
-    <div class="tabs" role="tablist">
-      <button class="tab" role="tab" data-tab="models" aria-selected="true" type="button">Models</button>
-      <button class="tab" role="tab" data-tab="workflow" aria-selected="false" type="button">Dictation</button>
-      <button class="tab" role="tab" data-tab="output" aria-selected="false" type="button">Output</button>
-      <button class="tab" role="tab" data-tab="input" aria-selected="false" type="button">Hotkey</button>
-      <button class="tab" role="tab" data-tab="appearance" aria-selected="false" type="button">Appearance</button>
-    </div>
-    <div class="tab-panel" data-tab-panel="models">
-    <div class="section foldable" data-section-id="speech">
-      <button class="section-header" type="button" data-section-toggle aria-expanded="true">
-        <span class="section-label">Speech Recognition (Whisper)</span>
-        <span class="section-caret" aria-hidden="true">⌄</span>
-      </button>
-      <div class="section-body">
-        <div id="whisper-list"></div>
-      </div>
-    </div>
-
-    <!-- Transcription Language -->
-    <div class="section foldable" data-section-id="language">
-      <button class="section-header" type="button" data-section-toggle aria-expanded="true">
-        <span class="section-label">Transcription Language</span>
-        <span class="section-caret" aria-hidden="true">⌄</span>
-      </button>
-      <div class="section-body">
-        <div class="setting-row">
-          <div>
-            <div class="toggle-label">Language</div>
-            <div class="toggle-desc">Language Whisper listens for</div>
-          </div>
-          <select id="language-select"></select>
-        </div>
-      </div>
-    </div>
-
-    <!-- Language Model -->
-    <div class="section foldable" data-section-id="llm">
-      <button class="section-header" type="button" data-section-toggle aria-expanded="true">
-        <span class="section-label">Language Model (LLM)</span>
-        <span class="section-caret" aria-hidden="true">⌄</span>
-      </button>
-      <div class="section-body">
-        <div id="llm-list"></div>
-      </div>
-    </div>
-
-    <!-- Output -->
-    </div>
-    <div class="tab-panel" data-tab-panel="workflow" hidden>
-    <div class="section foldable" data-section-id="workflow">
-      <button class="section-header" type="button" data-section-toggle aria-expanded="true">
-        <span class="section-label">Review workflow</span>
-        <span class="section-caret" aria-hidden="true">⌄</span>
-      </button>
-      <div class="section-body">
-        <div class="setting-row">
-          <div>
-            <label class="toggle-label" for="workflow-mode">Interaction mode</label>
-            <div class="toggle-desc">Immediate delivers straight away; review holds the text so you can check, edit, or cancel it</div>
-          </div>
-          <select id="workflow-mode" class="setting-select"></select>
-        </div>
-
-        <div class="setting-row">
-          <div>
-            <div class="toggle-label">Live transcription</div>
-            <div class="toggle-desc">Show text while you are still speaking. Uses extra CPU</div>
-          </div>
-          <label class="toggle-switch">
-            <input type="checkbox" id="workflow-streaming-toggle">
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
-
-        <div class="setting-row">
-          <div>
-            <label class="toggle-label" for="workflow-streaming-interval">Update interval</label>
-            <div class="toggle-desc">Time between live updates, between 100ms and 10s</div>
-          </div>
-          <input type="text" id="workflow-streaming-interval" class="setting-input"
-                 inputmode="text" autocomplete="off" spellcheck="false" placeholder="750ms">
-        </div>
-
-        <div class="setting-row">
-          <div>
-            <label class="toggle-label" for="workflow-input-backend">Input source</label>
-            <div class="toggle-desc">Where recording gestures come from. Takes effect after a restart</div>
-          </div>
-          <select id="workflow-input-backend" class="setting-select"></select>
-        </div>
-
-        <div class="setting-row" id="workflow-evdev-row" hidden>
-          <div>
-            <label class="toggle-label" for="workflow-input-device">Input device</label>
-            <div class="toggle-desc">Keyboard name or path. Leave empty to use the first one found</div>
-          </div>
-          <input type="text" id="workflow-input-device" class="setting-input"
-                 autocomplete="off" spellcheck="false" placeholder="Kinesis">
-        </div>
-
-        <div class="setting-row" id="workflow-chord-row" hidden>
-          <div>
-            <label class="toggle-label" for="workflow-input-chord">Recording chord</label>
-            <div class="toggle-desc">Keys that start recording. Leave empty to follow the global hotkey</div>
-          </div>
-          <input type="text" id="workflow-input-chord" class="setting-input"
-                 autocomplete="off" spellcheck="false" placeholder="ctrl+shift+space">
-        </div>
-
-        <div class="setting-row" id="workflow-cancel-chord-row" hidden>
-          <div>
-            <label class="toggle-label" for="workflow-input-cancel-chord">Cancel chord</label>
-            <div class="toggle-desc">Keys that abandon a review session. Leave empty to disable</div>
-          </div>
-          <input type="text" id="workflow-input-cancel-chord" class="setting-input"
-                 autocomplete="off" spellcheck="false" placeholder="ctrl+shift+alt">
-        </div>
-
-        <div class="setting-row" id="workflow-voice-editing-row">
-          <div>
-            <div class="toggle-label">Voice editing</div>
-            <div class="toggle-desc" id="workflow-voice-editing-desc"></div>
-          </div>
-        </div>
-
-        <div class="setting-note" id="workflow-status" role="status" aria-live="polite" hidden></div>
-      </div>
-    </div>
-
-    <div class="section foldable" data-section-id="dictionary">
-      <button
-        class="section-header"
-        type="button"
-        data-section-toggle
-        aria-expanded="true"
-      >
-        <span class="section-label">Personal dictionary</span>
-        <span class="section-caret" aria-hidden="true">⌄</span>
-      </button>
-      <div class="section-body">
-        <div class="dictionary-intro">
-          <div class="toggle-desc">
-            Names and terms Sussurro should recognise and spell exactly.
-            Saved changes apply to the next dictation.
-          </div>
-        </div>
-        <div id="dictionary-list" class="dictionary-list"></div>
-        <div class="dictionary-actions">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sussurro Settings</title>
+    <!--SETTINGS_STYLE-->
+  </head>
+  <body>
+    <div class="window">
+      <!-- Scrollable content -->
+      <div class="content">
+        <div class="tabs" role="tablist">
           <button
-            class="hotkey-edit-btn"
-            id="dictionary-add-btn"
+            class="tab"
+            role="tab"
+            data-tab="models"
+            aria-selected="true"
             type="button"
           >
-            Add term
+            Models
           </button>
           <button
-            class="download-btn"
-            id="dictionary-save-btn"
+            class="tab"
+            role="tab"
+            data-tab="workflow"
+            aria-selected="false"
             type="button"
-            disabled
           >
-            Save dictionary
+            Dictation
+          </button>
+          <button
+            class="tab"
+            role="tab"
+            data-tab="output"
+            aria-selected="false"
+            type="button"
+          >
+            Output
+          </button>
+          <button
+            class="tab"
+            role="tab"
+            data-tab="input"
+            aria-selected="false"
+            type="button"
+          >
+            Hotkey
+          </button>
+          <button
+            class="tab"
+            role="tab"
+            data-tab="appearance"
+            aria-selected="false"
+            type="button"
+          >
+            Appearance
           </button>
         </div>
-        <div
-          class="setting-note"
-          id="dictionary-status"
-          role="status"
-          aria-live="polite"
-          hidden
-        ></div>
+        <div class="tab-panel" data-tab-panel="models">
+          <div class="section foldable" data-section-id="speech">
+            <button
+              class="section-header"
+              type="button"
+              data-section-toggle
+              aria-expanded="true"
+            >
+              <span class="section-label">Speech Recognition (Whisper)</span>
+              <span class="section-caret" aria-hidden="true">⌄</span>
+            </button>
+            <div class="section-body">
+              <div id="whisper-list"></div>
+            </div>
+          </div>
+
+          <!-- Transcription Language -->
+          <div class="section foldable" data-section-id="language">
+            <button
+              class="section-header"
+              type="button"
+              data-section-toggle
+              aria-expanded="true"
+            >
+              <span class="section-label">Transcription Language</span>
+              <span class="section-caret" aria-hidden="true">⌄</span>
+            </button>
+            <div class="section-body">
+              <div class="setting-row">
+                <div>
+                  <div class="toggle-label">Language</div>
+                  <div class="toggle-desc">Language Whisper listens for</div>
+                </div>
+                <select id="language-select"></select>
+              </div>
+            </div>
+          </div>
+
+          <!-- Language Model -->
+          <div class="section foldable" data-section-id="llm">
+            <button
+              class="section-header"
+              type="button"
+              data-section-toggle
+              aria-expanded="true"
+            >
+              <span class="section-label">Language Model (LLM)</span>
+              <span class="section-caret" aria-hidden="true">⌄</span>
+            </button>
+            <div class="section-body">
+              <div id="llm-list"></div>
+            </div>
+          </div>
+
+          <!-- Output -->
+        </div>
+        <div class="tab-panel" data-tab-panel="workflow" hidden>
+          <div class="section foldable" data-section-id="workflow">
+            <button
+              class="section-header"
+              type="button"
+              data-section-toggle
+              aria-expanded="true"
+            >
+              <span class="section-label">Review workflow</span>
+              <span class="section-caret" aria-hidden="true">⌄</span>
+            </button>
+            <div class="section-body">
+              <div class="setting-row">
+                <div>
+                  <label class="toggle-label" for="workflow-mode"
+                    >Interaction mode</label
+                  >
+                  <div class="toggle-desc">
+                    Immediate delivers straight away; review holds the text so
+                    you can check, edit, or cancel it
+                  </div>
+                </div>
+                <select id="workflow-mode" class="setting-select"></select>
+              </div>
+
+              <div class="setting-row">
+                <div>
+                  <div class="toggle-label">Live transcription</div>
+                  <div class="toggle-desc">
+                    Show text while you are still speaking. Uses extra CPU
+                  </div>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="workflow-streaming-toggle" />
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+
+              <div class="setting-row">
+                <div>
+                  <label class="toggle-label" for="workflow-streaming-interval"
+                    >Update interval</label
+                  >
+                  <div class="toggle-desc">
+                    Time between live updates, between 100ms and 10s
+                  </div>
+                </div>
+                <input
+                  type="text"
+                  id="workflow-streaming-interval"
+                  class="setting-input"
+                  inputmode="text"
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="750ms"
+                />
+              </div>
+
+              <div class="setting-row">
+                <div>
+                  <label class="toggle-label" for="workflow-input-backend"
+                    >Input source</label
+                  >
+                  <div class="toggle-desc">
+                    Where recording gestures come from. Takes effect after a
+                    restart
+                  </div>
+                </div>
+                <select
+                  id="workflow-input-backend"
+                  class="setting-select"
+                ></select>
+              </div>
+
+              <div class="setting-row" id="workflow-evdev-row" hidden>
+                <div>
+                  <label class="toggle-label" for="workflow-input-device"
+                    >Input device</label
+                  >
+                  <div class="toggle-desc">
+                    Keyboard name or path. Leave empty to use the first one
+                    found
+                  </div>
+                </div>
+                <input
+                  type="text"
+                  id="workflow-input-device"
+                  class="setting-input"
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="Kinesis"
+                />
+              </div>
+
+              <div class="setting-row" id="workflow-chord-row" hidden>
+                <div>
+                  <label class="toggle-label" for="workflow-input-chord"
+                    >Recording chord</label
+                  >
+                  <div class="toggle-desc">
+                    Keys that start recording. Leave empty to follow the global
+                    hotkey
+                  </div>
+                </div>
+                <input
+                  type="text"
+                  id="workflow-input-chord"
+                  class="setting-input"
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="ctrl+shift+space"
+                />
+              </div>
+
+              <div class="setting-row" id="workflow-cancel-chord-row" hidden>
+                <div>
+                  <label class="toggle-label" for="workflow-input-cancel-chord"
+                    >Cancel chord</label
+                  >
+                  <div class="toggle-desc">
+                    Keys that abandon a review session. Leave empty to disable
+                  </div>
+                </div>
+                <input
+                  type="text"
+                  id="workflow-input-cancel-chord"
+                  class="setting-input"
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="ctrl+shift+alt"
+                />
+              </div>
+
+              <div class="setting-row" id="workflow-voice-editing-row">
+                <div>
+                  <div class="toggle-label">Voice editing</div>
+                  <div
+                    class="toggle-desc"
+                    id="workflow-voice-editing-desc"
+                  ></div>
+                </div>
+              </div>
+
+              <div
+                class="setting-note"
+                id="workflow-status"
+                role="status"
+                aria-live="polite"
+                hidden
+              ></div>
+            </div>
+          </div>
+
+          <div class="section foldable" data-section-id="dictionary">
+            <button
+              class="section-header"
+              type="button"
+              data-section-toggle
+              aria-expanded="true"
+            >
+              <span class="section-label">Personal dictionary</span>
+              <span class="section-caret" aria-hidden="true">⌄</span>
+            </button>
+            <div class="section-body">
+              <div class="dictionary-intro">
+                <div class="toggle-desc">
+                  Names and terms Sussurro should recognise and spell exactly.
+                  Saved changes apply to the next dictation.
+                </div>
+              </div>
+              <div id="dictionary-list" class="dictionary-list"></div>
+              <div class="dictionary-actions">
+                <button
+                  class="hotkey-edit-btn"
+                  id="dictionary-add-btn"
+                  type="button"
+                >
+                  Add term
+                </button>
+                <button
+                  class="download-btn"
+                  id="dictionary-save-btn"
+                  type="button"
+                  disabled
+                >
+                  Save dictionary
+                </button>
+              </div>
+              <div
+                class="setting-note"
+                id="dictionary-status"
+                role="status"
+                aria-live="polite"
+                hidden
+              ></div>
+            </div>
+          </div>
+        </div>
+        <div class="tab-panel" data-tab-panel="output" hidden>
+          <div class="section foldable" data-section-id="output">
+            <button
+              class="section-header"
+              type="button"
+              data-section-toggle
+              aria-expanded="true"
+            >
+              <span class="section-label">Output</span>
+              <span class="section-caret" aria-hidden="true">⌄</span>
+            </button>
+            <div class="section-body">
+              <div class="setting-row">
+                <div>
+                  <div class="toggle-label">Raw output</div>
+                  <div class="toggle-desc">
+                    Skip LLM cleanup and use Whisper text as-is
+                  </div>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="raw-output-toggle" />
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="setting-row">
+                <div>
+                  <label class="toggle-label" for="workflow-delivery-backend"
+                    >Text delivery</label
+                  >
+                  <div class="toggle-desc">
+                    How dictated text is inserted into the focused window
+                  </div>
+                </div>
+                <select
+                  id="workflow-delivery-backend"
+                  class="setting-select"
+                ></select>
+              </div>
+
+              <div class="setting-row">
+                <div>
+                  <div class="toggle-label">Lowercase output</div>
+                  <div class="toggle-desc">
+                    Force all transcribed text to lowercase
+                  </div>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="lowercase-toggle" />
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="tab-panel" data-tab-panel="appearance" hidden>
+          <div class="section foldable" data-section-id="appearance">
+            <button
+              class="section-header"
+              type="button"
+              data-section-toggle
+              aria-expanded="true"
+            >
+              <span class="section-label">Appearance</span>
+              <span class="section-caret" aria-hidden="true">⌄</span>
+            </button>
+            <div class="section-body">
+              <div class="setting-row">
+                <div>
+                  <label class="toggle-label" for="appearance-theme"
+                    >Theme</label
+                  >
+                  <div class="toggle-desc">
+                    Follow the desktop colour scheme or choose a fixed palette
+                  </div>
+                </div>
+                <select id="appearance-theme" class="setting-select">
+                  <option value="system">System</option>
+                  <option value="light">Light</option>
+                  <option value="dark">Dark</option>
+                </select>
+              </div>
+              <div
+                class="setting-note"
+                id="appearance-status"
+                role="status"
+                aria-live="polite"
+                hidden
+              ></div>
+            </div>
+          </div>
+        </div>
+        <div class="tab-panel" data-tab-panel="input" hidden>
+          <div class="section foldable" data-section-id="hotkey">
+            <button
+              class="section-header"
+              type="button"
+              data-section-toggle
+              aria-expanded="true"
+            >
+              <span class="section-label">Global Hotkey</span>
+              <span class="section-caret" aria-hidden="true">⌄</span>
+            </button>
+            <div class="section-body">
+              <!-- Independent bindings: either may be left unset -->
+              <div id="hotkey-x11" class="hotkey-row" hidden>
+                <div>
+                  <div class="toggle-label">Push to talk</div>
+                  <div class="toggle-desc">
+                    Hold to record, release to transcribe
+                  </div>
+                  <div
+                    id="hotkey-display"
+                    class="hotkey-display"
+                    style="margin-top: 6px"
+                  ></div>
+                </div>
+                <div class="hotkey-actions">
+                  <button class="hotkey-edit-btn" id="hotkey-clear-btn">
+                    Clear
+                  </button>
+                  <button class="hotkey-edit-btn" id="hotkey-edit-btn">
+                    Change
+                  </button>
+                </div>
+              </div>
+
+              <div id="hotkey-toggle-row" class="hotkey-row" hidden>
+                <div>
+                  <div class="toggle-label">Toggle recording</div>
+                  <div class="toggle-desc">
+                    Press once to start, again to stop
+                  </div>
+                  <div
+                    id="hotkey-toggle-display"
+                    class="hotkey-display"
+                    style="margin-top: 6px"
+                  ></div>
+                </div>
+                <div class="hotkey-actions">
+                  <button class="hotkey-edit-btn" id="hotkey-toggle-clear-btn">
+                    Clear
+                  </button>
+                  <button class="hotkey-edit-btn" id="hotkey-toggle-edit-btn">
+                    Change
+                  </button>
+                </div>
+              </div>
+
+              <div id="hotkey-review-edit-row" class="hotkey-row" hidden>
+                <div>
+                  <div class="toggle-label">Edit reviewed text</div>
+                  <div class="toggle-desc">
+                    Hold to dictate a revision when text is ready
+                  </div>
+                  <div
+                    id="hotkey-review-edit-display"
+                    class="hotkey-display"
+                    style="margin-top: 6px"
+                  ></div>
+                </div>
+                <div class="hotkey-actions">
+                  <button
+                    class="hotkey-edit-btn"
+                    id="hotkey-review-edit-clear-btn"
+                  >
+                    Clear
+                  </button>
+                  <button class="hotkey-edit-btn" id="hotkey-review-edit-btn">
+                    Change
+                  </button>
+                </div>
+              </div>
+
+              <!-- Wayland note -->
+              <div id="hotkey-wayland" class="hotkey-wayland-note" hidden>
+                On Wayland, global hotkeys require a custom keyboard shortcut in
+                your desktop environment.<br />
+                Configure your DE to run:
+                <code class="command-example">sussurro-trigger press</code> on
+                key down, and
+                <code class="command-example">sussurro-trigger release</code> on
+                key up.<br />
+                A dedicated review-edit shortcut can use
+                <code class="command-example">edit-start</code> and
+                <code class="command-example">edit-stop</code>.<br />
+                See
+                <a
+                  href="#"
+                  onclick="
+                    window.openURL(
+                      'https://github.com/aploide/sussurro/blob/master/docs/wayland.md',
+                    );
+                    return false;
+                  "
+                  >docs/wayland.md</a
+                >
+                for instructions.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- /content -->
+
+      <!-- Restart banner (shown after a model is changed, hidden until needed) -->
+      <div id="restart-banner" class="restart-banner" hidden>
+        Restart Sussurro to load the new model into memory.
+      </div>
+
+      <!-- Status bar -->
+      <div class="statusbar">
+        <div class="status-dot"></div>
+        <div class="status-text">Ready</div>
+        <div class="platform-label" id="platform-label"></div>
+        <div class="version-label" id="version-label"></div>
+      </div>
+    </div>
+    <!-- /window -->
+
+    <!-- Hotkey recording modal -->
+    <div class="modal-backdrop" id="hotkey-modal">
+      <div class="modal">
+        <h3>Press a new hotkey</h3>
+        <p>Hold up to 3 keys, then release them all to save.</p>
+        <div id="hotkey-modal-preview" class="hotkey-modal-preview">
+          Press keys…
+        </div>
+        <button class="modal-cancel" id="hotkey-modal-cancel">Cancel</button>
       </div>
     </div>
 
-    </div>
-    <div class="tab-panel" data-tab-panel="output" hidden>
-    <div class="section foldable" data-section-id="output">
-      <button class="section-header" type="button" data-section-toggle aria-expanded="true">
-        <span class="section-label">Output</span>
-        <span class="section-caret" aria-hidden="true">⌄</span>
-      </button>
-      <div class="section-body">
-        <div class="setting-row">
-          <div>
-            <div class="toggle-label">Raw output</div>
-            <div class="toggle-desc">Skip LLM cleanup and use Whisper text as-is</div>
-          </div>
-          <label class="toggle-switch">
-            <input type="checkbox" id="raw-output-toggle">
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
-        <div class="setting-row">
-          <div>
-            <label class="toggle-label" for="workflow-delivery-backend">Text delivery</label>
-            <div class="toggle-desc">How dictated text is inserted into the focused window</div>
-          </div>
-          <select id="workflow-delivery-backend" class="setting-select"></select>
-        </div>
-
-        <div class="setting-row">
-          <div>
-            <div class="toggle-label">Lowercase output</div>
-            <div class="toggle-desc">Force all transcribed text to lowercase</div>
-          </div>
-          <label class="toggle-switch">
-            <input type="checkbox" id="lowercase-toggle">
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
-      </div>
-    </div>
-    </div>
-    <div class="tab-panel" data-tab-panel="appearance" hidden>
-    <div class="section foldable" data-section-id="appearance">
-      <button class="section-header" type="button" data-section-toggle aria-expanded="true">
-        <span class="section-label">Appearance</span>
-        <span class="section-caret" aria-hidden="true">⌄</span>
-      </button>
-      <div class="section-body">
-        <div class="setting-row">
-          <div>
-            <label class="toggle-label" for="appearance-theme">Theme</label>
-            <div class="toggle-desc">Follow the desktop colour scheme or choose a fixed palette</div>
-          </div>
-          <select id="appearance-theme" class="setting-select">
-            <option value="system">System</option>
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
-          </select>
-        </div>
-        <div class="setting-note" id="appearance-status" role="status" aria-live="polite" hidden></div>
-      </div>
-    </div>
-    </div>
-    <div class="tab-panel" data-tab-panel="input" hidden>
-    <div class="section foldable" data-section-id="hotkey">
-      <button class="section-header" type="button" data-section-toggle aria-expanded="true">
-        <span class="section-label">Global Hotkey</span>
-        <span class="section-caret" aria-hidden="true">⌄</span>
-      </button>
-      <div class="section-body">
-        <!-- Independent bindings: either may be left unset -->
-        <div id="hotkey-x11" class="hotkey-row" hidden>
-          <div>
-            <div class="toggle-label">Push to talk</div>
-            <div class="toggle-desc">Hold to record, release to transcribe</div>
-            <div id="hotkey-display" class="hotkey-display" style="margin-top:6px"></div>
-          </div>
-          <div class="hotkey-actions">
-            <button class="hotkey-edit-btn" id="hotkey-clear-btn">Clear</button>
-            <button class="hotkey-edit-btn" id="hotkey-edit-btn">Change</button>
-          </div>
-        </div>
-
-        <div id="hotkey-toggle-row" class="hotkey-row" hidden>
-          <div>
-            <div class="toggle-label">Toggle recording</div>
-            <div class="toggle-desc">Press once to start, again to stop</div>
-            <div id="hotkey-toggle-display" class="hotkey-display" style="margin-top:6px"></div>
-          </div>
-          <div class="hotkey-actions">
-            <button class="hotkey-edit-btn" id="hotkey-toggle-clear-btn">Clear</button>
-            <button class="hotkey-edit-btn" id="hotkey-toggle-edit-btn">Change</button>
-          </div>
-        </div>
-
-        <div id="hotkey-review-edit-row" class="hotkey-row" hidden>
-          <div>
-            <div class="toggle-label">Edit reviewed text</div>
-            <div class="toggle-desc">Hold to dictate a revision when text is ready</div>
-            <div id="hotkey-review-edit-display" class="hotkey-display" style="margin-top:6px"></div>
-          </div>
-          <div class="hotkey-actions">
-            <button class="hotkey-edit-btn" id="hotkey-review-edit-clear-btn">Clear</button>
-            <button class="hotkey-edit-btn" id="hotkey-review-edit-btn">Change</button>
-          </div>
-        </div>
-
-        <!-- Wayland note -->
-        <div id="hotkey-wayland" class="hotkey-wayland-note" hidden>
-          On Wayland, global hotkeys require a custom keyboard shortcut in your desktop environment.<br>
-          Configure your DE to run: <code class="command-example">sussurro-trigger press</code> on key down,
-          and <code class="command-example">sussurro-trigger release</code> on key up.<br>
-          A dedicated review-edit shortcut can use <code class="command-example">edit-start</code>
-          and <code class="command-example">edit-stop</code>.<br>
-          See <a href="#" onclick="window.openURL('https://github.com/aploide/sussurro/blob/master/docs/wayland.md'); return false">docs/wayland.md</a> for instructions.
-        </div>
-      </div>
-    </div>
-    </div>
-  </div><!-- /content -->
-
-  <!-- Restart banner (shown after a model is changed, hidden until needed) -->
-  <div id="restart-banner" class="restart-banner" hidden>
-    Restart Sussurro to load the new model into memory.
-  </div>
-
-  <!-- Status bar -->
-  <div class="statusbar">
-    <div class="status-dot"></div>
-    <div class="status-text">Ready</div>
-    <div class="platform-label" id="platform-label"></div>
-    <div class="version-label" id="version-label"></div>
-  </div>
-
-</div><!-- /window -->
-
-<!-- Hotkey recording modal -->
-<div class="modal-backdrop" id="hotkey-modal">
-  <div class="modal">
-    <h3>Press a new hotkey</h3>
-    <p>Hold up to 3 keys, then release them all to save.</p>
-    <div id="hotkey-modal-preview" class="hotkey-modal-preview">Press keys…</div>
-    <button class="modal-cancel" id="hotkey-modal-cancel">Cancel</button>
-  </div>
-</div>
-
-<script>{{JS}}</script>
-
-</body>
+    <script>{{JS}}</script>
+  </body>
 </html>
