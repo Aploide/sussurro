@@ -37,6 +37,7 @@ struct OverlayData {
     char        *status;
     gboolean     provisional;   /* text is still being revised */
     gboolean     copied;        /* text is ready to paste */
+    gboolean     finalizing;    /* final recognition pass is running */
     int          panel_height;  /* 0 when showing the capsule */
 
     /* Animation timer source id, 0 when stopped. The timer only runs while
@@ -388,7 +389,9 @@ static int draw_panel(cairo_t *cr, OverlayData *od, gboolean paint)
         /* Provisional text is dimmed: it is still being revised, and the
            user should be able to tell settled text from text that may
            still change under them. */
-        if (od->provisional) {
+        if (od->finalizing) {
+            set_source_color(cr, od->palette.finalizing, 1.0);
+        } else if (od->provisional) {
             set_source_color(cr, od->palette.provisional, 1.0);
         } else if (od->copied) {
             set_source_color(cr, od->palette.copied, 1.0);
@@ -1174,6 +1177,7 @@ typedef struct {
     char      *status;
     int        provisional;
     int        copied;
+    int        finalizing;
 } IdleTranscriptArg;
 
 /* Applies a transcript update on the GTK main thread, resizing the window to
@@ -1195,6 +1199,7 @@ static gboolean idle_set_transcript(gpointer data)
     od->status      = arg->status ? g_strdup(arg->status) : NULL;
     od->provisional = arg->provisional ? TRUE : FALSE;
     od->copied      = arg->copied ? TRUE : FALSE;
+    od->finalizing  = arg->finalizing ? TRUE : FALSE;
 
     /* One size calculation for every state. Measured against a throwaway
        surface because the height depends on how the text wraps, which only
@@ -1224,7 +1229,8 @@ done:
 }
 
 void overlay_present_async(GtkWidget *win, int state, const char *text,
-                           const char *status, int provisional, int copied)
+                           const char *status, int provisional, int copied,
+                           int finalizing)
 {
     IdleTranscriptArg *arg = g_new0(IdleTranscriptArg, 1);
     arg->win         = win;
@@ -1233,6 +1239,7 @@ void overlay_present_async(GtkWidget *win, int state, const char *text,
     arg->status      = status ? g_strdup(status) : NULL;
     arg->provisional = provisional;
     arg->copied      = copied;
+    arg->finalizing  = finalizing;
     gdk_threads_add_idle(idle_set_transcript, arg);
 }
 

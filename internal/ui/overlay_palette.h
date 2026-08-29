@@ -16,6 +16,7 @@ typedef struct {
     OverlayColor secondary;
     OverlayColor provisional;
     OverlayColor copied;
+    OverlayColor finalizing;
     OverlayColor track;
     OverlayColor fill;
     OverlayColor warning;

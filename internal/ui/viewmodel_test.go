@@ -118,6 +118,18 @@ func TestReviewModelMapsToLifecycleState(t *testing.T) {
 	}
 }
 
+func TestReviewModelMarksFinalizingTranscript(t *testing.T) {
+	finalizing := ReviewModel(session.ReviewFinalizing, "almost final", true)
+	if !finalizing.Finalizing {
+		t.Error("Finalizing = false for ReviewFinalizing")
+	}
+
+	applyingEdit := ReviewModel(session.ReviewApplyingEdit, "revised text", false)
+	if applyingEdit.Finalizing {
+		t.Error("Finalizing = true while applying an edit")
+	}
+}
+
 func TestReviewModelStatusDescribesAffordances(t *testing.T) {
 	model := ReviewModel(session.ReviewReady, "text", false)
 	if !strings.Contains(model.Status, "deliver") {

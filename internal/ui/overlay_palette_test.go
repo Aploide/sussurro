@@ -15,7 +15,8 @@ func paletteColors(p overlayPalette) map[string]overlayColor {
 	return map[string]overlayColor{
 		"background": p.Background, "border": p.Border, "primary": p.Primary,
 		"secondary": p.Secondary, "provisional": p.Provisional, "copied": p.Copied,
-		"track": p.Track, "fill": p.Fill, "warning": p.Warning, "shimmer base": p.ShimmerBase,
+		"finalizing": p.Finalizing, "track": p.Track, "fill": p.Fill,
+		"warning": p.Warning, "shimmer base": p.ShimmerBase,
 		"shimmer peak": p.ShimmerPeak,
 	}
 }
@@ -64,15 +65,17 @@ func contrastRatio(a, b overlayColor) float64 {
 	return (la + 0.05) / (lb + 0.05)
 }
 
-func TestCopiedOverlayTextIsGreen(t *testing.T) {
+func TestOverlayStateColoursHaveExpectedHue(t *testing.T) {
 	palettes := map[string]overlayPalette{
 		"light": lightOverlayPalette, "linux dark": linuxDarkOverlayPalette,
 		"windows dark": windowsDarkOverlayPalette, "darwin dark": darwinDarkOverlayPalette,
 	}
 	for name, palette := range palettes {
-		color := palette.Copied
-		if color.G <= color.R || color.G <= color.B {
+		if color := palette.Copied; color.G <= color.R || color.G <= color.B {
 			t.Errorf("%s copied colour = %+v, want green to be dominant", name, color)
+		}
+		if color := palette.Finalizing; color.R <= color.B || color.G <= color.B {
+			t.Errorf("%s finalizing colour = %+v, want red and green to dominate blue", name, color)
 		}
 	}
 }
@@ -89,6 +92,8 @@ func TestLightOverlayTextAndWaveformContrastAcrossDesktopBackdrops(t *testing.T)
 			"waveform":         lightOverlayPalette.Primary,
 			"status":           lightOverlayPalette.Secondary,
 			"provisional text": lightOverlayPalette.Provisional,
+			"copied text":      lightOverlayPalette.Copied,
+			"finalizing text":  lightOverlayPalette.Finalizing,
 			"shimmer base":     lightOverlayPalette.ShimmerBase,
 		} {
 			painted := composite(foreground, background)
@@ -188,6 +193,12 @@ func TestNativeOverlayPaletteContract(t *testing.T) {
 	if !strings.Contains(linux, "else if (od->copied)") ||
 		!strings.Contains(linux, "od->palette.copied") {
 		t.Error("overlay_linux.c does not render copied transcript text with the copied palette colour")
+	}
+	finalizing := strings.Index(linux, "if (od->finalizing)")
+	provisional := strings.Index(linux, "else if (od->provisional)")
+	if finalizing < 0 || provisional < 0 || finalizing > provisional ||
+		!strings.Contains(linux, "od->palette.finalizing") {
+		t.Error("overlay_linux.c does not give finalizing transcript text priority over provisional text")
 	}
 
 	windows := readOverlaySource(t, "overlay_windows.c")

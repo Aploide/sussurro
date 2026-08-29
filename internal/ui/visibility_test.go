@@ -494,6 +494,22 @@ func TestEitherBindingMayBeEmpty(t *testing.T) {
 	}
 }
 
+func TestFinalizingPhaseMarksTranscript(t *testing.T) {
+	manager := &Manager{stateChangeCh: make(chan ViewModel, 2)}
+
+	manager.OnPhase(session.StateTranscribing, "almost final")
+	finalizing := <-manager.stateChangeCh
+	if !finalizing.Finalizing {
+		t.Error("Finalizing = false during the final recognition pass")
+	}
+
+	manager.OnPhase(session.StateCleaningUp, "final text")
+	cleaningUp := <-manager.stateChangeCh
+	if cleaningUp.Finalizing {
+		t.Error("Finalizing = true after the final recognition pass")
+	}
+}
+
 // TestClipboardOnlyDeliveryIsConfirmed covers sussurro-xvj.44: copying
 // without pasting produces no visible effect in the target window, so the
 // overlay has to say it happened.

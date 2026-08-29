@@ -308,6 +308,7 @@ func (m *Manager) OnPhase(state session.State, partial string) {
 		State:      state,
 		Transcript: partial,
 		Partial:    true,
+		Finalizing: state == session.StateTranscribing,
 		Status:     compactStatus(state),
 		Mode:       ViewExpanded,
 	})

@@ -25,6 +25,26 @@ static HotkeyDownCB      hotkeyEditDownCB(void)  { return (HotkeyDownCB)goHotkey
 static HotkeyUpCB        hotkeyEditUpCB(void)    { return (HotkeyUpCB)goHotkeyEditUp;           }
 static MenuOpenSettingsCB menuOpenSettingsCB(void) { return (MenuOpenSettingsCB)goOpenSettings;   }
 static MenuQuitCB         menuQuitCB(void)         { return (MenuQuitCB)goQuit;                   }
+
+// Constructors hide header-owned ABI growth from cgo's generated Go struct.
+static OverlayPalette overlayPalette(OverlayColor background, OverlayColor border,
+                                     OverlayColor primary, OverlayColor secondary,
+                                     OverlayColor provisional, OverlayColor copied,
+                                     OverlayColor finalizing, OverlayColor track,
+                                     OverlayColor fill, OverlayColor warning,
+                                     OverlayColor shimmer_base, OverlayColor shimmer_peak) {
+    OverlayPalette palette = {
+        background, border, primary, secondary, provisional, copied,
+        finalizing, track, fill, warning, shimmer_base, shimmer_peak,
+    };
+    return palette;
+}
+
+static void overlayPresentAsync(GtkWidget *win, int state, const char *text,
+                                const char *status, int provisional, int copied,
+                                int finalizing) {
+    overlay_present_async(win, state, text, status, provisional, copied, finalizing);
+}
 */
 import "C"
 import (
@@ -122,19 +142,20 @@ func nativeOverlayColor(color overlayColor) C.OverlayColor {
 }
 
 func nativeOverlayPalette(palette overlayPalette) C.OverlayPalette {
-	return C.OverlayPalette{
-		background:   nativeOverlayColor(palette.Background),
-		border:       nativeOverlayColor(palette.Border),
-		primary:      nativeOverlayColor(palette.Primary),
-		secondary:    nativeOverlayColor(palette.Secondary),
-		provisional:  nativeOverlayColor(palette.Provisional),
-		copied:       nativeOverlayColor(palette.Copied),
-		track:        nativeOverlayColor(palette.Track),
-		fill:         nativeOverlayColor(palette.Fill),
-		warning:      nativeOverlayColor(palette.Warning),
-		shimmer_base: nativeOverlayColor(palette.ShimmerBase),
-		shimmer_peak: nativeOverlayColor(palette.ShimmerPeak),
-	}
+	return C.overlayPalette(
+		nativeOverlayColor(palette.Background),
+		nativeOverlayColor(palette.Border),
+		nativeOverlayColor(palette.Primary),
+		nativeOverlayColor(palette.Secondary),
+		nativeOverlayColor(palette.Provisional),
+		nativeOverlayColor(palette.Copied),
+		nativeOverlayColor(palette.Finalizing),
+		nativeOverlayColor(palette.Track),
+		nativeOverlayColor(palette.Fill),
+		nativeOverlayColor(palette.Warning),
+		nativeOverlayColor(palette.ShimmerBase),
+		nativeOverlayColor(palette.ShimmerPeak),
+	)
 }
 
 func (o *linuxOverlay) SetTheme(theme config.Theme) {
@@ -242,7 +263,14 @@ func (o *linuxOverlay) Present(model ViewModel) {
 	if model.Copied {
 		copied = 1
 	}
-	C.overlay_present_async((*C.GtkWidget)(o.win), nativeState, ctext, cstatus, provisional, copied)
+	finalizing := C.int(0)
+	if model.Finalizing {
+		finalizing = 1
+	}
+	C.overlayPresentAsync(
+		(*C.GtkWidget)(o.win), nativeState, ctext, cstatus,
+		provisional, copied, finalizing,
+	)
 }
 
 func (o *linuxOverlay) PushRMS(rms float32) {

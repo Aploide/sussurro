@@ -72,6 +72,7 @@ func nativeOverlayPalette(palette overlayPalette) C.OverlayPalette {
 		secondary:    nativeOverlayColor(palette.Secondary),
 		provisional:  nativeOverlayColor(palette.Provisional),
 		copied:       nativeOverlayColor(palette.Copied),
+		finalizing:   nativeOverlayColor(palette.Finalizing),
 		track:        nativeOverlayColor(palette.Track),
 		fill:         nativeOverlayColor(palette.Fill),
 		warning:      nativeOverlayColor(palette.Warning),

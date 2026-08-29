@@ -16,6 +16,7 @@ type overlayPalette struct {
 	Secondary   overlayColor
 	Provisional overlayColor
 	Copied      overlayColor
+	Finalizing  overlayColor
 	Track       overlayColor
 	Fill        overlayColor
 	Warning     overlayColor
@@ -29,7 +30,8 @@ var lightOverlayPalette = overlayPalette{
 	Primary:     overlayColor{R: 0.075, G: 0.075, B: 0.075, A: 1.0},
 	Secondary:   overlayColor{R: 0.075, G: 0.075, B: 0.075, A: 0.68},
 	Provisional: overlayColor{R: 0.075, G: 0.075, B: 0.075, A: 0.72},
-	Copied:      overlayColor{R: 0.086, G: 0.514, B: 0.231, A: 1.0},
+	Copied:      overlayColor{R: 0.12, G: 0.46, B: 0.25, A: 1.0},
+	Finalizing:  overlayColor{R: 0.50, G: 0.37, B: 0.03, A: 0.95},
 	Track:       overlayColor{R: 0.075, G: 0.075, B: 0.075, A: 0.18},
 	Fill:        overlayColor{R: 0.075, G: 0.075, B: 0.075, A: 0.58},
 	Warning:     overlayColor{R: 0.71, G: 0.22, B: 0.035, A: 1.0},
@@ -43,7 +45,8 @@ var linuxDarkOverlayPalette = overlayPalette{
 	Primary:     overlayColor{R: 1, G: 1, B: 1, A: 1},
 	Secondary:   overlayColor{R: 1, G: 1, B: 1, A: 0.55},
 	Provisional: overlayColor{R: 1, G: 1, B: 1, A: 0.72},
-	Copied:      overlayColor{R: 0.188, G: 0.82, B: 0.345, A: 1.0},
+	Copied:      overlayColor{R: 0.24, G: 0.76, B: 0.36, A: 0.95},
+	Finalizing:  overlayColor{R: 0.92, G: 0.75, B: 0.18, A: 0.90},
 	Track:       overlayColor{R: 1, G: 1, B: 1, A: 0.18},
 	Fill:        overlayColor{R: 1, G: 1, B: 1, A: 0.55},
 	Warning:     overlayColor{R: 1, G: 0.62, B: 0.23, A: 0.95},
@@ -57,7 +60,8 @@ var windowsDarkOverlayPalette = overlayPalette{
 	Primary:     overlayColor{R: 1, G: 1, B: 1, A: 1},
 	Secondary:   overlayColor{R: 1, G: 1, B: 1, A: 179.0 / 255},
 	Provisional: overlayColor{R: 1, G: 1, B: 1, A: 0.72},
-	Copied:      overlayColor{R: 0.188, G: 0.82, B: 0.345, A: 1.0},
+	Copied:      overlayColor{R: 0.24, G: 0.76, B: 0.36, A: 0.95},
+	Finalizing:  overlayColor{R: 0.92, G: 0.75, B: 0.18, A: 0.90},
 	Track:       overlayColor{R: 1, G: 1, B: 1, A: 0.18},
 	Fill:        overlayColor{R: 1, G: 1, B: 1, A: 0.55},
 	Warning:     overlayColor{R: 1, G: 0.62, B: 0.23, A: 0.95},
@@ -71,7 +75,8 @@ var darwinDarkOverlayPalette = overlayPalette{
 	Primary:     overlayColor{R: 1, G: 1, B: 1, A: 1},
 	Secondary:   overlayColor{R: 1, G: 1, B: 1, A: 0.55},
 	Provisional: overlayColor{R: 1, G: 1, B: 1, A: 0.72},
-	Copied:      overlayColor{R: 0.188, G: 0.82, B: 0.345, A: 1.0},
+	Copied:      overlayColor{R: 0.24, G: 0.76, B: 0.36, A: 0.95},
+	Finalizing:  overlayColor{R: 0.92, G: 0.75, B: 0.18, A: 0.90},
 	Track:       overlayColor{R: 1, G: 1, B: 1, A: 0.18},
 	Fill:        overlayColor{R: 1, G: 1, B: 1, A: 0.55},
 	Warning:     overlayColor{R: 1, G: 0.62, B: 0.23, A: 0.95},

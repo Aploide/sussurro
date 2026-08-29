@@ -50,6 +50,10 @@ type ViewModel struct {
 	// Copied reports that Transcript has reached the clipboard and is ready to
 	// paste. Native transcript renderers use it as a visual confirmation.
 	Copied bool
+	// Finalizing reports that Transcript is being settled by the final
+	// recognition pass. Native transcript renderers distinguish this wait from
+	// both provisional dictation and copied text.
+	Finalizing bool
 	// Status is a short line describing what the user can do next, or the
 	// error that just occurred.
 	Status string
@@ -116,6 +120,7 @@ func ReviewModel(state session.ReviewState, transcript string, partial bool) Vie
 		Reviewing:  true,
 		Transcript: transcript,
 		Partial:    partial,
+		Finalizing: state == session.ReviewFinalizing,
 		Status:     reviewStatus(state),
 		Mode:       ViewCompact,
 	}

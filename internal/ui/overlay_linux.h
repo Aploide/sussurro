@@ -149,7 +149,8 @@ void overlay_install_context_menu(GtkWidget *win,
    Setting them through separate calls lets the GTK loop draw between the two,
    showing a state that no longer matches the text beside it. */
 void overlay_present_async(GtkWidget *win, int state, const char *text,
-                           const char *status, int provisional, int copied);
+                           const char *status, int provisional, int copied,
+                           int finalizing);
 
 void overlay_show(GtkWidget *win);
 void overlay_hide(GtkWidget *win);
