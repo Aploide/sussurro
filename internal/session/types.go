@@ -45,6 +45,11 @@ const (
 	InputPress InputEvent = iota
 	InputRelease
 	InputToggle
+	// InputEditPress and InputEditRelease are dedicated review-edit gestures.
+	// Immediate mode ignores them, so an edit binding can never start an
+	// ordinary dictation while no reviewed text is waiting.
+	InputEditPress
+	InputEditRelease
 	inputEventCount
 )
 
@@ -61,10 +66,26 @@ func (event InputEvent) String() string {
 		return "release"
 	case InputToggle:
 		return "toggle"
+	case InputEditPress:
+		return "edit-press"
+	case InputEditRelease:
+		return "edit-release"
 	default:
 		return "invalid"
 	}
 }
+
+// InputOutcome reports what a dispatched gesture actually did.
+type InputOutcome uint8
+
+const (
+	InputIgnored InputOutcome = iota
+	InputStarted
+	InputStopped
+)
+
+// Stopped reports whether the gesture ended a capture.
+func (outcome InputOutcome) Stopped() bool { return outcome == InputStopped }
 
 // Recorder is the immediate-mode recording control consumed by input events.
 type Recorder interface {
@@ -76,19 +97,24 @@ type Recorder interface {
 // recording controls. The return value reports whether a recording was
 // stopped. Invalid events are rejected without invoking the recorder.
 func DispatchImmediateInput(recorder Recorder, event InputEvent) (recordingStopped bool) {
+	return dispatchImmediateInput(recorder, event).Stopped()
+}
+
+func dispatchImmediateInput(recorder Recorder, event InputEvent) InputOutcome {
 	switch event {
 	case InputPress:
 		recorder.StartRecording()
-		return false
+		return InputStarted
 	case InputRelease:
-		return recorder.StopRecording()
+		if recorder.StopRecording() {
+			return InputStopped
+		}
 	case InputToggle:
 		if recorder.StopRecording() {
-			return true
+			return InputStopped
 		}
 		recorder.StartRecording()
-		return false
-	default:
-		return false
+		return InputStarted
 	}
+	return InputIgnored
 }

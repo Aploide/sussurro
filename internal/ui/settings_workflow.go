@@ -159,7 +159,7 @@ func saveWorkflowSetting(cfg *config.Config, key, value string) error {
 		return err
 	}
 
-	if err := config.SaveWorkflowValue(key, yamlScalar(key, value)); err != nil {
+	if err := config.SaveWorkflowValue(cfg, key, yamlScalar(key, value)); err != nil {
 		return err
 	}
 	cfg.Workflow = updated

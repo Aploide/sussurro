@@ -15,18 +15,28 @@ import (
 	"github.com/aploide/sussurro/internal/session"
 )
 
-// fakeDispatcher records gestures and reports a scripted stop result.
+// fakeDispatcher records gestures and reports a scripted outcome.
 type fakeDispatcher struct {
 	mu      sync.Mutex
 	events  []session.InputEvent
 	stopped bool
+	ignored bool
 }
 
-func (d *fakeDispatcher) Dispatch(event session.InputEvent) bool {
+func (d *fakeDispatcher) Dispatch(event session.InputEvent) session.InputOutcome {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.events = append(d.events, event)
-	return d.stopped
+	if d.ignored {
+		return session.InputIgnored
+	}
+	if d.stopped {
+		return session.InputStopped
+	}
+	if event == session.InputRelease || event == session.InputEditRelease {
+		return session.InputIgnored
+	}
+	return session.InputStarted
 }
 
 func (d *fakeDispatcher) recorded() []session.InputEvent {
@@ -121,6 +131,8 @@ func TestParseCommandToleratesShellFormatting(t *testing.T) {
 		{name: "uppercase", raw: "SUBMIT", want: CommandSubmit},
 		{name: "mixed case", raw: "Press", want: CommandPress},
 		{name: "extra lines", raw: "release\nignored", want: CommandRelease},
+		{name: "edit start", raw: "EDIT-START\n", want: CommandEditStart},
+		{name: "edit stop", raw: " edit-stop ", want: CommandEditStop},
 	}
 
 	for _, tt := range tests {
@@ -188,6 +200,49 @@ func TestToggleRemainsBackwardCompatible(t *testing.T) {
 	}
 }
 
+type controllerRecognizer struct{}
+
+func (controllerRecognizer) StartCapture(session.SessionID)  {}
+func (controllerRecognizer) StopCapture(session.SessionID)   {}
+func (controllerRecognizer) CancelCapture(session.SessionID) {}
+
+type controllerEditor struct{}
+
+func (controllerEditor) ApplyEdit(session.SessionID, string, string) {}
+
+type controllerDeliverer struct{}
+
+func (controllerDeliverer) Deliver(string, bool) error { return nil }
+
+func TestEditRepliesReflectRealControllerOutcome(t *testing.T) {
+	controller := session.NewController(controllerRecognizer{}, controllerEditor{},
+		controllerDeliverer{}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server := newTestServer(controller, controller)
+
+	if reply := server.Execute("edit-start"); reply != "IDLE" {
+		t.Fatalf("idle edit-start reply = %q, want IDLE", reply)
+	}
+	if reply := server.Execute("press"); reply != "RECORDING" {
+		t.Fatalf("press reply = %q, want RECORDING", reply)
+	}
+	if reply := server.Execute("edit-stop"); reply != "IDLE" {
+		t.Fatalf("cross-release reply = %q, want IDLE", reply)
+	}
+	if reply := server.Execute("release"); reply != "STOPPED" {
+		t.Fatalf("release reply = %q, want STOPPED", reply)
+	}
+	controller.OnResult(controller.SessionID(), "review me")
+	if reply := server.Execute("edit-start"); reply != "RECORDING" {
+		t.Fatalf("ready edit-start reply = %q, want RECORDING", reply)
+	}
+	if reply := server.Execute("release"); reply != "IDLE" {
+		t.Fatalf("legacy cross-release reply = %q, want IDLE", reply)
+	}
+	if reply := server.Execute("edit-stop"); reply != "STOPPED" {
+		t.Fatalf("edit-stop reply = %q, want STOPPED", reply)
+	}
+}
+
 func TestGestureCommandsMapToInputEvents(t *testing.T) {
 	tests := []struct {
 		command Command
@@ -196,6 +251,8 @@ func TestGestureCommandsMapToInputEvents(t *testing.T) {
 		{command: CommandToggle, want: session.InputToggle},
 		{command: CommandPress, want: session.InputPress},
 		{command: CommandRelease, want: session.InputRelease},
+		{command: CommandEditStart, want: session.InputEditPress},
+		{command: CommandEditStop, want: session.InputEditRelease},
 	}
 
 	for _, tt := range tests {
@@ -305,8 +362,10 @@ func TestReleaseWithNothingRecordingIsIdle(t *testing.T) {
 	server := newTestServer(dispatch, nil)
 
 	// A stray release must not read as the start of a recording.
-	if reply := server.Execute("release"); reply != "IDLE" {
-		t.Errorf("reply = %q, want IDLE", reply)
+	for _, command := range []string{"release", "edit-stop"} {
+		if reply := server.Execute(command); reply != "IDLE" {
+			t.Errorf("%s reply = %q, want IDLE", command, reply)
+		}
 	}
 }
 

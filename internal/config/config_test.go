@@ -95,6 +95,9 @@ func TestLegacyConfigKeepsImmediateDefaults(t *testing.T) {
 	if cfg.Hotkey.PushToTalk != "ctrl+shift+space" {
 		t.Errorf("Hotkey.PushToTalk = %q, want the legacy trigger migrated", cfg.Hotkey.PushToTalk)
 	}
+	if cfg.Hotkey.Edit != "" {
+		t.Errorf("Hotkey.Edit = %q, want an unset default for an existing config", cfg.Hotkey.Edit)
+	}
 }
 
 func TestShippedDefaultConfigLoads(t *testing.T) {
@@ -479,10 +482,75 @@ func TestClipboardOnlyFromEnvironment(t *testing.T) {
 	}
 }
 
+func TestHotkeyPersistenceUsesLoadedConfigPathAndMigratesLegacyForm(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+
+	dir := t.TempDir()
+	custom := filepath.Join(dir, "custom.yaml")
+	if err := os.WriteFile(custom, []byte(legacyConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(dir, "home")
+	t.Setenv("HOME", home)
+	homeConfig := filepath.Join(home, ".sussurro", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(homeConfig), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const sentinel = "home config must stay unchanged\n"
+	if err := os.WriteFile(homeConfig, []byte(sentinel), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(custom)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	for name, trigger := range map[string]string{
+		"push_to_talk": "super+7",
+		"toggle":       "super+8",
+		"edit":         "super+9",
+	} {
+		if err := SaveHotkeyBinding(cfg, name, trigger); err != nil {
+			t.Fatalf("SaveHotkeyBinding(%s) error = %v", name, err)
+		}
+	}
+	if err := SaveHotkeyBinding(cfg, "toggle", ""); err != nil {
+		t.Fatalf("clearing toggle: %v", err)
+	}
+
+	homeData, err := os.ReadFile(homeConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(homeData) != sentinel {
+		t.Errorf("home config changed:\n%s", homeData)
+	}
+
+	viper.Reset()
+	reloaded, err := LoadConfig(custom)
+	if err != nil {
+		t.Fatalf("reloading migrated config: %v", err)
+	}
+	if reloaded.Hotkey.PushToTalk != "super+7" {
+		t.Errorf("PushToTalk = %q, want super+7", reloaded.Hotkey.PushToTalk)
+	}
+	if reloaded.Hotkey.Toggle != "" {
+		t.Errorf("Toggle = %q, want cleared", reloaded.Hotkey.Toggle)
+	}
+	if reloaded.Hotkey.Edit != "super+9" {
+		t.Errorf("Edit = %q, want super+9", reloaded.Hotkey.Edit)
+	}
+	if reloaded.Hotkey.Trigger != "ctrl+shift+space" {
+		t.Errorf("legacy Trigger = %q, want preserved", reloaded.Hotkey.Trigger)
+	}
+}
+
 func TestIndependentHotkeyBindings(t *testing.T) {
 	cfg, err := loadTestConfig(t, minimalModels+`hotkey:
   push_to_talk: "super+7"
   toggle: "super+8"
+  edit: "super+9"
 `)
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v", err)
@@ -494,14 +562,18 @@ func TestIndependentHotkeyBindings(t *testing.T) {
 	if cfg.Hotkey.Toggle != "super+8" {
 		t.Errorf("Toggle = %q, want super+8", cfg.Hotkey.Toggle)
 	}
+	if cfg.Hotkey.Edit != "super+9" {
+		t.Errorf("Edit = %q, want super+9", cfg.Hotkey.Edit)
+	}
 }
 
-func TestEitherHotkeyBindingMayBeUnset(t *testing.T) {
+func TestEachHotkeyBindingMayBeUnset(t *testing.T) {
 	tests := []struct {
 		name       string
 		body       string
 		pushToTalk string
 		toggle     string
+		edit       string
 	}{
 		{
 			name:       "toggle only",
@@ -516,10 +588,13 @@ func TestEitherHotkeyBindingMayBeUnset(t *testing.T) {
 			toggle:     "",
 		},
 		{
-			name:       "neither",
-			body:       "hotkey:\n  push_to_talk: \"\"\n",
-			pushToTalk: "",
-			toggle:     "",
+			name: "edit only",
+			body: "hotkey:\n  edit: \"super+9\"\n",
+			edit: "super+9",
+		},
+		{
+			name: "none",
+			body: "hotkey:\n  push_to_talk: \"\"\n",
 		},
 	}
 
@@ -534,6 +609,9 @@ func TestEitherHotkeyBindingMayBeUnset(t *testing.T) {
 			}
 			if cfg.Hotkey.Toggle != tt.toggle {
 				t.Errorf("Toggle = %q, want %q", cfg.Hotkey.Toggle, tt.toggle)
+			}
+			if cfg.Hotkey.Edit != tt.edit {
+				t.Errorf("Edit = %q, want %q", cfg.Hotkey.Edit, tt.edit)
 			}
 		})
 	}
@@ -641,5 +719,8 @@ func TestHotkeyConfigured(t *testing.T) {
 	}
 	if !(HotkeyConfig{Toggle: "super+8"}).Configured() {
 		t.Error("Configured() = false with a toggle binding")
+	}
+	if !(HotkeyConfig{Edit: "super+9"}).Configured() {
+		t.Error("Configured() = false with an edit binding")
 	}
 }

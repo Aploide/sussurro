@@ -11,6 +11,7 @@ echo $XDG_SESSION_TYPE   # prints "wayland" or "x11"
 ## Step 2: Install Dependencies (Linux Only)
 
 ### Wayland users
+
 ```bash
 # Arch/Manjaro
 sudo pacman -S gtk3 webkit2gtk-4.1 wl-clipboard gtk-layer-shell
@@ -24,6 +25,7 @@ sudo dnf install gtk3 webkit2gtk4.1 wl-clipboard
 ```
 
 ### X11 users
+
 ```bash
 # Arch/Manjaro
 sudo pacman -S gtk3 webkit2gtk-4.1
@@ -36,11 +38,13 @@ sudo dnf install gtk3 webkit2gtk4.1
 ```
 
 ### macOS
+
 No extra dependencies required. The overlay capsule, settings window, system tray, and right-click context menu all work natively.
 
 > **Accessibility permission:** On first run macOS will ask you to grant Accessibility access (System Settings → Privacy & Security → Accessibility). This is required for the global hotkey (CGEventTap).
 
 ### Windows
+
 No extra dependencies required beyond the **WebView2 runtime**, which powers the overlay and settings window and is preinstalled on Windows 11. On Windows 10, get it from [Microsoft](https://developer.microsoft.com/microsoft-edge/webview2/).
 
 GPU acceleration for Whisper runs on **Vulkan** through your graphics driver; if no Vulkan device is available it falls back to CPU.
@@ -87,6 +91,7 @@ sussurro            # Windows
 ```
 
 Follow the prompts to choose and download the AI models:
+
 - **Whisper Small** (~488 MB) — faster, good accuracy
 - **Whisper Large v3 Turbo** (~1.62 GB) — slower, best accuracy
 - **Qwen 3 Sussurro LLM** (~1.28 GB) — always required
@@ -102,15 +107,18 @@ After download completes, the overlay capsule appears at the bottom of your scre
 On Wayland, configure a keyboard shortcut in your DE that calls the trigger script. The install script puts it on your PATH as `sussurro-trigger`; if you unpacked the archive manually, use the full path to the bundled `trigger.sh` instead.
 
 ### GNOME (Wayland)
+
 1. Settings → Keyboard → Keyboard Shortcuts → Custom Shortcuts → **+**
-2. Name: `Sussurro Start`, Command: `sussurro-trigger start`, Shortcut: `Ctrl+Shift+Space`
-3. Add a second: `Sussurro Stop`, Command: `sussurro-trigger stop`, same shortcut on key-release
+2. Name: `Sussurro Start`, Command: `sussurro-trigger press`, Shortcut: `Ctrl+Shift+Space`
+3. Add a second: `Sussurro Stop`, Command: `sussurro-trigger release`, same shortcut on key-release
 
 ### KDE Plasma (Wayland)
+
 1. System Settings → Shortcuts → Custom Shortcuts → New → Global Shortcut → Command/URL
 2. Trigger: `Ctrl+Shift+Space`, Action: `sussurro-trigger`
 
 ### Sway / Hyprland
+
 See [wayland.md](wayland.md) for config file snippets.
 
 ## Step 6: Test It
@@ -123,10 +131,12 @@ See [wayland.md](wayland.md) for config file snippets.
 ## Step 7: Explore Settings
 
 Open the Settings window:
+
 - **System tray:** click the Sussurro pill icon → **Open Settings**
 - **Right-click the capsule** → **Open Settings**
 
 From Settings you can:
+
 - Switch or download Whisper models with a live progress bar
 - Change the transcription language (Auto Detect, English, German, Spanish, French, Portuguese, Russian, Italian)
 - Change the global hotkey (X11 / macOS / Windows) — takes effect immediately, no restart needed
@@ -172,10 +182,12 @@ transcription and marks anything this machine cannot do, with the reason.
 ## Troubleshooting
 
 ### Overlay doesn't appear
+
 Check that GTK3 is installed (`pkg-config --exists gtk+-3.0 && echo ok`).
 On Wayland without `gtk-layer-shell`, the overlay appears as a floating window — check your compositor's window rules if it hides under other windows.
 
 ### Settings window doesn't open
+
 Click the Sussurro tray icon and choose **Open Settings**.
 
 The capsule is hidden while Sussurro is idle, so there is usually nothing to
@@ -184,31 +196,39 @@ compatible bar), the capsule stays on screen instead and its right-click menu
 is the fallback — so you always have one route or the other.
 
 ### "clipboard failed" error
+
 Wayland: install `wl-clipboard` (see Step 2).
 
 ### Hotkey doesn't work (X11)
+
 Another app may have grabbed the hotkey. Change it via Settings → Global Hotkey, then the new hotkey activates immediately.
 
 ### Hotkey doesn't work (macOS)
+
 Check that Sussurro has Accessibility permission: System Settings → Privacy & Security → Accessibility. If it was recently added to the list, toggle it off and on, then relaunch.
 
 ### Hotkey doesn't work (Wayland)
+
 Complete Step 5. Test the trigger manually:
+
 ```bash
 echo toggle | nc -U /run/user/$(id -u)/sussurro.sock
 ```
 
 ### No text appears
+
 - Speak for at least 2 seconds
 - Check the terminal for error messages when running with `--no-ui`
 
 ## Daily Usage
 
 **Linux X11 / macOS:**
+
 1. Launch Sussurro from a terminal (`./sussurro`)
 2. Hold hotkey anywhere you can type → speak → release → text appears
 
 **Linux Wayland:**
+
 1. Launch from a terminal, then press hotkey once to start recording → speak → press again to stop → text appears
 
 To stop manually: right-click the capsule → **Quit**, or click Quit in the tray menu.

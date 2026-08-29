@@ -480,6 +480,129 @@ func TestEditRevisesHeldText(t *testing.T) {
 	}
 }
 
+func TestDedicatedEditGestureIsGatedByReadyState(t *testing.T) {
+	h := newHarness(t)
+
+	if got := h.controller.Handle(InputEditPress); got != ReviewIdle {
+		t.Fatalf("edit press in idle moved to %s, want idle", got)
+	}
+	if started, _, _ := h.recognizer.counts(); started != 0 {
+		t.Fatalf("edit press in idle started %d captures, want none", started)
+	}
+
+	// A dedicated edit release must not stop an ordinary dictation.
+	h.controller.Handle(InputPress)
+	if got := h.controller.Handle(InputEditRelease); got != ReviewRecording {
+		t.Fatalf("edit release during dictation moved to %s, want recording", got)
+	}
+	if _, stopped, _ := h.recognizer.counts(); stopped != 0 {
+		t.Fatalf("edit release stopped %d captures, want none", stopped)
+	}
+	h.controller.Handle(InputRelease)
+	h.controller.OnResult(h.controller.SessionID(), "review me")
+
+	if got := h.controller.Handle(InputEditPress); got != ReviewEditing {
+		t.Fatalf("edit press over ready text moved to %s, want editing", got)
+	}
+	if got := h.controller.Handle(InputEditRelease); got != ReviewApplyingEdit {
+		t.Fatalf("edit release moved to %s, want applying-edit", got)
+	}
+}
+
+func TestEditCaptureOnlyStopsForMatchingRelease(t *testing.T) {
+	t.Run("legacy press", func(t *testing.T) {
+		h := newHarness(t)
+		h.reachReady(t, "review me")
+		if outcome := h.controller.Dispatch(InputPress); outcome != InputStarted {
+			t.Fatalf("press outcome = %v, want started", outcome)
+		}
+		if outcome := h.controller.Dispatch(InputEditRelease); outcome != InputIgnored {
+			t.Fatalf("cross-release outcome = %v, want ignored", outcome)
+		}
+		if _, stopped, _ := h.recognizer.counts(); stopped != 1 {
+			t.Fatalf("stops = %d, want only initial dictation stop", stopped)
+		}
+		if outcome := h.controller.Dispatch(InputRelease); outcome != InputStopped {
+			t.Fatalf("matching release outcome = %v, want stopped", outcome)
+		}
+	})
+
+	t.Run("dedicated press", func(t *testing.T) {
+		h := newHarness(t)
+		h.reachReady(t, "review me")
+		if outcome := h.controller.Dispatch(InputEditPress); outcome != InputStarted {
+			t.Fatalf("edit press outcome = %v, want started", outcome)
+		}
+		if outcome := h.controller.Dispatch(InputRelease); outcome != InputIgnored {
+			t.Fatalf("cross-release outcome = %v, want ignored", outcome)
+		}
+		if outcome := h.controller.Dispatch(InputEditRelease); outcome != InputStopped {
+			t.Fatalf("matching edit release outcome = %v, want stopped", outcome)
+		}
+	})
+}
+
+type orderedRecognizer struct {
+	controller   *Controller
+	startEntered chan struct{}
+	allowStart   chan struct{}
+	stopCalled   chan struct{}
+}
+
+func (r *orderedRecognizer) StartCapture(id SessionID) {
+	// A synchronous callback must not deadlock while gesture ordering is held.
+	r.controller.OnPartial(id, "partial")
+	close(r.startEntered)
+	<-r.allowStart
+}
+func (r *orderedRecognizer) StopCapture(SessionID)   { close(r.stopCalled) }
+func (r *orderedRecognizer) CancelCapture(SessionID) {}
+
+func TestConcurrentEditStopWaitsForCaptureStart(t *testing.T) {
+	recognizer := &orderedRecognizer{
+		startEntered: make(chan struct{}),
+		allowStart:   make(chan struct{}),
+		stopCalled:   make(chan struct{}),
+	}
+	controller := NewController(recognizer, &fakeEditor{}, &fakeDeliverer{}, nil,
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	recognizer.controller = controller
+	controller.state = ReviewReady
+	controller.text = "review me"
+
+	started := make(chan InputOutcome, 1)
+	stopped := make(chan InputOutcome, 1)
+	go func() { started <- controller.Dispatch(InputEditPress) }()
+	<-recognizer.startEntered
+	go func() { stopped <- controller.Dispatch(InputEditRelease) }()
+
+	select {
+	case <-recognizer.stopCalled:
+		t.Fatal("StopCapture ran before StartCapture returned")
+	default:
+	}
+	close(recognizer.allowStart)
+	if outcome := <-started; outcome != InputStarted {
+		t.Fatalf("start outcome = %v, want started", outcome)
+	}
+	if outcome := <-stopped; outcome != InputStopped {
+		t.Fatalf("stop outcome = %v, want stopped", outcome)
+	}
+	<-recognizer.stopCalled
+}
+
+func TestPushToTalkStillEditsReadyText(t *testing.T) {
+	h := newHarness(t)
+	h.reachReady(t, "review me")
+
+	if got := h.controller.Handle(InputPress); got != ReviewEditing {
+		t.Fatalf("legacy press over ready text moved to %s, want editing", got)
+	}
+	if got := h.controller.Handle(InputRelease); got != ReviewApplyingEdit {
+		t.Fatalf("legacy release moved to %s, want applying-edit", got)
+	}
+}
+
 func TestEmptyEditInstructionKeepsTextUnchanged(t *testing.T) {
 	h := newHarness(t)
 	h.reachReady(t, "original text")

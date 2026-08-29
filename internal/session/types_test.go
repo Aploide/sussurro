@@ -40,6 +40,8 @@ func TestInputEventValues(t *testing.T) {
 		{event: InputPress, name: "press"},
 		{event: InputRelease, name: "release"},
 		{event: InputToggle, name: "toggle"},
+		{event: InputEditPress, name: "edit-press"},
+		{event: InputEditRelease, name: "edit-release"},
 	}
 
 	for _, tt := range tests {
@@ -91,6 +93,8 @@ func TestDispatchImmediateInput(t *testing.T) {
 		{name: "release ignores idle recorder", event: InputRelease, wantStops: 1},
 		{name: "toggle stops active recording", event: InputToggle, stopResult: true, wantStops: 1, wantStopped: true},
 		{name: "toggle starts idle recorder", event: InputToggle, wantStarts: 1, wantStops: 1},
+		{name: "edit press never starts immediate dictation", event: InputEditPress},
+		{name: "edit release never stops immediate dictation", event: InputEditRelease},
 		{name: "invalid event is rejected", event: InputEvent(inputEventCount)},
 	}
 

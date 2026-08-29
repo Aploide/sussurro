@@ -48,11 +48,13 @@ models:
     extended_prompt: false
 
 hotkey:
-  # Two independent bindings; either may be left empty.
+  # Independent bindings; each may be left empty.
   # push_to_talk records while held and transcribes on release.
   # toggle starts recording on one press and stops on the next.
+  # edit records a spoken revision only while reviewed text is ready.
   push_to_talk: "ctrl+shift+space"
   toggle: ""
+  edit: ""
 
 injection:
   method: "keyboard"

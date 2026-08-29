@@ -115,8 +115,9 @@ models:
     threads: 4
 
 hotkey:
-  trigger: "ctrl+shift+space"
-  mode: "push-to-talk" # push-to-talk or toggle
+  push_to_talk: "ctrl+shift+space"
+  toggle: ""
+  edit: ""
 
 injection:
   method: "keyboard"

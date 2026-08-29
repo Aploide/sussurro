@@ -12,6 +12,8 @@ package ui
 extern void goHotkeyDown(void);
 extern void goHotkeyToggle(void);
 extern void goHotkeyUp(void);
+extern void goHotkeyEditDown(void);
+extern void goHotkeyEditUp(void);
 extern void goOpenSettings(void);
 extern void goQuit(void);
 
@@ -19,6 +21,8 @@ extern void goQuit(void);
 static HotkeyDownCB      hotkeyDownCB(void)      { return (HotkeyDownCB)goHotkeyDown;           }
 static HotkeyUpCB        hotkeyUpCB(void)        { return (HotkeyUpCB)goHotkeyUp;               }
 static HotkeyDownCB      hotkeyToggleCB(void)    { return (HotkeyDownCB)goHotkeyToggle;         }
+static HotkeyDownCB      hotkeyEditDownCB(void)  { return (HotkeyDownCB)goHotkeyEditDown;       }
+static HotkeyUpCB        hotkeyEditUpCB(void)    { return (HotkeyUpCB)goHotkeyEditUp;           }
 static MenuOpenSettingsCB menuOpenSettingsCB(void) { return (MenuOpenSettingsCB)goOpenSettings;   }
 static MenuQuitCB         menuQuitCB(void)         { return (MenuQuitCB)goQuit;                   }
 */
@@ -40,6 +44,8 @@ var (
 	globalDownCB         func()
 	globalUpCB           func()
 	globalToggleCB       func()
+	globalEditDownCB     func()
+	globalEditUpCB       func()
 	globalOpenSettingsCB func()
 	globalQuitCB         func()
 )
@@ -62,6 +68,20 @@ func goHotkeyToggle() {
 func goHotkeyUp() {
 	if globalUpCB != nil {
 		globalUpCB()
+	}
+}
+
+//export goHotkeyEditDown
+func goHotkeyEditDown() {
+	if globalEditDownCB != nil {
+		globalEditDownCB()
+	}
+}
+
+//export goHotkeyEditUp
+func goHotkeyEditUp() {
+	if globalEditUpCB != nil {
+		globalEditUpCB()
 	}
 }
 
@@ -124,26 +144,42 @@ func (o *linuxOverlay) SetTheme(theme config.Theme) {
 	)
 }
 
-// installHotkey registers the X11 global bindings (no-op on Wayland). Either
-// binding may be empty, so a user can have push-to-talk, toggle, or both.
+// installHotkey registers the X11 global bindings (no-op on Wayland).
 func (o *linuxOverlay) installHotkey(bindings HotkeyBindings) {
 	globalDownCB = bindings.OnPress
 	globalUpCB = bindings.OnRelease
 	globalToggleCB = bindings.OnToggle
+	globalEditDownCB = bindings.OnEditPress
+	globalEditUpCB = bindings.OnEditRelease
 
 	cptt := C.CString(bindings.PushToTalk)
 	defer C.free(unsafe.Pointer(cptt))
 	ctoggle := C.CString(bindings.Toggle)
 	defer C.free(unsafe.Pointer(ctoggle))
+	cedit := C.CString(bindings.Edit)
+	defer C.free(unsafe.Pointer(cedit))
 
 	C.overlay_install_hotkey(
 		(*C.GtkWidget)(o.win),
 		cptt,
 		ctoggle,
+		cedit,
 		C.hotkeyDownCB(),
 		C.hotkeyUpCB(),
 		C.hotkeyToggleCB(),
+		C.hotkeyEditDownCB(),
+		C.hotkeyEditUpCB(),
 	)
+}
+
+func (o *linuxOverlay) replaceHotkeys(bindings HotkeyBindings) {
+	cptt := C.CString(bindings.PushToTalk)
+	defer C.free(unsafe.Pointer(cptt))
+	ctoggle := C.CString(bindings.Toggle)
+	defer C.free(unsafe.Pointer(ctoggle))
+	cedit := C.CString(bindings.Edit)
+	defer C.free(unsafe.Pointer(cedit))
+	C.overlay_replace_hotkeys_async((*C.GtkWidget)(o.win), cptt, ctoggle, cedit)
 }
 
 func (o *linuxOverlay) Show() {

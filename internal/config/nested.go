@@ -29,11 +29,11 @@ func SetNestedValue(content, dottedKey, value string) (string, error) {
 	return strings.Join(updated, "\n"), nil
 }
 
-// SaveWorkflowValue persists one workflow setting to the user's config file.
-func SaveWorkflowValue(dottedKey, value string) error {
+// SaveWorkflowValue persists one setting to the file that supplied cfg.
+func SaveWorkflowValue(cfg *Config, dottedKey, value string) error {
 	configSaveMu.Lock()
 	defer configSaveMu.Unlock()
-	configFile, err := userConfigPath()
+	configFile, err := configPath(cfg)
 	if err != nil {
 		return err
 	}
@@ -50,8 +50,6 @@ func SaveWorkflowValue(dottedKey, value string) error {
 	return os.WriteFile(configFile, []byte(updated), 0644)
 }
 
-// userConfigPath returns the user's config file location. Every Save helper
-// resolves it the same way.
 func userConfigPath() (string, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {

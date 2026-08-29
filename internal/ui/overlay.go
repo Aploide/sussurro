@@ -44,18 +44,20 @@ func present(overlay Overlay, model ViewModel, trayReady bool) {
 }
 
 // HotkeyBindings describes the keyboard bindings that start and stop
-// recording. Each binding is optional: a user may have push-to-talk, toggle,
-// or both, which the previous single-trigger-plus-mode design could not
-// express.
+// recording and review editing. Each binding is optional.
 type HotkeyBindings struct {
 	PushToTalk string
 	Toggle     string
+	Edit       string
 
 	// OnPress and OnRelease drive the push-to-talk binding; OnToggle fires
-	// once per press of the toggle binding.
-	OnPress   func()
-	OnRelease func()
-	OnToggle  func()
+	// once per press of the toggle binding. OnEditPress and OnEditRelease
+	// drive the dedicated review-edit binding.
+	OnPress       func()
+	OnRelease     func()
+	OnToggle      func()
+	OnEditPress   func()
+	OnEditRelease func()
 }
 
 // FillIndicator is the optional recording-buffer extension to Overlay.

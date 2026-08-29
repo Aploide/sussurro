@@ -17,7 +17,9 @@ func installOverlayHotkey(overlay Overlay, bindings HotkeyBindings) {
 		// A nil or non-Linux overlay silently swallowed the hotkey install,
 		// which is exactly how a dead hotkey goes unnoticed.
 		slog.Error("Hotkeys not installed: overlay is not available yet",
-			"push_to_talk", bindings.PushToTalk, "toggle", bindings.Toggle,
+			"push_to_talk", bindings.PushToTalk,
+			"toggle", bindings.Toggle,
+			"edit", bindings.Edit,
 			"overlay_nil", overlay == nil)
 		return
 	}
@@ -31,7 +33,12 @@ func reinstallOverlayHotkey(overlay Overlay, bindings HotkeyBindings) {
 	if ihk.IsWayland() {
 		return
 	}
-	installOverlayHotkey(overlay, bindings)
+	lo, ok := overlay.(*linuxOverlay)
+	if !ok {
+		slog.Error("Hotkeys not replaced: overlay is not available")
+		return
+	}
+	lo.replaceHotkeys(bindings)
 }
 
 // installOverlayContextMenu wires the right-click menu on the GTK3 overlay.

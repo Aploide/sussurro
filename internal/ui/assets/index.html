@@ -260,7 +260,10 @@
             <div class="toggle-desc">Hold to record, release to transcribe</div>
             <div id="hotkey-display" class="hotkey-display" style="margin-top:6px"></div>
           </div>
-          <button class="hotkey-edit-btn" id="hotkey-edit-btn">Change</button>
+          <div class="hotkey-actions">
+            <button class="hotkey-edit-btn" id="hotkey-clear-btn">Clear</button>
+            <button class="hotkey-edit-btn" id="hotkey-edit-btn">Change</button>
+          </div>
         </div>
 
         <div id="hotkey-toggle-row" class="hotkey-row" hidden>
@@ -269,14 +272,31 @@
             <div class="toggle-desc">Press once to start, again to stop</div>
             <div id="hotkey-toggle-display" class="hotkey-display" style="margin-top:6px"></div>
           </div>
-          <button class="hotkey-edit-btn" id="hotkey-toggle-edit-btn">Change</button>
+          <div class="hotkey-actions">
+            <button class="hotkey-edit-btn" id="hotkey-toggle-clear-btn">Clear</button>
+            <button class="hotkey-edit-btn" id="hotkey-toggle-edit-btn">Change</button>
+          </div>
+        </div>
+
+        <div id="hotkey-review-edit-row" class="hotkey-row" hidden>
+          <div>
+            <div class="toggle-label">Edit reviewed text</div>
+            <div class="toggle-desc">Hold to dictate a revision when text is ready</div>
+            <div id="hotkey-review-edit-display" class="hotkey-display" style="margin-top:6px"></div>
+          </div>
+          <div class="hotkey-actions">
+            <button class="hotkey-edit-btn" id="hotkey-review-edit-clear-btn">Clear</button>
+            <button class="hotkey-edit-btn" id="hotkey-review-edit-btn">Change</button>
+          </div>
         </div>
 
         <!-- Wayland note -->
         <div id="hotkey-wayland" class="hotkey-wayland-note" hidden>
           On Wayland, global hotkeys require a custom keyboard shortcut in your desktop environment.<br>
-          Configure your DE to run: <code class="command-example">sussurro-trigger start</code> on key down,
-          and <code class="command-example">sussurro-trigger stop</code> on key up.<br>
+          Configure your DE to run: <code class="command-example">sussurro-trigger press</code> on key down,
+          and <code class="command-example">sussurro-trigger release</code> on key up.<br>
+          A dedicated review-edit shortcut can use <code class="command-example">edit-start</code>
+          and <code class="command-example">edit-stop</code>.<br>
           See <a href="#" onclick="window.openURL('https://github.com/aploide/sussurro/blob/master/docs/wayland.md'); return false">docs/wayland.md</a> for instructions.
         </div>
       </div>

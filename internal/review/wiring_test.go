@@ -243,11 +243,11 @@ func TestWiredDispatcherReportsRecordingStopped(t *testing.T) {
 	app := wire(t, reviewConfig(t))
 
 	// The trigger server and hotkey callbacks use this to log progress.
-	if stopped := app.dispatch.Dispatch(session.InputPress); stopped {
-		t.Error("press reported as stopping a recording")
+	if outcome := app.dispatch.Dispatch(session.InputPress); outcome != session.InputStarted {
+		t.Errorf("press outcome = %v, want started", outcome)
 	}
-	if stopped := app.dispatch.Dispatch(session.InputRelease); !stopped {
-		t.Error("release did not report stopping a recording")
+	if outcome := app.dispatch.Dispatch(session.InputRelease); outcome != session.InputStopped {
+		t.Errorf("release outcome = %v, want stopped", outcome)
 	}
 }
 

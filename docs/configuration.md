@@ -161,7 +161,7 @@ The `--whisper` / `--wsp` flag opens an interactive menu, downloads the chosen m
 
 The `language` key tells Whisper which language to expect. Use any [BCP-47 code supported by Whisper](https://github.com/openai/whisper#available-models-and-languages) (e.g. `"en"`, `"it"`, `"de"`, `"fr"`) or `"auto"` to let the model detect the language automatically. Defaults to `"en"`.
 
-The value can be changed at any time from the **Settings → Transcription Language** dropdown; the new value is written to `~/.sussurro/config.yaml` immediately and takes effect on next launch. It can also be overridden via the environment:
+The value can be changed at any time from the **Settings → Transcription Language** dropdown. Settings writes the config file Sussurro loaded, and the change takes effect on next launch. It can also be overridden via the environment:
 
 ```bash
 export SUSSURRO_MODELS_ASR_LANGUAGE=it
@@ -173,24 +173,28 @@ export SUSSURRO_MODELS_ASR_LANGUAGE=it
 hotkey:
   push_to_talk: "ctrl+shift+space" # hold to record, release to transcribe
   toggle: ""                       # press once to start, again to stop
+  edit: ""                         # hold to revise reviewed text
 ```
 
-The two bindings are independent and each optional, so one key can be held
-for push-to-talk while another is tapped to toggle. Leaving both empty is
-valid — on Wayland the trigger socket is used instead.
+The bindings are independent and each optional, so one key can be held for
+push-to-talk while another is tapped to toggle. The edit binding only records
+while reviewed text is ready. Sussurro keeps it configured but does not
+register it while running in immediate mode. Leaving every binding empty is
+valid because Wayland can use the trigger socket instead.
 
-| Setting        | Behaviour                                                 |
-| -------------- | --------------------------------------------------------- |
-| `push_to_talk` | Hold to record; release to transcribe.                    |
-| `toggle`       | Press once to start recording; press again to transcribe. |
+| Setting        | Behaviour                                                   |
+| -------------- | ----------------------------------------------------------- |
+| `push_to_talk` | Hold to record; release to transcribe.                      |
+| `toggle`       | Press once to start recording; press again to transcribe.   |
+| `edit`         | Hold to dictate a revision when reviewed text is ready.     |
 
-Both can be changed from **Settings → Global Hotkey** and take effect
-immediately without a restart. Not applicable on Wayland, where shortcuts are
-configured in the desktop environment.
+All three can be changed or cleared from **Settings → Global Hotkey** and take
+effect immediately without a restart. Settings writes the file Sussurro loaded,
+including a path supplied with `--config`. Not applicable on Wayland, where
+shortcuts are configured in the desktop environment.
 
-The superseded `trigger` and `mode` keys are still read for existing configs:
-`trigger` becomes whichever binding `mode` named, and is ignored if either new
-binding is already set.
+The superseded `trigger` and `mode` keys are still read for existing configs.
+`trigger` fills the binding named by `mode` only when that binding is unset.
 
 The trigger string is `+`-separated: modifiers first, then the key. Modifier aliases:
 
@@ -204,10 +208,10 @@ The trigger string is `+`-separated: modifiers first, then the key. Modifier ali
 **Examples:**
 
 ```yaml
-trigger: "ctrl+shift+space"   # default Linux
-trigger: "cmd+shift+space"    # default macOS
-trigger: "alt+shift+f2"       # any platform
-trigger: "super+space"        # Linux (Super/Windows key)
+push_to_talk: "ctrl+shift+space" # default Linux
+push_to_talk: "cmd+shift+space"  # default macOS
+push_to_talk: "alt+shift+f2"     # any platform
+push_to_talk: "super+space"      # Linux (Super/Windows key)
 ```
 
 > **Note:** Hotkey changes made in the Settings window take effect immediately — no restart is required.

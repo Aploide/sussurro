@@ -106,6 +106,10 @@ type Controller struct {
 	presenter  Presenter
 	log        *slog.Logger
 
+	// inputMu keeps state transitions and their recognizer side effects in
+	// gesture order. Recognizer callbacks only take mu, so StartCapture and
+	// StopCapture may call back synchronously without deadlocking.
+	inputMu sync.Mutex
 	mu      sync.Mutex
 	state   ReviewState
 	current SessionID
@@ -119,7 +123,18 @@ type Controller struct {
 	hasPrevious bool
 	// instruction is the spoken edit captured in Editing.
 	instruction string
+	// editOwner identifies which press entered Editing. Only its matching
+	// release may stop that capture.
+	editOwner editGestureOwner
 }
+
+type editGestureOwner uint8
+
+const (
+	editGestureNone editGestureOwner = iota
+	editGestureLegacy
+	editGestureDedicated
+)
 
 // NewController builds a review controller. The presenter may be nil for
 // headless use; the other adapters are required.
@@ -173,6 +188,12 @@ func (c *Controller) setState(state ReviewState) func() {
 // Handle applies an input gesture to the current state and returns the
 // resulting state.
 func (c *Controller) Handle(event InputEvent) ReviewState {
+	c.inputMu.Lock()
+	defer c.inputMu.Unlock()
+	return c.handle(event)
+}
+
+func (c *Controller) handle(event InputEvent) ReviewState {
 	switch event {
 	case InputPress:
 		return c.press()
@@ -180,6 +201,10 @@ func (c *Controller) Handle(event InputEvent) ReviewState {
 		return c.release()
 	case InputToggle:
 		return c.toggle()
+	case InputEditPress:
+		return c.editPress()
+	case InputEditRelease:
+		return c.editRelease()
 	default:
 		c.log.Debug("Ignoring invalid input event", "event", event)
 		return c.State()
@@ -199,6 +224,7 @@ func (c *Controller) press() ReviewState {
 		c.previous = ""
 		c.hasPrevious = false
 		c.instruction = ""
+		c.editOwner = editGestureNone
 		notify = c.setState(ReviewRecording)
 		id := c.current
 		c.mu.Unlock()
@@ -211,6 +237,7 @@ func (c *Controller) press() ReviewState {
 		// starting a fresh dictation.
 		c.current++
 		c.instruction = ""
+		c.editOwner = editGestureLegacy
 		notify = c.setState(ReviewEditing)
 		id := c.current
 		c.mu.Unlock()
@@ -224,6 +251,52 @@ func (c *Controller) press() ReviewState {
 		c.log.Debug("Ignoring press", "state", state)
 		return state
 	}
+}
+
+// editPress starts an edit capture only when reviewed text is ready. Unlike
+// the legacy overloaded press gesture, it is inert in Idle and every other
+// state, so a dedicated edit key cannot begin an ordinary dictation.
+func (c *Controller) editPress() ReviewState {
+	c.mu.Lock()
+	if c.state != ReviewReady {
+		state := c.state
+		c.mu.Unlock()
+		c.log.Debug("Ignoring edit press", "state", state)
+		return state
+	}
+
+	c.current++
+	c.instruction = ""
+	c.editOwner = editGestureDedicated
+	notify := c.setState(ReviewEditing)
+	id := c.current
+	c.mu.Unlock()
+
+	notify()
+	c.recognizer.StartCapture(id)
+	return ReviewEditing
+}
+
+// editRelease ends only an edit capture. A stray edit release cannot stop a
+// normal dictation or move any other review state forward.
+func (c *Controller) editRelease() ReviewState {
+	c.mu.Lock()
+	if c.state != ReviewEditing || c.editOwner != editGestureDedicated {
+		state := c.state
+		owner := c.editOwner
+		c.mu.Unlock()
+		c.log.Debug("Ignoring edit release", "state", state, "owner", owner)
+		return state
+	}
+
+	c.editOwner = editGestureNone
+	notify := c.setState(ReviewApplyingEdit)
+	id := c.current
+	c.mu.Unlock()
+
+	notify()
+	c.recognizer.StopCapture(id)
+	return ReviewApplyingEdit
 }
 
 // release ends a recording or an edit instruction and begins the async work.
@@ -240,6 +313,14 @@ func (c *Controller) release() ReviewState {
 		return ReviewFinalizing
 
 	case ReviewEditing:
+		if c.editOwner != editGestureLegacy {
+			state := c.state
+			owner := c.editOwner
+			c.mu.Unlock()
+			c.log.Debug("Ignoring release", "state", state, "owner", owner)
+			return state
+		}
+		c.editOwner = editGestureNone
 		notify := c.setState(ReviewApplyingEdit)
 		id := c.current
 		c.mu.Unlock()
@@ -446,6 +527,8 @@ func (c *Controller) Deliver(submit bool) error {
 // Cancel abandons the session from any state, discarding held text. Bumping
 // the session ID means every callback still in flight is ignored.
 func (c *Controller) Cancel() {
+	c.inputMu.Lock()
+	defer c.inputMu.Unlock()
 	c.mu.Lock()
 
 	if c.state == ReviewIdle {
@@ -459,6 +542,7 @@ func (c *Controller) Cancel() {
 	c.previous = ""
 	c.hasPrevious = false
 	c.instruction = ""
+	c.editOwner = editGestureNone
 	notify := c.setState(ReviewIdle)
 	c.mu.Unlock()
 
@@ -470,16 +554,16 @@ func (c *Controller) Cancel() {
 // callers wire input once instead of branching on interaction mode at every
 // hotkey, trigger, and adapter call site.
 type InputDispatcher interface {
-	// Dispatch applies event and reports whether the gesture ended a
-	// recording, which callers use for user-facing progress messages.
-	Dispatch(event InputEvent) (recordingStopped bool)
+	// Dispatch applies event and reports whether it started, stopped, or was
+	// ignored. Trigger protocol replies depend on the distinction.
+	Dispatch(event InputEvent) InputOutcome
 }
 
 // immediateDispatcher drives the unchanged immediate-mode recorder.
 type immediateDispatcher struct{ recorder Recorder }
 
-func (d immediateDispatcher) Dispatch(event InputEvent) bool {
-	return DispatchImmediateInput(d.recorder, event)
+func (d immediateDispatcher) Dispatch(event InputEvent) InputOutcome {
+	return dispatchImmediateInput(d.recorder, event)
 }
 
 // NewImmediateDispatcher returns the dispatcher for immediate mode.
@@ -487,10 +571,22 @@ func NewImmediateDispatcher(recorder Recorder) InputDispatcher {
 	return immediateDispatcher{recorder: recorder}
 }
 
-// Dispatch implements InputDispatcher for review mode. A gesture that leaves
-// the controller finalizing or applying an edit is reported as having stopped
-// a recording.
-func (c *Controller) Dispatch(event InputEvent) bool {
-	state := c.Handle(event)
-	return state == ReviewFinalizing || state == ReviewApplyingEdit
+// Dispatch implements InputDispatcher for review mode.
+func (c *Controller) Dispatch(event InputEvent) InputOutcome {
+	c.inputMu.Lock()
+	defer c.inputMu.Unlock()
+
+	before := c.State()
+	after := c.handle(event)
+	if after == before {
+		return InputIgnored
+	}
+	switch after {
+	case ReviewRecording, ReviewEditing:
+		return InputStarted
+	case ReviewFinalizing, ReviewApplyingEdit:
+		return InputStopped
+	default:
+		return InputIgnored
+	}
 }

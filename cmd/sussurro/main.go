@@ -242,14 +242,21 @@ func run() {
 			pipe.RunWhenIdle(func() { dictionary.SetDictionary(terms) })
 		})
 
-		// Push-to-talk and toggle are independent bindings, so their callbacks
-		// no longer depend on a mode: each key does what it is bound to do.
+		// Each native binding is independent. The dedicated edit binding is only
+		// active in review mode, where reviewed text can exist.
+		editHotkey := ""
+		if cfg.Workflow.ReviewEnabled() {
+			editHotkey = cfg.Hotkey.Edit
+		}
 		bindings := ui.HotkeyBindings{
-			PushToTalk: cfg.Hotkey.PushToTalk,
-			Toggle:     cfg.Hotkey.Toggle,
-			OnPress:    func() { input.Dispatch(session.InputPress) },
-			OnRelease:  func() { input.Dispatch(session.InputRelease) },
-			OnToggle:   func() { input.Dispatch(session.InputToggle) },
+			PushToTalk:    cfg.Hotkey.PushToTalk,
+			Toggle:        cfg.Hotkey.Toggle,
+			Edit:          editHotkey,
+			OnPress:       func() { input.Dispatch(session.InputPress) },
+			OnRelease:     func() { input.Dispatch(session.InputRelease) },
+			OnToggle:      func() { input.Dispatch(session.InputToggle) },
+			OnEditPress:   func() { input.Dispatch(session.InputEditPress) },
+			OnEditRelease: func() { input.Dispatch(session.InputEditRelease) },
 		}
 
 		// Set up input handler before entering the UI main loop.
@@ -261,10 +268,12 @@ func run() {
 			log.Warn("Wayland: configure keyboard shortcut (see docs/wayland.md)")
 		} else {
 			if !cfg.Hotkey.Configured() {
-				log.Warn("No hotkey configured; set hotkey.push_to_talk or hotkey.toggle")
+				log.Warn("No hotkey configured; set hotkey.push_to_talk, hotkey.toggle, or hotkey.edit")
 			} else {
 				log.Info("Using overlay hotkeys",
-					"push_to_talk", cfg.Hotkey.PushToTalk, "toggle", cfg.Hotkey.Toggle)
+					"push_to_talk", cfg.Hotkey.PushToTalk,
+					"toggle", cfg.Hotkey.Toggle,
+					"edit", editHotkey)
 			}
 			uiMgr.InstallHotkey(bindings)
 		}
@@ -288,44 +297,48 @@ func run() {
 	} else {
 		log.Info("Using global hotkeys (X11 / macOS)")
 
-		// Headless registers each configured binding separately. Both are
-		// optional; with neither set there is simply no keyboard trigger.
-		if cfg.Hotkey.PushToTalk != "" {
-			ptt, err := hotkey.NewHandler(cfg.Hotkey.PushToTalk, log)
+		// Headless registers each configured binding separately. Every binding
+		// is optional; with none set the trigger socket remains available.
+		var handlers []*hotkey.Handler
+		register := func(name, trigger string, onDown, onUp func()) {
+			if trigger == "" {
+				return
+			}
+			handler, err := hotkey.NewHandler(trigger, log)
 			if err != nil {
-				log.Error("Failed to register the push-to-talk hotkey", "error", err)
+				log.Error("Failed to create hotkey handler", "binding", name, "error", err)
 				os.Exit(1)
 			}
-			defer ptt.Unregister()
-			if err := ptt.Register(
-				func() { input.Dispatch(session.InputPress) },
-				func() { input.Dispatch(session.InputRelease) },
-			); err != nil {
-				log.Error("Failed to register the push-to-talk hotkey", "error", err)
+			if err := handler.Register(onDown, onUp); err != nil {
+				log.Error("Failed to register hotkey", "binding", name, "error", err)
 				os.Exit(1)
 			}
+			handlers = append(handlers, handler)
 		}
 
-		if cfg.Hotkey.Toggle == "" {
-			if cfg.Hotkey.PushToTalk == "" {
-				log.Warn("No hotkey configured; set hotkey.push_to_talk or hotkey.toggle")
+		register("push_to_talk", cfg.Hotkey.PushToTalk,
+			func() { input.Dispatch(session.InputPress) },
+			func() { input.Dispatch(session.InputRelease) },
+		)
+		register("toggle", cfg.Hotkey.Toggle,
+			func() { input.Dispatch(session.InputToggle) },
+			func() {},
+		)
+		if cfg.Workflow.ReviewEnabled() {
+			register("edit", cfg.Hotkey.Edit,
+				func() { input.Dispatch(session.InputEditPress) },
+				func() { input.Dispatch(session.InputEditRelease) },
+			)
+		}
+
+		defer func() {
+			for _, handler := range handlers {
+				handler.Unregister()
 			}
-			select {}
-		}
+		}()
 
-		hkHandler, err := hotkey.NewHandler(cfg.Hotkey.Toggle, log)
-		if err != nil {
-			log.Error("Failed to register the toggle hotkey", "error", err)
-			os.Exit(1)
-		}
-		defer hkHandler.Unregister()
-
-		onDown := func() { input.Dispatch(session.InputToggle) }
-		onUp := func() {}
-
-		if err := hkHandler.Register(onDown, onUp); err != nil {
-			log.Error("Failed to register hotkey", "error", err)
-			os.Exit(1)
+		if !cfg.Hotkey.Configured() {
+			log.Warn("No hotkey configured; set hotkey.push_to_talk, hotkey.toggle, or hotkey.edit")
 		}
 	}
 

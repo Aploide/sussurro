@@ -34,6 +34,7 @@ type initialData struct {
 	Models           []modelInfo  `json:"models"`
 	PushToTalkHotkey string       `json:"pushToTalkHotkey"`
 	ToggleHotkey     string       `json:"toggleHotkey"`
+	EditHotkey       string       `json:"editHotkey"`
 	IsWayland        bool         `json:"isWayland"`
 	Language         string       `json:"language"`
 	LowercaseOutput  bool         `json:"lowercaseOutput"`
@@ -82,7 +83,7 @@ func bindBridge(sw *settingsWindow) {
 	// One binding per call, named by which it is. The previous design had a
 	// single trigger plus a mode, which made the behaviour a property of the
 	// binding and so allowed only one at a time.
-	saveBinding := func(name string, apply func(string)) func(string) string {
+	saveBinding := func(name string) func(string) string {
 		return func(trigger string) (result string) {
 			defer func() {
 				if r := recover(); r != nil {
@@ -90,22 +91,16 @@ func bindBridge(sw *settingsWindow) {
 					result = fmt.Sprintf("error: panic: %v", r)
 				}
 			}()
-			if err := config.SaveHotkeyBinding(name, trigger); err != nil {
+			if err := mgr.SaveHotkeyBinding(name, trigger); err != nil {
 				return fmt.Sprintf("error: %v", err)
 			}
-			apply(trigger)
-			// Re-register immediately so the change needs no restart.
-			go mgr.UpdateHotkeyBindings(mgr.cfg.Hotkey.PushToTalk, mgr.cfg.Hotkey.Toggle)
 			return "ok"
 		}
 	}
 
-	sw.w.Bind("savePushToTalkHotkey", saveBinding("push_to_talk", func(t string) {
-		mgr.cfg.Hotkey.PushToTalk = t
-	}))
-	sw.w.Bind("saveToggleHotkey", saveBinding("toggle", func(t string) {
-		mgr.cfg.Hotkey.Toggle = t
-	}))
+	sw.w.Bind("savePushToTalkHotkey", saveBinding("push_to_talk"))
+	sw.w.Bind("saveToggleHotkey", saveBinding("toggle"))
+	sw.w.Bind("saveEditHotkey", saveBinding("edit"))
 
 	sw.w.Bind("saveLanguage", func(lang string) (result string) {
 		defer func() {
@@ -324,6 +319,7 @@ func buildInitialData(mgr *Manager) initialData {
 		Models:           models,
 		PushToTalkHotkey: mgr.cfg.Hotkey.PushToTalk,
 		ToggleHotkey:     mgr.cfg.Hotkey.Toggle,
+		EditHotkey:       mgr.cfg.Hotkey.Edit,
 		IsWayland:        isWayland,
 		Language:         mgr.cfg.Models.ASR.Language,
 		LowercaseOutput:  mgr.cfg.App.LowercaseOutput,

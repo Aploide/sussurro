@@ -409,6 +409,11 @@ select option {
 }
 
 /* ---- Hotkey row ---- */
+.hotkey-actions {
+  display: flex;
+  gap: 6px;
+}
+
 .hotkey-row {
   display: flex;
   align-items: center;
@@ -451,6 +456,10 @@ kbd {
 }
 .hotkey-edit-btn:hover {
   background: var(--control-hover);
+}
+.hotkey-edit-btn:disabled {
+  cursor: default;
+  opacity: 0.45;
 }
 
 .hotkey-wayland-note {

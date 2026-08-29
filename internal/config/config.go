@@ -105,7 +105,7 @@ type LLMConfig struct {
 
 // HotkeyConfig holds the keyboard bindings that start and stop recording.
 //
-// PushToTalk and Toggle are independent and each optional. The previous design
+// PushToTalk, Toggle, and Edit are independent and each optional. The previous design
 // had one trigger with a mode applied to it, which made the behaviour a
 // property of the binding and so allowed only one at a time; a user wanting a
 // held key and a tapped key could not have both.
@@ -114,6 +114,8 @@ type HotkeyConfig struct {
 	PushToTalk string `mapstructure:"push_to_talk"`
 	// Toggle starts recording on one press and stops on the next.
 	Toggle string `mapstructure:"toggle"`
+	// Edit records a spoken revision only while reviewed text is ready.
+	Edit string `mapstructure:"edit"`
 
 	// Trigger and Mode are the superseded single-binding form. Still read so
 	// existing configs keep their hotkey; Normalize folds them into whichever
@@ -147,7 +149,7 @@ func (h *HotkeyConfig) Normalize() {
 // Configured reports whether any keyboard binding is set. None is valid: on
 // Wayland the trigger socket is used instead.
 func (h HotkeyConfig) Configured() bool {
-	return h.PushToTalk != "" || h.Toggle != ""
+	return h.PushToTalk != "" || h.Toggle != "" || h.Edit != ""
 }
 
 type InjectionConfig struct {
@@ -159,7 +161,7 @@ type InjectionConfig struct {
 func SaveLanguage(cfg *Config, language string) error {
 	configSaveMu.Lock()
 	defer configSaveMu.Unlock()
-	configFile, err := userConfigPath()
+	configFile, err := configPath(cfg)
 	if err != nil {
 		return fmt.Errorf("resolve user config path: %w", err)
 	}
@@ -223,7 +225,7 @@ func SaveLanguage(cfg *Config, language string) error {
 func SaveLowercaseOutput(cfg *Config, enabled bool) error {
 	configSaveMu.Lock()
 	defer configSaveMu.Unlock()
-	configFile, err := userConfigPath()
+	configFile, err := configPath(cfg)
 	if err != nil {
 		return fmt.Errorf("resolve user config path: %w", err)
 	}
@@ -271,7 +273,7 @@ func SaveLowercaseOutput(cfg *Config, enabled bool) error {
 func SaveSkipLLMCleanup(cfg *Config, enabled bool) error {
 	configSaveMu.Lock()
 	defer configSaveMu.Unlock()
-	configFile, err := userConfigPath()
+	configFile, err := configPath(cfg)
 	if err != nil {
 		return fmt.Errorf("resolve user config path: %w", err)
 	}
@@ -410,11 +412,12 @@ func LoadConfig(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// SaveHotkeyBinding writes one hotkey binding to the user's config file.
-// name is the YAML key under hotkey: "push_to_talk" or "toggle". An empty
-// trigger clears the binding, which is valid — either may be unset.
-func SaveHotkeyBinding(name, trigger string) error {
-	if err := SaveWorkflowValue("hotkey."+name, YAMLString(trigger)); err != nil {
+// SaveHotkeyBinding writes one hotkey binding to cfg's loaded config file.
+// name is the YAML key under hotkey: "push_to_talk", "toggle", or "edit". An
+// empty trigger clears the binding, which is valid because every binding is
+// optional.
+func SaveHotkeyBinding(cfg *Config, name, trigger string) error {
+	if err := SaveWorkflowValue(cfg, "hotkey."+name, YAMLString(trigger)); err != nil {
 		return fmt.Errorf("save hotkey binding: %w", err)
 	}
 	return nil

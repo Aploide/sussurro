@@ -372,6 +372,7 @@ func TestBothHotkeyBindingsAreInstalled(t *testing.T) {
 	manager.InstallHotkey(HotkeyBindings{
 		PushToTalk: "super+7",
 		Toggle:     "super+8",
+		Edit:       "super+9",
 		OnPress:    func() {},
 		OnRelease:  func() {},
 		OnToggle:   func() {},
@@ -383,25 +384,111 @@ func TestBothHotkeyBindingsAreInstalled(t *testing.T) {
 	if manager.bindings.Toggle != "super+8" {
 		t.Errorf("Toggle = %q, want super+8", manager.bindings.Toggle)
 	}
+	if manager.bindings.Edit != "super+9" {
+		t.Errorf("Edit = %q, want super+9", manager.bindings.Edit)
+	}
+}
+
+func TestImmediateModeKeepsEditBindingPersistedButInactive(t *testing.T) {
+	cfg := &config.Config{}
+	manager, err := NewManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.InstallHotkey(HotkeyBindings{Edit: "super+9"})
+	if manager.bindings.Edit != "super+9" {
+		t.Fatalf("stored Edit = %q, want super+9", manager.bindings.Edit)
+	}
+	if active := manager.effectiveHotkeyBindings(); active.Edit != "" {
+		t.Errorf("active Edit = %q in immediate mode, want empty", active.Edit)
+	}
+}
+
+func TestReviewModeActivatesPersistedEditBinding(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Workflow.Mode = config.ModeReview
+	manager, err := NewManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.InstallHotkey(HotkeyBindings{Edit: "super+9"})
+	if active := manager.effectiveHotkeyBindings(); active.Edit != "super+9" {
+		t.Errorf("active Edit = %q, want super+9", active.Edit)
+	}
+}
+
+func TestHotkeyUpdatesReachNativeReplacementInOrder(t *testing.T) {
+	cfg := &config.Config{}
+	manager, err := NewManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	seen := make(chan string, 2)
+	manager.replaceHotkeys = func(_ Overlay, bindings HotkeyBindings) {
+		seen <- bindings.PushToTalk
+		if bindings.PushToTalk == "first" {
+			close(firstEntered)
+			<-releaseFirst
+		}
+	}
+
+	firstDone := make(chan struct{})
+	go func() {
+		manager.UpdateHotkeyBindings("first", "", "")
+		close(firstDone)
+	}()
+	<-firstEntered
+	if value := <-seen; value != "first" {
+		t.Fatalf("first replacement = %q", value)
+	}
+	secondDone := make(chan struct{})
+	go func() {
+		manager.UpdateHotkeyBindings("second", "", "")
+		close(secondDone)
+	}()
+	select {
+	case value := <-seen:
+		t.Fatalf("second replacement overtook first: %q", value)
+	default:
+	}
+	close(releaseFirst)
+	<-firstDone
+	<-secondDone
+	if value := <-seen; value != "second" {
+		t.Fatalf("second replacement = %q", value)
+	}
+	if manager.bindings.PushToTalk != "second" {
+		t.Errorf("final binding = %q, want second", manager.bindings.PushToTalk)
+	}
 }
 
 func TestEitherBindingMayBeEmpty(t *testing.T) {
-	for _, tt := range []struct{ name, ptt, toggle string }{
+	for _, tt := range []struct{ name, ptt, toggle, edit string }{
 		{name: "toggle only", toggle: "super+8"},
 		{name: "push to talk only", ptt: "super+7"},
-		{name: "neither"},
+		{name: "edit only", edit: "super+9"},
+		{name: "none"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			manager := &Manager{}
 			// Must not panic or refuse: an unset binding is valid, since
 			// Wayland uses the trigger socket instead.
-			manager.InstallHotkey(HotkeyBindings{PushToTalk: tt.ptt, Toggle: tt.toggle})
+			manager.InstallHotkey(HotkeyBindings{
+				PushToTalk: tt.ptt,
+				Toggle:     tt.toggle,
+				Edit:       tt.edit,
+			})
 
 			if manager.bindings.PushToTalk != tt.ptt {
 				t.Errorf("PushToTalk = %q, want %q", manager.bindings.PushToTalk, tt.ptt)
 			}
 			if manager.bindings.Toggle != tt.toggle {
 				t.Errorf("Toggle = %q, want %q", manager.bindings.Toggle, tt.toggle)
+			}
+			if manager.bindings.Edit != tt.edit {
+				t.Errorf("Edit = %q, want %q", manager.bindings.Edit, tt.edit)
 			}
 		})
 	}

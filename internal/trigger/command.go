@@ -21,6 +21,10 @@ const (
 	CommandPress Command = "press"
 	// CommandRelease ends the recording started by press.
 	CommandRelease Command = "release"
+	// CommandEditStart begins a spoken edit only when reviewed text is ready.
+	CommandEditStart Command = "edit-start"
+	// CommandEditStop ends an edit capture started by edit-start.
+	CommandEditStop Command = "edit-stop"
 	// CommandCancel abandons the session and discards any held text.
 	CommandCancel Command = "cancel"
 	// CommandDeliver inserts the reviewed text.
@@ -38,6 +42,8 @@ var commands = []Command{
 	CommandToggle,
 	CommandPress,
 	CommandRelease,
+	CommandEditStart,
+	CommandEditStop,
 	CommandCancel,
 	CommandDeliver,
 	CommandSubmit,
@@ -88,6 +94,10 @@ func (command Command) InputEvent() (session.InputEvent, bool) {
 		return session.InputPress, true
 	case CommandRelease:
 		return session.InputRelease, true
+	case CommandEditStart:
+		return session.InputEditPress, true
+	case CommandEditStop:
+		return session.InputEditRelease, true
 	default:
 		return 0, false
 	}

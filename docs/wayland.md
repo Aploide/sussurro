@@ -5,9 +5,11 @@ Wayland does not support global hotkeys due to its security model. This guide sh
 ## Am I on Wayland?
 
 Check with:
+
 ```bash
 echo $XDG_SESSION_TYPE
 ```
+
 If it says `wayland`, follow this guide. If it says `x11`, you don't need this for dictation - hotkeys work automatically.
 
 The trigger socket described under [Trigger commands](#trigger-commands) runs
@@ -121,6 +123,8 @@ configuration change is required.
 | `toggle`  | Start recording, or stop one already running                  | Any       |
 | `press`   | Begin recording; in review mode, begin an edit instruction    | Any       |
 | `release` | End the recording started by `press`                          | Any       |
+| `edit-start` | Begin an edit only when reviewed text is ready             | Review    |
+| `edit-stop` | End the edit recording started by `edit-start`               | Review    |
 | `cancel`  | Abandon the session and discard any held text                 | Review    |
 | `deliver` | Insert the reviewed text                                      | Review    |
 | `submit`  | Insert the reviewed text and press Enter                      | Review    |
@@ -143,12 +147,14 @@ The bundled script takes the command as its argument:
 ```bash
 scripts/trigger.sh          # toggle, same as before
 scripts/trigger.sh press
+scripts/trigger.sh edit-start
 scripts/trigger.sh deliver
 ```
 
 Compositors that can bind key press and release separately should bind `press`
-and `release` for true push-to-talk. Those that only fire once per shortcut
-should keep using `toggle`.
+and `release` for true push-to-talk. In review mode, a second shortcut can bind
+`edit-start` and `edit-stop` for editing only when text is ready. Those that
+only fire once per shortcut should keep using `toggle` for dictation.
 
 Replies are `RECORDING`, `STOPPED`, `IDLE`, `CANCELLED`, `DELIVERED`, or
 `ERROR <reason>`. The script exits non-zero on an error reply.
@@ -163,9 +169,11 @@ Make sure Sussurro is running before pressing the hotkey.
 
 1. Check if the keyboard shortcut is properly configured in your DE
 2. Test the command manually in a terminal:
+
    ```bash
    echo toggle | nc -U $XDG_RUNTIME_DIR/sussurro.sock
    ```
+
 3. Check Sussurro logs for errors
 
 ### Want to use X11 instead?

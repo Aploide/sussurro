@@ -10,101 +10,93 @@ import (
 	xhotkey "golang.design/x/hotkey"
 )
 
-// activeHK tracks the currently registered hotkey so it can be unregistered
-// when the user changes the trigger in the settings window.
-var (
-	activeHK     *xhotkey.Hotkey
-	activeHKStop chan struct{}
-	activeHKMu   sync.Mutex
-)
-
-// installOverlayHotkey registers the global hotkey on macOS.
-// golang.design/x/hotkey on darwin drives its own CFRunLoop thread, so it can
-// be called from a regular goroutine once [NSApp run] is live.  We wait
-// briefly to guarantee NSApp has started before registering the CGEventTap.
-func installOneHotkey(overlay Overlay, trigger string, onDown, onUp func()) {
-	mods, key, err := ihk.ParseTrigger(trigger)
-	if err != nil {
-		return
-	}
-
-	stop := make(chan struct{})
-
-	go func() {
-		// Give [NSApp run] time to initialise before attaching the event tap.
-		time.Sleep(300 * time.Millisecond)
-
-		hk := xhotkey.New(mods, key)
-		if err := hk.Register(); err != nil {
-			return
-		}
-
-		activeHKMu.Lock()
-		activeHK = hk
-		activeHKStop = stop
-		activeHKMu.Unlock()
-
-		for {
-			select {
-			case <-stop:
-				return
-			case <-hk.Keydown():
-				onDown()
-			case <-hk.Keyup():
-				onUp()
-			}
-		}
-	}()
+// macHotkeySet owns every live registration. Replacing the settings swaps the
+// whole set, which prevents old delayed registrations from appearing after a
+// newer save and ensures all previous event taps are released.
+type macHotkeySet struct {
+	stop    chan struct{}
+	hotkeys []*xhotkey.Hotkey
 }
 
-// reinstallOverlayHotkey unregisters the current hotkey and registers a new
-// one with the given trigger, reusing the same onDown/onUp callbacks.
-func reinstallOneHotkey(_ Overlay, trigger string, onDown, onUp func()) {
-	// Grab and clear the existing handle under the lock.
-	activeHKMu.Lock()
-	old := activeHK
-	oldStop := activeHKStop
-	activeHK = nil
-	activeHKStop = nil
-	activeHKMu.Unlock()
+var (
+	activeMacHotkeys *macHotkeySet
+	activeMacMu      sync.Mutex
+)
+
+type macHotkeySpec struct {
+	trigger string
+	onDown  func()
+	onUp    func()
+}
+
+func hotkeySpecs(bindings HotkeyBindings) []macHotkeySpec {
+	return []macHotkeySpec{
+		{bindings.PushToTalk, bindings.OnPress, bindings.OnRelease},
+		{bindings.Toggle, bindings.OnToggle, func() {}},
+		{bindings.Edit, bindings.OnEditPress, bindings.OnEditRelease},
+	}
+}
+
+func replaceMacHotkeys(bindings HotkeyBindings, delay time.Duration) {
+	set := &macHotkeySet{stop: make(chan struct{})}
+
+	activeMacMu.Lock()
+	old := activeMacHotkeys
+	activeMacHotkeys = set
+	activeMacMu.Unlock()
 
 	if old != nil {
-		old.Unregister()
+		close(old.stop)
+		for _, hk := range old.hotkeys {
+			hk.Unregister()
+		}
 	}
-	if oldStop != nil {
-		close(oldStop)
-	}
-
-	mods, key, err := ihk.ParseTrigger(trigger)
-	if err != nil {
-		return
-	}
-
-	// Brief pause so the OS releases the CGEventTap key grab before we
-	// create a new one for the same (or overlapping) modifier set.
-	time.Sleep(100 * time.Millisecond)
-
-	stop := make(chan struct{})
-	hk := xhotkey.New(mods, key)
-	if err := hk.Register(); err != nil {
-		return
-	}
-
-	activeHKMu.Lock()
-	activeHK = hk
-	activeHKStop = stop
-	activeHKMu.Unlock()
 
 	go func() {
-		for {
+		if delay > 0 {
+			timer := time.NewTimer(delay)
 			select {
-			case <-stop:
+			case <-timer.C:
+			case <-set.stop:
+				timer.Stop()
 				return
-			case <-hk.Keydown():
-				onDown()
-			case <-hk.Keyup():
-				onUp()
 			}
+		}
+
+		for _, spec := range hotkeySpecs(bindings) {
+			if spec.trigger == "" {
+				continue
+			}
+			mods, key, err := ihk.ParseTrigger(spec.trigger)
+			if err != nil {
+				continue
+			}
+			hk := xhotkey.New(mods, key)
+			if err := hk.Register(); err != nil {
+				continue
+			}
+
+			activeMacMu.Lock()
+			if activeMacHotkeys != set {
+				activeMacMu.Unlock()
+				hk.Unregister()
+				return
+			}
+			set.hotkeys = append(set.hotkeys, hk)
+			activeMacMu.Unlock()
+
+			go func(hk *xhotkey.Hotkey, onDown, onUp func()) {
+				for {
+					select {
+					case <-set.stop:
+						return
+					case <-hk.Keydown():
+						onDown()
+					case <-hk.Keyup():
+						onUp()
+					}
+				}
+			}(hk, spec.onDown, spec.onUp)
 		}
 	}()
 }
@@ -114,20 +106,14 @@ func installOverlayContextMenu(overlay Overlay, openSettings, quit func()) {
 	overlaySetContextMenuCallbacks(openSettings, quit)
 }
 
-// installOverlayHotkey registers each configured binding. Push-to-talk and
-// toggle are independent and either may be unset, so a user can hold one key
-// and tap another — the previous single-trigger design allowed only one.
-func installOverlayHotkey(overlay Overlay, bindings HotkeyBindings) {
-	if bindings.PushToTalk != "" {
-		installOneHotkey(overlay, bindings.PushToTalk, bindings.OnPress, bindings.OnRelease)
-	}
-	if bindings.Toggle != "" {
-		// A toggle acts on press; the release carries no meaning.
-		installOneHotkey(overlay, bindings.Toggle, bindings.OnToggle, func() {})
-	}
+// installOverlayHotkey waits briefly for NSApp's run loop, then registers all
+// configured bindings on their own CFRunLoop-backed hotkeys.
+func installOverlayHotkey(_ Overlay, bindings HotkeyBindings) {
+	replaceMacHotkeys(bindings, 300*time.Millisecond)
 }
 
-// reinstallOverlayHotkey re-registers both bindings with new triggers.
-func reinstallOverlayHotkey(overlay Overlay, bindings HotkeyBindings) {
-	installOverlayHotkey(overlay, bindings)
+// reinstallOverlayHotkey releases the complete old set before installing the
+// current settings. It is called after NSApp is already running.
+func reinstallOverlayHotkey(_ Overlay, bindings HotkeyBindings) {
+	replaceMacHotkeys(bindings, 100*time.Millisecond)
 }

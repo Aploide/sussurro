@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,9 +28,13 @@ type Manager struct {
 	quitCh        chan struct{}
 	quitOnce      sync.Once
 
-	// Stored hotkey callbacks so the hotkey can be re-registered at runtime.
-	// bindings holds the configured hotkeys and their callbacks.
-	bindings HotkeyBindings
+	// hotkeyMu serializes persistence and native replacement. bindings keeps
+	// the persisted values and callbacks; effective bindings omit Edit when
+	// this process is running the immediate workflow.
+	hotkeyMu       sync.Mutex
+	bindings       HotkeyBindings
+	reviewMode     bool
+	replaceHotkeys func(Overlay, HotkeyBindings)
 
 	// Called when the user toggles lowercase output in Settings.
 	onLowercaseOutput func(bool)
@@ -73,10 +78,12 @@ type Manager struct {
 // NewManager constructs the Manager.  Call Run() to start the event loop.
 func NewManager(cfg *config.Config) (*Manager, error) {
 	return &Manager{
-		cfg:           cfg,
-		stateChangeCh: make(chan ViewModel, 16),
-		rmsCh:         make(chan float32, 256),
-		quitCh:        make(chan struct{}),
+		cfg:            cfg,
+		reviewMode:     cfg.Workflow.ReviewEnabled(),
+		replaceHotkeys: reinstallOverlayHotkey,
+		stateChangeCh:  make(chan ViewModel, 16),
+		rmsCh:          make(chan float32, 256),
+		quitCh:         make(chan struct{}),
 	}, nil
 }
 
@@ -96,8 +103,9 @@ func (m *Manager) Run() {
 	// blocks in the GTK main loop — so at that point m.overlay is still nil
 	// and the X11 grab silently did nothing. Callers only stored the
 	// callbacks; this is where they take effect.
-	if m.bindings.PushToTalk != "" || m.bindings.Toggle != "" {
-		installOverlayHotkey(m.overlay, m.bindings)
+	bindings := m.effectiveHotkeyBindings()
+	if bindings.PushToTalk != "" || bindings.Toggle != "" || bindings.Edit != "" {
+		installOverlayHotkey(m.overlay, bindings)
 	}
 
 	// 4. Right-click context menu on the overlay (fallback when tray isn't visible).
@@ -383,14 +391,68 @@ func (m *Manager) processUpdates() {
 	}
 }
 
-// UpdateHotkeyBindings changes the bindings live, without a restart, keeping
-// the callbacks already registered.
-func (m *Manager) UpdateHotkeyBindings(pushToTalk, toggle string) {
+// SaveHotkeyBinding persists and applies one binding in a single ordered path.
+func (m *Manager) SaveHotkeyBinding(name, trigger string) error {
+	m.hotkeyMu.Lock()
+	defer m.hotkeyMu.Unlock()
+
+	switch name {
+	case "push_to_talk", "toggle", "edit":
+	default:
+		return fmt.Errorf("unknown hotkey binding %q", name)
+	}
+	if err := config.SaveHotkeyBinding(m.cfg, name, trigger); err != nil {
+		return err
+	}
+	switch name {
+	case "push_to_talk":
+		m.cfg.Hotkey.PushToTalk = trigger
+		m.bindings.PushToTalk = trigger
+	case "toggle":
+		m.cfg.Hotkey.Toggle = trigger
+		m.bindings.Toggle = trigger
+	case "edit":
+		m.cfg.Hotkey.Edit = trigger
+		m.bindings.Edit = trigger
+	}
+	m.replaceHotkeyBindingsLocked()
+	return nil
+}
+
+// UpdateHotkeyBindings changes all bindings live in call order. Tests and
+// non-Settings callers use this when replacing a complete snapshot.
+func (m *Manager) UpdateHotkeyBindings(pushToTalk, toggle, edit string) {
+	m.hotkeyMu.Lock()
+	defer m.hotkeyMu.Unlock()
 	m.bindings.PushToTalk = pushToTalk
 	m.bindings.Toggle = toggle
+	m.bindings.Edit = edit
 	m.cfg.Hotkey.PushToTalk = pushToTalk
 	m.cfg.Hotkey.Toggle = toggle
-	reinstallOverlayHotkey(m.overlay, m.bindings)
+	m.cfg.Hotkey.Edit = edit
+	m.replaceHotkeyBindingsLocked()
+}
+
+func (m *Manager) replaceHotkeyBindingsLocked() {
+	replace := m.replaceHotkeys
+	if replace == nil {
+		replace = reinstallOverlayHotkey
+	}
+	replace(m.overlay, m.effectiveHotkeyBindingsLocked())
+}
+
+func (m *Manager) effectiveHotkeyBindings() HotkeyBindings {
+	m.hotkeyMu.Lock()
+	defer m.hotkeyMu.Unlock()
+	return m.effectiveHotkeyBindingsLocked()
+}
+
+func (m *Manager) effectiveHotkeyBindingsLocked() HotkeyBindings {
+	bindings := m.bindings
+	if !m.reviewMode {
+		bindings.Edit = ""
+	}
+	return bindings
 }
 
 // InstallHotkey records the bindings and their callbacks. The grab itself
@@ -398,9 +460,11 @@ func (m *Manager) UpdateHotkeyBindings(pushToTalk, toggle string) {
 // called before Run(), which is what silently broke the hotkey when it tried
 // to grab against a nil overlay.
 func (m *Manager) InstallHotkey(bindings HotkeyBindings) {
+	m.hotkeyMu.Lock()
+	defer m.hotkeyMu.Unlock()
 	m.bindings = bindings
 	if m.overlay != nil {
-		installOverlayHotkey(m.overlay, bindings)
+		installOverlayHotkey(m.overlay, m.effectiveHotkeyBindingsLocked())
 	}
 }
 
@@ -453,8 +517,15 @@ func (m *Manager) applySkipLLMCleanup(v bool) {
 
 // reinstallHotkey re-registers the current bindings.
 func (m *Manager) reinstallHotkey() {
-	if m.bindings.PushToTalk == "" && m.bindings.Toggle == "" {
+	m.hotkeyMu.Lock()
+	defer m.hotkeyMu.Unlock()
+	bindings := m.effectiveHotkeyBindingsLocked()
+	if bindings.PushToTalk == "" && bindings.Toggle == "" && bindings.Edit == "" {
 		return
 	}
-	reinstallOverlayHotkey(m.overlay, m.bindings)
+	replace := m.replaceHotkeys
+	if replace == nil {
+		replace = reinstallOverlayHotkey
+	}
+	replace(m.overlay, bindings)
 }

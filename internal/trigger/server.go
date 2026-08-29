@@ -227,18 +227,18 @@ func (s *Server) Execute(raw string) string {
 	}
 }
 
-// gesture applies a recording gesture and reports the resulting state.
+// gesture applies a recording gesture and reports what it actually changed.
 func (s *Server) gesture(command Command, event session.InputEvent) string {
-	if s.dispatch.Dispatch(event) {
+	switch s.dispatch.Dispatch(event) {
+	case session.InputStopped:
 		s.notify("Sussurro", "Processing your speech...")
 		return "STOPPED"
-	}
-
-	if command == CommandRelease {
-		// A release with nothing recording is a no-op, not a new recording.
+	case session.InputStarted:
+		return "RECORDING"
+	default:
+		s.log.Debug("Trigger gesture ignored", "command", command)
 		return "IDLE"
 	}
-	return "RECORDING"
 }
 
 // notifySend posts a desktop notification, ignoring absence of notify-send.

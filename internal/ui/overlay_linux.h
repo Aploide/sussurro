@@ -114,12 +114,16 @@ GtkWidget *overlay_create(const OverlayPalette *dark_palette,
                           const OverlayPalette *light_palette);
 
 /* Install X11 global hotkey bound to the overlay (no-op on Wayland) */
-/* Installs the recording bindings. Either may be NULL or empty: push-to-talk
-   fires down/up as the key is held and released, toggle fires once per press.
-   Independent, so a user can hold one key and tap another. */
+/* Installs the recording bindings. Any may be NULL or empty: push-to-talk and
+   edit fire down/up as held and released, while toggle fires once per press. */
 void overlay_install_hotkey(GtkWidget *win, const char *push_to_talk,
-                            const char *toggle, HotkeyDownCB down_cb,
-                            HotkeyUpCB up_cb, HotkeyDownCB toggle_cb);
+                            const char *toggle, const char *edit,
+                            HotkeyDownCB down_cb, HotkeyUpCB up_cb,
+                            HotkeyDownCB toggle_cb, HotkeyDownCB edit_down_cb,
+                            HotkeyUpCB edit_up_cb);
+/* Queue a binding replacement on the owning GTK main context. */
+void overlay_replace_hotkeys_async(GtkWidget *win, const char *push_to_talk,
+                                   const char *toggle, const char *edit);
 
 /* Thread-safe async state/RMS updates via gdk_threads_add_idle */
 void overlay_set_state_async(GtkWidget *win, int state);

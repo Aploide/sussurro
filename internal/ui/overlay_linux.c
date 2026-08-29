@@ -51,18 +51,21 @@ struct OverlayData {
     GDBusConnection *portal_connection;
     guint           portal_subscription;
 
-    /* X11 hotkeys. Push-to-talk and toggle are separate bindings, either of
-       which may be unset (keycode 0), so a user can hold one key and tap
-       another. */
+    /* X11 hotkeys. Every binding may be unset (keycode 0). */
     HotkeyDownCB down_cb;
     HotkeyUpCB   up_cb;
     HotkeyDownCB toggle_cb;
+    HotkeyDownCB edit_down_cb;
+    HotkeyUpCB   edit_up_cb;
     int          hk_keycode;
     unsigned int hk_mods;
-    gboolean     hk_pressed;
     int          tg_keycode;
     unsigned int tg_mods;
-    gboolean     tg_pressed;
+    int          ed_keycode;
+    unsigned int ed_mods;
+    int          pressed_owner;
+    int          pressed_keycode;
+    gboolean     hotkey_filter_installed;
 };
 
 /* ------------------------------------------------------------------ */
@@ -476,79 +479,92 @@ static void overlay_stop_animation(OverlayData *od)
 
 #ifndef WAYLAND_ONLY
 
+static unsigned int released_modifier(XKeyEvent *event)
+{
+    KeySym sym = XkbKeycodeToKeysym(event->display, event->keycode, 0, 0);
+    switch (sym) {
+        case XK_Super_L: case XK_Super_R: return Mod4Mask;
+        case XK_Control_L: case XK_Control_R: return ControlMask;
+        case XK_Shift_L: case XK_Shift_R: return ShiftMask;
+        case XK_Alt_L: case XK_Alt_R: return Mod1Mask;
+        default: return 0;
+    }
+}
+
+enum {
+    HOTKEY_OWNER_NONE,
+    HOTKEY_OWNER_PUSH_TO_TALK,
+    HOTKEY_OWNER_TOGGLE,
+    HOTKEY_OWNER_EDIT
+};
+
+static unsigned int effective_modifiers(unsigned int state)
+{
+    return state & (ControlMask | ShiftMask | Mod1Mask | Mod4Mask);
+}
+
+static unsigned int owner_modifiers(OverlayData *od)
+{
+    if (od->pressed_owner == HOTKEY_OWNER_PUSH_TO_TALK) return od->hk_mods;
+    if (od->pressed_owner == HOTKEY_OWNER_TOGGLE) return od->tg_mods;
+    if (od->pressed_owner == HOTKEY_OWNER_EDIT) return od->ed_mods;
+    return 0;
+}
+
+static void release_pressed_binding(OverlayData *od)
+{
+    int owner = od->pressed_owner;
+    od->pressed_owner = HOTKEY_OWNER_NONE;
+    od->pressed_keycode = 0;
+    if (owner == HOTKEY_OWNER_PUSH_TO_TALK && od->up_cb) od->up_cb();
+    if (owner == HOTKEY_OWNER_EDIT && od->edit_up_cb) od->edit_up_cb();
+}
+
+static int matching_binding(OverlayData *od, int keycode, unsigned int state)
+{
+    unsigned int mods = effective_modifiers(state);
+    if (od->hk_keycode == keycode && od->hk_mods == mods)
+        return HOTKEY_OWNER_PUSH_TO_TALK;
+    if (od->tg_keycode == keycode && od->tg_mods == mods)
+        return HOTKEY_OWNER_TOGGLE;
+    if (od->ed_keycode == keycode && od->ed_mods == mods)
+        return HOTKEY_OWNER_EDIT;
+    return HOTKEY_OWNER_NONE;
+}
+
 static GdkFilterReturn x11_event_filter(GdkXEvent *xevent, GdkEvent *event, gpointer data)
 {
     (void)event;
     OverlayData *od = (OverlayData *)data;
     XEvent *xe = (XEvent *)xevent;
 
-    if (xe->type == KeyPress || xe->type == KeyRelease) {
-        g_debug("sussurro hotkey filter: type=%s keycode=%d state=0x%x "
-                "want_keycode=%d want_mods=0x%x pressed=%d",
-                xe->type == KeyPress ? "press" : "release",
-                (int)xe->xkey.keycode, (unsigned int)xe->xkey.state,
-                od->hk_keycode, od->hk_mods, od->hk_pressed);
+    if (xe->type == KeyPress) {
+        int owner = matching_binding(od, (int)xe->xkey.keycode, xe->xkey.state);
+        if (owner == HOTKEY_OWNER_NONE) return GDK_FILTER_CONTINUE;
+        if (od->pressed_owner == HOTKEY_OWNER_NONE) {
+            od->pressed_owner = owner;
+            od->pressed_keycode = (int)xe->xkey.keycode;
+            if (owner == HOTKEY_OWNER_PUSH_TO_TALK && od->down_cb) od->down_cb();
+            if (owner == HOTKEY_OWNER_TOGGLE && od->toggle_cb) od->toggle_cb();
+            if (owner == HOTKEY_OWNER_EDIT && od->edit_down_cb) od->edit_down_cb();
+        }
+        return GDK_FILTER_REMOVE;
     }
 
-    if (xe->type == KeyPress) {
-        if (od->hk_keycode && (int)xe->xkey.keycode == od->hk_keycode &&
-            (xe->xkey.state & od->hk_mods) == od->hk_mods) {
-            if (!od->hk_pressed) {
-                od->hk_pressed = TRUE;
-                if (od->down_cb) od->down_cb();
-            }
+    if (xe->type == KeyRelease) {
+        if (od->pressed_owner != HOTKEY_OWNER_NONE &&
+            od->pressed_keycode == (int)xe->xkey.keycode) {
+            release_pressed_binding(od);
             return GDK_FILTER_REMOVE;
         }
-        /* The toggle binding acts on press and ignores release entirely. */
-        if (od->tg_keycode && (int)xe->xkey.keycode == od->tg_keycode &&
-            (xe->xkey.state & od->tg_mods) == od->tg_mods) {
-            if (!od->tg_pressed) {
-                od->tg_pressed = TRUE;
-                if (od->toggle_cb) od->toggle_cb();
-            }
+
+        /* Releasing a modifier before the grabbed key can hide the key's own
+           release on some X11 setups. End only the binding that owns the
+           current press. */
+        unsigned int modifier = released_modifier(&xe->xkey);
+        if (modifier && (owner_modifiers(od) & modifier)) {
+            release_pressed_binding(od);
             return GDK_FILTER_REMOVE;
-        }
-    } else if (xe->type == KeyRelease) {
-        /* Clear the toggle's held flag so the next press counts, without
-           firing anything: toggling happens on press only. */
-        if (od->tg_keycode && (int)xe->xkey.keycode == od->tg_keycode) {
-            od->tg_pressed = FALSE;
-            return GDK_FILTER_REMOVE;
-        }
-        if (od->hk_keycode && (int)xe->xkey.keycode == od->hk_keycode) {
-            if (od->hk_pressed) {
-                od->hk_pressed = FALSE;
-                if (od->up_cb) od->up_cb();
-            } else {
-                /* Belt and braces: detectable auto-repeat should mean this
-                   never happens, but a release with no matching press has
-                   previously left a recording running to max_duration. Ending
-                   it costs nothing when there is nothing to end. */
-                g_debug("sussurro: release with no active press; ending anyway");
-                if (od->up_cb) od->up_cb();
-            }
-            return GDK_FILTER_REMOVE;
-        }
-        /* A release for a key we did not grab, arriving while the hotkey is
-           held, means the modifier went up first. X11 delivers the grabbed
-           key's release to the grab owner, but some setups (and key repeat
-           filters) drop it once the modifier state no longer matches. Ending
-           the recording here is better than waiting for max_duration. */
-        if (od->hk_pressed && od->hk_mods != 0) {
-            unsigned int released_mod = 0;
-            KeySym       sym = XkbKeycodeToKeysym(xe->xkey.display,
-                                                  xe->xkey.keycode, 0, 0);
-            switch (sym) {
-                case XK_Super_L: case XK_Super_R: released_mod = Mod4Mask;    break;
-                case XK_Control_L: case XK_Control_R: released_mod = ControlMask; break;
-                case XK_Shift_L: case XK_Shift_R: released_mod = ShiftMask;   break;
-                case XK_Alt_L: case XK_Alt_R: released_mod = Mod1Mask;        break;
-                default: break;
-            }
-            if (released_mod && (od->hk_mods & released_mod)) {
-                od->hk_pressed = FALSE;
-                if (od->up_cb) od->up_cb();
-            }
         }
     }
 
@@ -846,71 +862,112 @@ GtkWidget *overlay_create(const OverlayPalette *dark_palette,
 }
 
 void overlay_install_hotkey(GtkWidget *win, const char *push_to_talk,
-                            const char *toggle, HotkeyDownCB down_cb,
-                            HotkeyUpCB up_cb, HotkeyDownCB toggle_cb)
+                            const char *toggle, const char *edit,
+                            HotkeyDownCB down_cb, HotkeyUpCB up_cb,
+                            HotkeyDownCB toggle_cb, HotkeyDownCB edit_down_cb,
+                            HotkeyUpCB edit_up_cb)
 {
     OverlayData *od = (OverlayData *)g_object_get_data(G_OBJECT(win), "overlay-data");
     if (!od) return;
 
-    od->down_cb   = down_cb;
-    od->up_cb     = up_cb;
-    od->toggle_cb = toggle_cb;
+    od->down_cb      = down_cb;
+    od->up_cb        = up_cb;
+    od->toggle_cb    = toggle_cb;
+    od->edit_down_cb = edit_down_cb;
+    od->edit_up_cb   = edit_up_cb;
 
 #ifndef WAYLAND_ONLY
     GdkDisplay *display = gdk_display_get_default();
-
-    /* Only install on X11 displays */
     if (!GDK_IS_X11_DISPLAY(display)) return;
 
     Display *xdpy  = gdk_x11_display_get_xdisplay(display);
     Window   xroot = DefaultRootWindow(xdpy);
+    unsigned int lock_combos[] = {0, LockMask, Mod2Mask, LockMask | Mod2Mask};
 
-    /* Without this, X11 auto-repeat synthesises a KeyRelease immediately
-       followed by a KeyPress for as long as the key is held. Those synthetic
-       releases are indistinguishable from a real one, so a genuine release
-       arriving between a repeat's release and its press is discarded as
-       spurious — the recording then runs to max_duration. Detectable
-       auto-repeat suppresses the synthetic releases outright, which is
-       exactly what a push-to-talk grab wants. */
+    /* Settings can replace any subset of bindings. Release every old grab
+       before overwriting its keycode, or each save leaks another X11 grab. */
+    int old_keycodes[] = {od->hk_keycode, od->tg_keycode, od->ed_keycode};
+    unsigned int old_mods[] = {od->hk_mods, od->tg_mods, od->ed_mods};
+    for (int binding = 0; binding < 3; binding++) {
+        if (!old_keycodes[binding]) continue;
+        for (int i = 0; i < 4; i++) {
+            XUngrabKey(xdpy, old_keycodes[binding],
+                       old_mods[binding] | lock_combos[i], xroot);
+        }
+    }
+
+    release_pressed_binding(od);
+    od->hk_keycode = od->tg_keycode = od->ed_keycode = 0;
+    od->hk_mods = od->tg_mods = od->ed_mods = 0;
+
     Bool detectable = False;
     XkbSetDetectableAutoRepeat(xdpy, True, &detectable);
     if (!detectable) {
         g_warning("sussurro: detectable auto-repeat unavailable; "
-                  "push-to-talk release may be missed while a key repeats");
+                  "held-key release may be missed while a key repeats");
     }
 
-    /* Lock-key combinations each need their own grab, or the hotkey stops
-       working with Caps or Num Lock on. */
-    unsigned int lock_combos[] = {0, LockMask, Mod2Mask, LockMask | Mod2Mask};
-
-    od->hk_keycode = 0;
-    od->tg_keycode = 0;
-
-    if (push_to_talk && push_to_talk[0]) {
-        od->hk_mods    = parse_x11_mods(push_to_talk);
-        od->hk_keycode = XKeysymToKeycode(xdpy, parse_x11_keysym(push_to_talk));
+    const char *triggers[] = {push_to_talk, toggle, edit};
+    int *keycodes[] = {&od->hk_keycode, &od->tg_keycode, &od->ed_keycode};
+    unsigned int *mods[] = {&od->hk_mods, &od->tg_mods, &od->ed_mods};
+    for (int binding = 0; binding < 3; binding++) {
+        if (!triggers[binding] || !triggers[binding][0]) continue;
+        *mods[binding] = parse_x11_mods(triggers[binding]);
+        *keycodes[binding] = XKeysymToKeycode(
+            xdpy, parse_x11_keysym(triggers[binding]));
+        if (!*keycodes[binding]) continue;
         for (int i = 0; i < 4; i++) {
-            XGrabKey(xdpy, od->hk_keycode, od->hk_mods | lock_combos[i],
+            XGrabKey(xdpy, *keycodes[binding], *mods[binding] | lock_combos[i],
                      xroot, True, GrabModeAsync, GrabModeAsync);
         }
     }
+    XSync(xdpy, False);
 
-    if (toggle && toggle[0]) {
-        od->tg_mods    = parse_x11_mods(toggle);
-        od->tg_keycode = XKeysymToKeycode(xdpy, parse_x11_keysym(toggle));
-        for (int i = 0; i < 4; i++) {
-            XGrabKey(xdpy, od->tg_keycode, od->tg_mods | lock_combos[i],
-                     xroot, True, GrabModeAsync, GrabModeAsync);
+    /* The same filter reads the current fields after every re-registration.
+       Install it once rather than stacking duplicate callbacks on each save. */
+    if (!od->hotkey_filter_installed) {
+        GdkWindow *root_gdk = gdk_x11_window_foreign_new_for_display(display, xroot);
+        if (root_gdk) {
+            gdk_window_add_filter(root_gdk, x11_event_filter, od);
+            od->hotkey_filter_installed = TRUE;
+            g_object_unref(root_gdk);
         }
-    }
-
-    /* Install GDK event filter on root window */
-    GdkWindow *root_gdk = gdk_x11_window_foreign_new_for_display(display, xroot);
-    if (root_gdk) {
-        gdk_window_add_filter(root_gdk, x11_event_filter, od);
-        g_object_unref(root_gdk);
     }
 #endif
+}
+
+typedef struct {
+    GtkWidget *win;
+    char *push_to_talk;
+    char *toggle;
+    char *edit;
+} HotkeyReplaceArg;
+
+static gboolean idle_replace_hotkeys(gpointer data)
+{
+    HotkeyReplaceArg *arg = (HotkeyReplaceArg *)data;
+    OverlayData *od = (OverlayData *)g_object_get_data(G_OBJECT(arg->win), "overlay-data");
+    if (od) {
+        overlay_install_hotkey(arg->win, arg->push_to_talk, arg->toggle, arg->edit,
+                               od->down_cb, od->up_cb, od->toggle_cb,
+                               od->edit_down_cb, od->edit_up_cb);
+    }
+    g_free(arg->push_to_talk);
+    g_free(arg->toggle);
+    g_free(arg->edit);
+    g_free(arg);
+    return G_SOURCE_REMOVE;
+}
+
+void overlay_replace_hotkeys_async(GtkWidget *win, const char *push_to_talk,
+                                   const char *toggle, const char *edit)
+{
+    HotkeyReplaceArg *arg = g_new0(HotkeyReplaceArg, 1);
+    arg->win = win;
+    arg->push_to_talk = g_strdup(push_to_talk ? push_to_talk : "");
+    arg->toggle = g_strdup(toggle ? toggle : "");
+    arg->edit = g_strdup(edit ? edit : "");
+    g_main_context_invoke(NULL, idle_replace_hotkeys, arg);
 }
 
 /* ---- Async state/RMS update ---- */

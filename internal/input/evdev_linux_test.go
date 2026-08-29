@@ -48,7 +48,7 @@ func newRecordingDispatcher() *recordingDispatcher {
 	return &recordingDispatcher{updated: make(chan struct{}, 32)}
 }
 
-func (d *recordingDispatcher) Dispatch(event session.InputEvent) bool {
+func (d *recordingDispatcher) Dispatch(event session.InputEvent) session.InputOutcome {
 	d.mu.Lock()
 	d.events = append(d.events, event)
 	d.mu.Unlock()
@@ -56,7 +56,10 @@ func (d *recordingDispatcher) Dispatch(event session.InputEvent) bool {
 	case d.updated <- struct{}{}:
 	default:
 	}
-	return event == session.InputRelease
+	if event == session.InputRelease {
+		return session.InputStopped
+	}
+	return session.InputStarted
 }
 
 func (d *recordingDispatcher) recorded() []session.InputEvent {

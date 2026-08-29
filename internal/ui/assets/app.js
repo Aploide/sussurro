@@ -118,7 +118,12 @@ function render(data) {
   renderModelList("llm-list", llmItems, "llm");
 
   // Hotkey
-  renderHotkey(data.pushToTalkHotkey, data.toggleHotkey, data.isWayland);
+  renderHotkey(
+    data.pushToTalkHotkey,
+    data.toggleHotkey,
+    data.editHotkey,
+    data.isWayland,
+  );
 
   // Language
   renderLanguage(data.language);
@@ -816,43 +821,46 @@ function bindTextSetting(field, initial, key) {
 }
 
 // ---- Hotkey ----
-// Push-to-talk and toggle are independent bindings, either of which may be
-// unset. There is no mode: each key does what it is bound to do.
-function renderHotkey(pushToTalk, toggle, isWayland) {
+// Each native binding is independent and may be unset.
+function renderHotkey(pushToTalk, toggle, edit, isWayland) {
   const pttRow = document.getElementById("hotkey-x11");
   const toggleRow = document.getElementById("hotkey-toggle-row");
+  const editRow = document.getElementById("hotkey-review-edit-row");
   const waylandRow = document.getElementById("hotkey-wayland");
 
   if (isWayland) {
     if (pttRow) pttRow.hidden = true;
     if (toggleRow) toggleRow.hidden = true;
+    if (editRow) editRow.hidden = true;
     if (waylandRow) waylandRow.hidden = false;
     return;
   }
 
   if (waylandRow) waylandRow.hidden = true;
 
-  bindHotkeyRow(
-    pttRow,
-    "hotkey-display",
-    "hotkey-edit-btn",
-    pushToTalk,
-    window.savePushToTalkHotkey,
-  );
-  bindHotkeyRow(
-    toggleRow,
-    "hotkey-toggle-display",
-    "hotkey-toggle-edit-btn",
-    toggle,
-    window.saveToggleHotkey,
-  );
+  bindHotkeyRow(pttRow, "hotkey-display", "hotkey-edit-btn", "hotkey-clear-btn", pushToTalk, window.savePushToTalkHotkey);
+  bindHotkeyRow(toggleRow, "hotkey-toggle-display", "hotkey-toggle-edit-btn", "hotkey-toggle-clear-btn", toggle, window.saveToggleHotkey);
+  bindHotkeyRow(editRow, "hotkey-review-edit-display", "hotkey-review-edit-btn", "hotkey-review-edit-clear-btn", edit, window.saveEditHotkey);
 }
 
-function bindHotkeyRow(row, displayId, buttonId, trigger, save) {
+function bindHotkeyRow(row, displayId, buttonId, clearButtonId, trigger, save) {
   if (!row) return;
   row.hidden = false;
 
   updateHotkeyDisplay(displayId, trigger);
+
+  const clearBtn = document.getElementById(clearButtonId);
+  if (clearBtn) {
+    clearBtn.disabled = !trigger;
+    clearBtn.onclick = () =>
+      save("").then((res) => {
+        if (typeof res !== "string" || !res.startsWith("error")) {
+          updateHotkeyDisplay(displayId, "");
+          clearBtn.disabled = true;
+        }
+        return res;
+      });
+  }
 
   const btn = document.getElementById(buttonId);
   if (btn) {
@@ -861,6 +869,7 @@ function bindHotkeyRow(row, displayId, buttonId, trigger, save) {
         save(combo).then((res) => {
           if (typeof res !== "string" || !res.startsWith("error")) {
             updateHotkeyDisplay(displayId, combo);
+            if (clearBtn) clearBtn.disabled = false;
           }
           return res;
         }),

@@ -97,7 +97,13 @@ func TestDefaultConfigTemplateWithWindowsPaths(t *testing.T) {
 	if got := v.GetInt("models.llm.gpu_layers"); got != 99 {
 		t.Errorf("models.llm.gpu_layers = %d, want 99", got)
 	}
-	if got := v.GetString("hotkey.trigger"); got != "ctrl+shift+space" {
-		t.Errorf("hotkey.trigger = %q", got)
+	if got := v.GetString("hotkey.push_to_talk"); got != "ctrl+shift+space" {
+		t.Errorf("hotkey.push_to_talk = %q", got)
+	}
+	if got := v.GetString("hotkey.toggle"); got != "" {
+		t.Errorf("hotkey.toggle = %q, want empty", got)
+	}
+	if got := v.GetString("hotkey.edit"); got != "" {
+		t.Errorf("hotkey.edit = %q, want empty", got)
 	}
 }

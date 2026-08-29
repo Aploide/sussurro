@@ -25,9 +25,9 @@ func readAsset(t *testing.T, name string) string {
 
 var (
 	elementIDPattern = regexp.MustCompile(`id="(workflow-[^"]+)"`)
-	getElementByID   = regexp.MustCompile(`getElementById\('(workflow-[^']+)'\)`)
-	quotedIDPattern  = regexp.MustCompile(`'(workflow-[a-z-]+)'`)
-	settingKey       = regexp.MustCompile(`'(workflow\.[a-z_.]+)'`)
+	getElementByID   = regexp.MustCompile(`getElementById\(["'](workflow-[^"']+)["']\)`)
+	quotedIDPattern  = regexp.MustCompile(`["'](workflow-[a-z-]+)["']`)
+	settingKey       = regexp.MustCompile(`["'](workflow\.[a-z_.]+)["']`)
 	goSettingKey     = regexp.MustCompile(`case "(workflow\.[a-z_.]+)":`)
 )
 
@@ -76,6 +76,63 @@ func TestEverySavedSettingIsHandledInGo(t *testing.T) {
 		if !saved[key] {
 			t.Errorf("applyWorkflowField handles %q, but no control in app.js sets it", key)
 		}
+	}
+}
+
+func TestEditHotkeyBridgeAndAssetsStayConnected(t *testing.T) {
+	html := readAsset(t, "index.html")
+	js := readAsset(t, "app.js")
+	bridge, err := os.ReadFile("settings_bridge.go")
+	if err != nil {
+		t.Fatalf("reading settings_bridge.go: %v", err)
+	}
+
+	for _, required := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "edit row", body: html, want: `id="hotkey-review-edit-row"`},
+		{name: "edit display", body: html, want: `id="hotkey-review-edit-display"`},
+		{name: "edit button", body: html, want: `id="hotkey-review-edit-btn"`},
+		{name: "edit clear button", body: html, want: `id="hotkey-review-edit-clear-btn"`},
+		{name: "JS initial field", body: js, want: "data.editHotkey"},
+		{name: "JS save binding", body: js, want: "window.saveEditHotkey"},
+		{name: "Go JSON field", body: string(bridge), want: `json:"editHotkey"`},
+		{name: "Go save binding", body: string(bridge), want: `Bind("saveEditHotkey"`},
+	} {
+		t.Run(required.name, func(t *testing.T) {
+			if !strings.Contains(required.body, required.want) {
+				t.Errorf("missing %q", required.want)
+			}
+		})
+	}
+}
+
+func TestEveryHotkeyHasAClearControl(t *testing.T) {
+	html := readAsset(t, "index.html")
+	js := readAsset(t, "app.js")
+	for _, id := range []string{
+		"hotkey-clear-btn", "hotkey-toggle-clear-btn", "hotkey-review-edit-clear-btn",
+	} {
+		if !strings.Contains(html, `id="`+id+`"`) {
+			t.Errorf("missing clear control %q", id)
+		}
+		if !strings.Contains(js, `'`+id+`'`) && !strings.Contains(js, `"`+id+`"`) {
+			t.Errorf("clear control %q is not wired in app.js", id)
+		}
+	}
+	if !strings.Contains(js, "save('')") && !strings.Contains(js, `save("")`) {
+		t.Error("clear controls do not persist an empty binding")
+	}
+}
+
+func TestInitialDataIncludesEditHotkey(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Hotkey.Edit = "super+9"
+	data := buildInitialData(&Manager{cfg: cfg})
+	if data.EditHotkey != "super+9" {
+		t.Errorf("EditHotkey = %q, want super+9", data.EditHotkey)
 	}
 }
 
