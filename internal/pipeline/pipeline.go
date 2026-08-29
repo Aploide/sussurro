@@ -687,6 +687,13 @@ func (p *Pipeline) processSegmentWithPartial(samples []float32, partial string) 
 	// dropped before anything downstream can show or deliver them.
 	text = StripNonSpeechMarkers(text)
 
+	// A final pass that includes later speech can still lose sentence endings
+	// already present in its matching partial prefix. Keep those boundaries
+	// before preferring the longer result (sussurro-xvj.69).
+	if !finalPassShorter(text, partial) {
+		text = preservePartialSentenceBoundaries(text, partial)
+	}
+
 	// The final pass is an independent decode and can regress despite seeing
 	// more audio. Preserve a shorter result that ends mid-sentence, as in
 	// sussurro-3jn. A complete shorter result is authoritative: the streaming
@@ -743,6 +750,63 @@ func sentenceBoundaryCount(text string) int {
 		}
 	}
 	return count
+}
+
+// preservePartialSentenceBoundaries transfers sentence punctuation only
+// through the final decode's unchanged word prefix. Stopping at the first
+// lexical or punctuation difference avoids moving a boundary across an ASR
+// correction.
+func preservePartialSentenceBoundaries(final, partial string) string {
+	finalWords := strings.Fields(final)
+	partialWords := strings.Fields(partial)
+	cursor, copied := 0, 0
+	var result strings.Builder
+
+	for i := 0; i < len(finalWords) && i < len(partialWords); i++ {
+		partialStem, mark, partialEndsSentence := splitSentenceTerminator(partialWords[i])
+		finalStem, finalMark, finalEndsSentence := splitSentenceTerminator(finalWords[i])
+		if partialStem != finalStem ||
+			(finalEndsSentence && (!partialEndsSentence || mark != finalMark)) {
+			break
+		}
+
+		wordStart := cursor + strings.Index(final[cursor:], finalWords[i])
+		cursor = wordStart + len(finalWords[i])
+		if partialEndsSentence && !finalEndsSentence {
+			at := wordStart + len(strings.TrimRight(finalWords[i], `"'”’)]`))
+			result.WriteString(final[copied:at])
+			result.WriteByte(mark)
+			copied = at
+		}
+	}
+
+	if copied == 0 {
+		return final
+	}
+	result.WriteString(final[copied:])
+	return result.String()
+}
+
+func splitSentenceTerminator(word string) (stem string, mark byte, ok bool) {
+	at := sentenceTerminatorPosition(word)
+	if at < 0 {
+		return word, 0, false
+	}
+	return word[:at] + word[at+1:], word[at], true
+}
+
+func sentenceTerminatorPosition(word string) int {
+	trimmed := strings.TrimRight(word, `"'”’)]`)
+	if trimmed == "" {
+		return -1
+	}
+	at := len(trimmed) - 1
+	switch trimmed[at] {
+	case '.', '!', '?':
+		return at
+	default:
+		return -1
+	}
 }
 
 // completeFromPartial delivers text a streaming pass already produced,

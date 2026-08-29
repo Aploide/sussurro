@@ -548,6 +548,42 @@ func TestFinalPassKeepsBetterSentenceBoundaryWithoutCleanup(t *testing.T) {
 	}
 }
 
+// TestFinalPassKeepsSentenceBoundaryFromShorterPartial reproduces the
+// sussurro-xvj.69 regression reported after the original fix. The live
+// partial had already closed the first sentence, but the longer final decode
+// included the second sentence while losing that boundary.
+func TestFinalPassKeepsSentenceBoundaryFromShorterPartial(t *testing.T) {
+	const partial = "Also the help modal is a single column and looks horrible because it is way too narrow."
+	const final = "Also the help modal is a single column and looks horrible because it is way too narrow The key bindings should be split into at least two columns and grouped logically by theme"
+	const want = "Also the help modal is a single column and looks horrible because it is way too narrow. The key bindings should be split into at least two columns and grouped logically by theme"
+
+	asr := &sequenceTranscriber{texts: []string{partial, final}}
+	cleaner := &stubCleaner{}
+	consumer := &recordingConsumer{}
+	p := newTestPipeline(t, asr, cleaner, stubContext{info: &ctxProvider.ContextInfo{}})
+	p.SetSkipLLMCleanup(true)
+	p.SetResultConsumer(consumer)
+	streamer := primePartial(t, p, asr)
+
+	p.isRecording.Store(true)
+	p.audioBuffer = make([]float32, 64000)
+	if !p.StopRecording() {
+		t.Fatal("StopRecording() = false, want the recording stopped")
+	}
+	p.wg.Wait()
+	streamer.Wait()
+
+	if cleaner.calls != 0 {
+		t.Fatalf("CleanupText called %d times, want cleanup disabled", cleaner.calls)
+	}
+	if len(consumer.results) != 1 {
+		t.Fatalf("got %d results, want 1", len(consumer.results))
+	}
+	if got := consumer.results[0]; got.Raw != want || got.Text != want {
+		t.Errorf("delivered Raw=%q Text=%q, want reconciled transcript %q", got.Raw, got.Text, want)
+	}
+}
+
 func TestFinalPassFailurePreservesTheLastPartial(t *testing.T) {
 	asr := &sequenceTranscriber{
 		texts: []string{completePartial, ""},
@@ -638,6 +674,54 @@ func TestFinalPassLooksTruncated(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := finalPassLooksTruncated(tt.final, tt.partial); got != tt.want {
 				t.Errorf("finalPassLooksTruncated(%q, %q) = %v, want %v", tt.final, tt.partial, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPreservePartialSentenceBoundaries(t *testing.T) {
+	tests := []struct {
+		name    string
+		final   string
+		partial string
+		want    string
+	}{
+		{
+			name:    "matching prefix keeps its boundary and spacing",
+			final:   "First thought  Second thought continues",
+			partial: "First thought.",
+			want:    "First thought.  Second thought continues",
+		},
+		{
+			name:    "boundary stays inside closing quote",
+			final:   `She said "stop" Then continued`,
+			partial: `She said "stop."`,
+			want:    `She said "stop." Then continued`,
+		},
+		{
+			name:    "lexical correction stops transfer",
+			final:   "Use a narrow modal Then continue",
+			partial: "Use the narrow modal. Next",
+			want:    "Use a narrow modal Then continue",
+		},
+		{
+			name:    "conflicting final punctuation stops later transfer",
+			final:   "Really! Next thought continues",
+			partial: "Really? Next thought. More",
+			want:    "Really! Next thought continues",
+		},
+		{
+			name:    "new final boundary stops later transfer",
+			final:   "Really! Next thought continues",
+			partial: "Really Next thought. More",
+			want:    "Really! Next thought continues",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := preservePartialSentenceBoundaries(tt.final, tt.partial); got != tt.want {
+				t.Errorf("preservePartialSentenceBoundaries(%q, %q) = %q, want %q", tt.final, tt.partial, got, tt.want)
 			}
 		})
 	}
