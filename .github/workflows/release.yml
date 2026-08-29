@@ -10,12 +10,12 @@ on:
   push:
     tags:
       # Historical tags used both cases (V2.2, v2.3); accept either.
-      - 'v*'
-      - 'V*'
+      - "v*"
+      - "V*"
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing tag to (re)build and publish, e.g. v2.4'
+        description: "Existing tag to (re)build and publish, e.g. v2.4"
         required: true
         type: string
 
