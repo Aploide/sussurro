@@ -19,10 +19,10 @@ var (
 )
 
 const (
-	swHide       = 0
-	swShow       = 5
-	wmClose      = 0x0010
-	gwlpWndProc  = ^uintptr(3) // GWLP_WNDPROC (-4) as uintptr
+	swHide      = 0
+	swShow      = 5
+	wmClose     = 0x0010
+	gwlpWndProc = ^uintptr(3) // GWLP_WNDPROC (-4) as uintptr
 )
 
 func showWebviewWindow(win unsafe.Pointer) {
