@@ -1,14 +1,12 @@
-
-
 // ---- Bootstrap ----
-document.addEventListener('DOMContentLoaded', async () => {
+document.addEventListener("DOMContentLoaded", async () => {
   initTabs();
   initFoldableSections();
   await reloadSettings();
 });
 
 let settingsLayoutFrame = 0;
-let lastRequestedSettingsSize = '';
+let lastRequestedSettingsSize = "";
 
 // Coalesce DOM changes so measurements happen after the browser has laid out
 // the visible tab. Hidden panels report zero dimensions.
@@ -27,22 +25,24 @@ function visibleElementHeight(element) {
 }
 
 function naturalSettingsHeight() {
-  const content = document.querySelector('.content');
+  const content = document.querySelector(".content");
   if (!content) return 0;
 
   const style = getComputedStyle(content);
-  const children = Array.from(content.children).filter(child => !child.hidden);
+  const children = Array.from(content.children).filter(
+    (child) => !child.hidden,
+  );
   const gap = Number.parseFloat(style.rowGap) || 0;
   let height =
     (Number.parseFloat(style.paddingTop) || 0) +
     (Number.parseFloat(style.paddingBottom) || 0) +
     Math.max(0, children.length - 1) * gap;
-  children.forEach(child => {
+  children.forEach((child) => {
     height += visibleElementHeight(child);
   });
 
-  height += visibleElementHeight(document.getElementById('restart-banner'));
-  height += visibleElementHeight(document.querySelector('.statusbar'));
+  height += visibleElementHeight(document.getElementById("restart-banner"));
+  height += visibleElementHeight(document.querySelector(".statusbar"));
   return Math.ceil(height);
 }
 
@@ -56,7 +56,7 @@ let narrowLayoutRetries = 0;
 const MIN_SETTINGS_WIDTH = 793;
 
 function requestSettingsSize() {
-  if (typeof window.resizeSettingsWindow !== 'function') return;
+  if (typeof window.resizeSettingsWindow !== "function") return;
   const width = Math.ceil(document.documentElement.clientWidth);
   const height = naturalSettingsHeight();
   if (!width || !height) return;
@@ -97,7 +97,7 @@ async function reloadSettings() {
     const data = JSON.parse(raw);
     render(data);
   } catch (e) {
-    console.error('reloadSettings failed:', e);
+    console.error("reloadSettings failed:", e);
   }
 }
 
@@ -108,14 +108,14 @@ function render(data) {
   renderTheme(data.theme);
 
   // Status bar labels
-  document.getElementById('platform-label').textContent = data.platform;
-  document.getElementById('version-label').textContent  = `v${data.version}`;
+  document.getElementById("platform-label").textContent = data.platform;
+  document.getElementById("version-label").textContent = `v${data.version}`;
 
   // Models
-  const whisperItems = data.models.filter(m => m.type === 'whisper');
-  const llmItems     = data.models.filter(m => m.type === 'llm');
-  renderModelList('whisper-list', whisperItems, 'whisper');
-  renderModelList('llm-list',     llmItems,     'llm');
+  const whisperItems = data.models.filter((m) => m.type === "whisper");
+  const llmItems = data.models.filter((m) => m.type === "llm");
+  renderModelList("whisper-list", whisperItems, "whisper");
+  renderModelList("llm-list", llmItems, "llm");
 
   // Hotkey
   renderHotkey(data.pushToTalkHotkey, data.toggleHotkey, data.isWayland);
@@ -135,42 +135,45 @@ function render(data) {
 // The page grew past comfortable scrolling as settings were added, so
 // related sections are grouped and only one group is shown at a time.
 function initTabs() {
-  const tabs = Array.from(document.querySelectorAll('[data-tab]'));
-  const panels = Array.from(document.querySelectorAll('[data-tab-panel]'));
+  const tabs = Array.from(document.querySelectorAll("[data-tab]"));
+  const panels = Array.from(document.querySelectorAll("[data-tab-panel]"));
   if (!tabs.length) return;
 
-  const select = name => {
-    tabs.forEach(tab => {
-      tab.setAttribute('aria-selected', tab.dataset.tab === name ? 'true' : 'false');
+  const select = (name) => {
+    tabs.forEach((tab) => {
+      tab.setAttribute(
+        "aria-selected",
+        tab.dataset.tab === name ? "true" : "false",
+      );
     });
-    panels.forEach(panel => {
+    panels.forEach((panel) => {
       panel.hidden = panel.dataset.tabPanel !== name;
     });
     // Scrolling is per-panel, so a new tab starts at its top rather than
     // inheriting the previous panel's scroll position.
-    const content = document.querySelector('.content');
+    const content = document.querySelector(".content");
     if (content) content.scrollTop = 0;
     scheduleSettingsLayout();
   };
 
-  tabs.forEach(tab => {
+  tabs.forEach((tab) => {
     tab.onclick = () => select(tab.dataset.tab);
   });
 }
 
 // ---- Foldable sections ----
 function initFoldableSections() {
-  const sections = document.querySelectorAll('.section.foldable');
-  sections.forEach(section => {
-    const header = section.querySelector('[data-section-toggle]');
-    const body = section.querySelector('.section-body');
+  const sections = document.querySelectorAll(".section.foldable");
+  sections.forEach((section) => {
+    const header = section.querySelector("[data-section-toggle]");
+    const body = section.querySelector(".section-body");
     if (!header || !body) return;
 
     header.onclick = () => {
-      const collapse = !section.classList.contains('collapsed');
-      section.classList.toggle('collapsed', collapse);
+      const collapse = !section.classList.contains("collapsed");
+      section.classList.toggle("collapsed", collapse);
       body.hidden = collapse;
-      header.setAttribute('aria-expanded', collapse ? 'false' : 'true');
+      header.setAttribute("aria-expanded", collapse ? "false" : "true");
       scheduleSettingsLayout();
     };
   });
@@ -181,38 +184,38 @@ function renderModelList(containerId, models, groupName) {
   const container = document.getElementById(containerId);
   container.replaceChildren();
 
-  models.forEach(m => {
-    const item = document.createElement('div');
-    item.className = 'model-item' + (m.active ? ' active' : '');
+  models.forEach((m) => {
+    const item = document.createElement("div");
+    item.className = "model-item" + (m.active ? " active" : "");
     item.dataset.id = m.id;
 
-    const radio = document.createElement('input');
-    radio.type = 'radio';
+    const radio = document.createElement("input");
+    radio.type = "radio";
     radio.name = groupName;
     radio.value = m.id;
     radio.checked = m.active;
 
-    const info = document.createElement('div');
-    info.className = 'model-info';
-    const name = document.createElement('span');
-    name.className = 'model-name';
+    const info = document.createElement("div");
+    info.className = "model-info";
+    const name = document.createElement("span");
+    name.className = "model-name";
     name.textContent = m.name;
     if (m.active) {
-      const badge = document.createElement('span');
-      badge.className = 'model-badge';
-      badge.textContent = 'ACTIVE';
+      const badge = document.createElement("span");
+      badge.className = "model-badge";
+      badge.textContent = "ACTIVE";
       name.appendChild(badge);
     }
-    const description = document.createElement('span');
-    description.className = 'model-desc';
+    const description = document.createElement("span");
+    description.className = "model-desc";
     description.textContent = m.desc;
-    const size = document.createElement('span');
-    size.className = 'model-size';
+    const size = document.createElement("span");
+    size.className = "model-size";
     size.textContent = m.size;
     info.append(name, description, size);
 
-    const status = document.createElement('div');
-    status.className = 'model-status';
+    const status = document.createElement("div");
+    status.className = "model-status";
     status.id = `status-${m.id}`;
     if (m.installed) {
       status.appendChild(installedBadge());
@@ -225,12 +228,18 @@ function renderModelList(containerId, models, groupName) {
 
     radio.disabled = !m.selectable;
     if (m.selectable) {
-      radio.addEventListener('change', async () => {
+      radio.addEventListener("change", async () => {
         if (!radio.checked) return;
-        if (!m.installed) { await reloadSettings(); return; }
+        if (!m.installed) {
+          await reloadSettings();
+          return;
+        }
 
         const res = await window.setActiveModel(m.id);
-        if (res.startsWith('error')) { await reloadSettings(); return; }
+        if (res.startsWith("error")) {
+          await reloadSettings();
+          return;
+        }
 
         // Config written — refresh the active badge then show the restart banner.
         await reloadSettings();
@@ -242,57 +251,61 @@ function renderModelList(containerId, models, groupName) {
 
     // Attach download handler
     if (!m.installed && m.downloadable) {
-      const btn = item.querySelector('.download-btn');
-      if (btn) btn.addEventListener('click', e => { e.stopPropagation(); startDownload(m.id); });
+      const btn = item.querySelector(".download-btn");
+      if (btn)
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          startDownload(m.id);
+        });
     }
   });
 }
 
 // Show a persistent banner prompting the user to restart to apply model changes.
 function showRestartBanner() {
-  const banner = document.getElementById('restart-banner');
+  const banner = document.getElementById("restart-banner");
   if (banner) banner.hidden = false;
   scheduleSettingsLayout();
 }
 
 function installedBadge() {
-  const badge = document.createElement('span');
-  badge.className = 'installed-badge';
-  badge.textContent = '✓ Installed';
+  const badge = document.createElement("span");
+  badge.className = "installed-badge";
+  badge.textContent = "✓ Installed";
   return badge;
 }
 
 function unavailableBadge() {
-  const badge = document.createElement('span');
-  badge.className = 'installed-badge';
-  badge.textContent = 'Not found';
+  const badge = document.createElement("span");
+  badge.className = "installed-badge";
+  badge.textContent = "Not found";
   return badge;
 }
 
 function downloadArea(id) {
-  const area = document.createElement('div');
-  area.className = 'download-area';
+  const area = document.createElement("div");
+  area.className = "download-area";
 
-  const button = document.createElement('button');
-  button.className = 'download-btn';
+  const button = document.createElement("button");
+  button.className = "download-btn";
   button.id = `btn-${id}`;
-  button.textContent = '↓ Download';
+  button.textContent = "↓ Download";
 
-  const wrap = document.createElement('div');
-  wrap.className = 'dl-progress-wrap';
+  const wrap = document.createElement("div");
+  wrap.className = "dl-progress-wrap";
   wrap.id = `prog-wrap-${id}`;
   wrap.hidden = true;
 
-  const progress = document.createElement('progress');
-  progress.className = 'dl-progress';
+  const progress = document.createElement("progress");
+  progress.className = "dl-progress";
   progress.id = `prog-${id}`;
   progress.value = 0;
   progress.max = 1;
 
-  const label = document.createElement('span');
-  label.className = 'dl-progress-label';
+  const label = document.createElement("span");
+  label.className = "dl-progress-label";
   label.id = `pct-${id}`;
-  label.textContent = '0%';
+  label.textContent = "0%";
 
   wrap.append(progress, label);
   area.append(button, wrap);
@@ -300,11 +313,11 @@ function downloadArea(id) {
 }
 
 function startDownload(modelId) {
-  const btn      = document.getElementById(`btn-${modelId}`);
+  const btn = document.getElementById(`btn-${modelId}`);
   const progWrap = document.getElementById(`prog-wrap-${modelId}`);
 
   // Show progress, hide button — never show both at once
-  if (btn)      btn.hidden      = true;
+  if (btn) btn.hidden = true;
   if (progWrap) progWrap.hidden = false;
 
   window.downloadModel(modelId);
@@ -313,9 +326,9 @@ function startDownload(modelId) {
 // Called from Go via webview.Eval — matched by model ID, not name text.
 window.onDownloadProgress = (modelId, percent) => {
   const prog = document.getElementById(`prog-${modelId}`);
-  const pct  = document.getElementById(`pct-${modelId}`);
+  const pct = document.getElementById(`pct-${modelId}`);
   if (prog) prog.value = percent / 100;
-  if (pct)  pct.textContent = `${Math.round(percent)}%`;
+  if (pct) pct.textContent = `${Math.round(percent)}%`;
 };
 
 window.onDownloadComplete = (modelId) => {
@@ -326,34 +339,38 @@ window.onDownloadComplete = (modelId) => {
 
 window.onDownloadError = (modelId, err) => {
   // Restore the download button on failure
-  const btn      = document.getElementById(`btn-${modelId}`);
+  const btn = document.getElementById(`btn-${modelId}`);
   const progWrap = document.getElementById(`prog-wrap-${modelId}`);
-  if (btn)      { btn.hidden = false; }
-  if (progWrap) { progWrap.hidden = true; }
-  console.error('Download error:', modelId, err);
+  if (btn) {
+    btn.hidden = false;
+  }
+  if (progWrap) {
+    progWrap.hidden = true;
+  }
+  console.error("Download error:", modelId, err);
 };
 
 // ---- Language ----
 const WHISPER_LANGUAGES = [
-  { code: 'auto', name: 'Auto Detect' },
-  { code: 'en',   name: 'English' },
-  { code: 'de',   name: 'German' },
-  { code: 'es',   name: 'Spanish' },
-  { code: 'fr',   name: 'French' },
-  { code: 'pt',   name: 'Portuguese' },
-  { code: 'ru',   name: 'Russian' },
-  { code: 'it',   name: 'Italian' },
+  { code: "auto", name: "Auto Detect" },
+  { code: "en", name: "English" },
+  { code: "de", name: "German" },
+  { code: "es", name: "Spanish" },
+  { code: "fr", name: "French" },
+  { code: "pt", name: "Portuguese" },
+  { code: "ru", name: "Russian" },
+  { code: "it", name: "Italian" },
 ];
 
 function renderLanguage(currentLang) {
-  const select = document.getElementById('language-select');
+  const select = document.getElementById("language-select");
   if (!select) return;
 
   select.replaceChildren();
-  const active = currentLang || 'en';
+  const active = currentLang || "en";
 
   WHISPER_LANGUAGES.forEach(({ code, name }) => {
-    const opt = document.createElement('option');
+    const opt = document.createElement("option");
     opt.value = code;
     opt.textContent = name;
     if (code === active) opt.selected = true;
@@ -362,32 +379,32 @@ function renderLanguage(currentLang) {
 
   select.onchange = async () => {
     const res = await window.saveLanguage(select.value);
-    if (!res.startsWith('error')) showRestartBanner();
+    if (!res.startsWith("error")) showRestartBanner();
   };
 }
 
 // ---- Appearance ----
-const THEMES = new Set(['system', 'light', 'dark']);
+const THEMES = new Set(["system", "light", "dark"]);
 
 function applySettingsTheme(theme) {
-  const chosen = THEMES.has(theme) ? theme : 'system';
+  const chosen = THEMES.has(theme) ? theme : "system";
   document.documentElement.dataset.theme = chosen;
 }
 
 function showAppearanceStatus(message, isError) {
-  const status = document.getElementById('appearance-status');
+  const status = document.getElementById("appearance-status");
   if (!status) return;
   status.hidden = !message;
-  status.textContent = message || '';
-  status.classList.toggle('setting-note-error', !!isError);
+  status.textContent = message || "";
+  status.classList.toggle("setting-note-error", !!isError);
   scheduleSettingsLayout();
 }
 
 function renderTheme(theme) {
-  const select = document.getElementById('appearance-theme');
+  const select = document.getElementById("appearance-theme");
   if (!select) return;
 
-  let previous = THEMES.has(theme) ? theme : 'system';
+  let previous = THEMES.has(theme) ? theme : "system";
   select.value = previous;
   applySettingsTheme(previous);
   select.onchange = async () => {
@@ -395,14 +412,14 @@ function renderTheme(theme) {
     applySettingsTheme(chosen);
     try {
       const result = await window.saveTheme(chosen);
-      if (typeof result === 'string' && result.startsWith('error:')) {
+      if (typeof result === "string" && result.startsWith("error:")) {
         select.value = previous;
         applySettingsTheme(previous);
-        showAppearanceStatus(result.slice('error:'.length).trim(), true);
+        showAppearanceStatus(result.slice("error:".length).trim(), true);
         return;
       }
       previous = chosen;
-      showAppearanceStatus('Saved', false);
+      showAppearanceStatus("Saved", false);
     } catch (error) {
       select.value = previous;
       applySettingsTheme(previous);
@@ -413,7 +430,7 @@ function renderTheme(theme) {
 
 // ---- Lowercase output ----
 function renderLowercaseOutput(enabled) {
-  const toggle = document.getElementById('lowercase-toggle');
+  const toggle = document.getElementById("lowercase-toggle");
   if (!toggle) return;
   toggle.checked = !!enabled;
   toggle.onchange = async () => {
@@ -423,7 +440,7 @@ function renderLowercaseOutput(enabled) {
 
 // ---- Raw output (skip LLM cleanup) ----
 function renderSkipLLMCleanup(enabled) {
-  const toggle = document.getElementById('raw-output-toggle');
+  const toggle = document.getElementById("raw-output-toggle");
   if (!toggle) return;
   toggle.checked = !!enabled;
   toggle.onchange = async () => {
@@ -463,11 +480,12 @@ function sizeDictionaryColumns() {
   const canvas = document.createElement("canvas");
   const context = canvas.getContext("2d");
   if (!context) return;
-  context.font = inputStyle.font ||
+  context.font =
+    inputStyle.font ||
     `${inputStyle.fontWeight} ${inputStyle.fontSize} ${inputStyle.fontFamily}`;
 
   let widestTerm = 0;
-  rows.forEach(row => {
+  rows.forEach((row) => {
     const input = row.querySelector("input");
     const text = input?.value || input?.placeholder || "";
     widestTerm = Math.max(widestTerm, context.measureText(text).width);
@@ -484,7 +502,9 @@ function sizeDictionaryColumns() {
     (Number.parseFloat(rowStyle.columnGap) || 0);
   const inputWidth = Math.max(96, Math.ceil(widestTerm + inputChrome + 4));
   const preferredWidth =
-    inputWidth + Math.ceil(sampleButton.getBoundingClientRect().width) + rowChrome;
+    inputWidth +
+    Math.ceil(sampleButton.getBoundingClientRect().width) +
+    rowChrome;
   list.style.setProperty("--dictionary-entry-width", `${preferredWidth}px`);
 }
 
@@ -542,10 +562,7 @@ function renderDictionary(terms) {
       remove.type = "button";
       remove.className = "hotkey-edit-btn dictionary-remove-btn";
       remove.textContent = "Remove";
-      remove.setAttribute(
-        "aria-label",
-        `Remove dictionary term ${index + 1}`,
-      );
+      remove.setAttribute("aria-label", `Remove dictionary term ${index + 1}`);
       remove.onclick = () => {
         draft.splice(index, 1);
         renderRows();
@@ -598,10 +615,7 @@ function renderDictionary(terms) {
       dictionaryDraft = Array.from(normalized);
       dictionaryDirty = false;
       renderDictionary(normalized);
-      showDictionaryStatus(
-        "Saved. Changes apply to the next dictation",
-        false,
-      );
+      showDictionaryStatus("Saved. Changes apply to the next dictation", false);
     } catch (error) {
       if (generation !== dictionarySaveGeneration) return;
       dictionarySaving = false;
@@ -627,8 +641,8 @@ function renderDictionary(terms) {
 function fillChoices(select, choices, current) {
   if (!select) return;
   select.replaceChildren();
-  (choices || []).forEach(choice => {
-    const option = document.createElement('option');
+  (choices || []).forEach((choice) => {
+    const option = document.createElement("option");
     option.value = choice.value;
     option.textContent = choice.reason
       ? `${choice.label} — ${choice.reason}`
@@ -644,58 +658,67 @@ function fillChoices(select, choices, current) {
 // Shows the outcome of a save. Validation errors come from the same validator
 // the config file uses, so the message is worth surfacing verbatim.
 function showWorkflowStatus(message, isError) {
-  const status = document.getElementById('workflow-status');
+  const status = document.getElementById("workflow-status");
   if (!status) return;
   status.hidden = !message;
-  status.textContent = message || '';
-  status.classList.toggle('setting-note-error', !!isError);
+  status.textContent = message || "";
+  status.classList.toggle("setting-note-error", !!isError);
   scheduleSettingsLayout();
 }
 
 // Saves one workflow setting, reverting the control if Go rejects the value.
 async function saveWorkflow(key, value, revert) {
   const result = await window.saveWorkflowSetting(key, String(value));
-  if (typeof result === 'string' && result.startsWith('error:')) {
-    showWorkflowStatus(result.slice('error:'.length).trim(), true);
+  if (typeof result === "string" && result.startsWith("error:")) {
+    showWorkflowStatus(result.slice("error:".length).trim(), true);
     if (revert) revert();
     return false;
   }
-  showWorkflowStatus('Saved', false);
+  showWorkflowStatus("Saved", false);
   return true;
 }
 
 function renderWorkflow(workflow) {
   if (!workflow) return;
 
-  const modeSelect     = document.getElementById('workflow-mode');
-  const streaming      = document.getElementById('workflow-streaming-toggle');
-  const interval       = document.getElementById('workflow-streaming-interval');
-  const deliverySelect = document.getElementById('workflow-delivery-backend');
-  const inputSelect    = document.getElementById('workflow-input-backend');
-  const device         = document.getElementById('workflow-input-device');
-  const chord          = document.getElementById('workflow-input-chord');
-  const cancelChord    = document.getElementById('workflow-input-cancel-chord');
+  const modeSelect = document.getElementById("workflow-mode");
+  const streaming = document.getElementById("workflow-streaming-toggle");
+  const interval = document.getElementById("workflow-streaming-interval");
+  const deliverySelect = document.getElementById("workflow-delivery-backend");
+  const inputSelect = document.getElementById("workflow-input-backend");
+  const device = document.getElementById("workflow-input-device");
+  const chord = document.getElementById("workflow-input-chord");
+  const cancelChord = document.getElementById("workflow-input-cancel-chord");
 
   fillChoices(modeSelect, workflow.modes, workflow.mode);
-  fillChoices(deliverySelect, workflow.deliveryBackends, workflow.deliveryBackend);
+  fillChoices(
+    deliverySelect,
+    workflow.deliveryBackends,
+    workflow.deliveryBackend,
+  );
   fillChoices(inputSelect, workflow.inputBackends, workflow.inputBackend);
 
   // The evdev-only rows are meaningless for any other input source.
-  const showEvdevRows = backend => {
-    const evdev = backend === 'evdev';
-    ['workflow-evdev-row', 'workflow-chord-row', 'workflow-cancel-chord-row'].forEach(id => {
+  const showEvdevRows = (backend) => {
+    const evdev = backend === "evdev";
+    [
+      "workflow-evdev-row",
+      "workflow-chord-row",
+      "workflow-cancel-chord-row",
+    ].forEach((id) => {
       const row = document.getElementById(id);
       if (row) row.hidden = !evdev;
     });
   };
   showEvdevRows(workflow.inputBackend);
 
-  const renderVoiceEditing = mode => {
-    const desc = document.getElementById('workflow-voice-editing-desc');
+  const renderVoiceEditing = (mode) => {
+    const desc = document.getElementById("workflow-voice-editing-desc");
     if (!desc) return;
-    desc.textContent = mode === 'review'
-      ? 'Hold the hotkey over reviewed text to dictate a correction'
-      : 'Available in review mode';
+    desc.textContent =
+      mode === "review"
+        ? "Hold the hotkey over reviewed text to dictate a correction"
+        : "Available in review mode";
   };
   renderVoiceEditing(workflow.mode);
 
@@ -703,7 +726,9 @@ function renderWorkflow(workflow) {
     let previous = workflow.mode;
     modeSelect.onchange = async () => {
       const chosen = modeSelect.value;
-      const ok = await saveWorkflow('workflow.mode', chosen, () => { modeSelect.value = previous; });
+      const ok = await saveWorkflow("workflow.mode", chosen, () => {
+        modeSelect.value = previous;
+      });
       if (ok) {
         previous = chosen;
         renderVoiceEditing(chosen);
@@ -714,23 +739,36 @@ function renderWorkflow(workflow) {
   if (streaming) {
     streaming.checked = !!workflow.streamingEnabled;
     streaming.onchange = async () => {
-      await saveWorkflow('workflow.streaming.enabled', streaming.checked,
-        () => { streaming.checked = !streaming.checked; });
+      await saveWorkflow(
+        "workflow.streaming.enabled",
+        streaming.checked,
+        () => {
+          streaming.checked = !streaming.checked;
+        },
+      );
     };
   }
 
-
-  bindTextSetting(interval, workflow.streamingInterval, 'workflow.streaming.interval');
-  bindTextSetting(device, workflow.inputDevice, 'workflow.input.device');
-  bindTextSetting(chord, workflow.inputChord, 'workflow.input.chord');
-  bindTextSetting(cancelChord, workflow.inputCancelChord, 'workflow.input.cancel_chord');
+  bindTextSetting(
+    interval,
+    workflow.streamingInterval,
+    "workflow.streaming.interval",
+  );
+  bindTextSetting(device, workflow.inputDevice, "workflow.input.device");
+  bindTextSetting(chord, workflow.inputChord, "workflow.input.chord");
+  bindTextSetting(
+    cancelChord,
+    workflow.inputCancelChord,
+    "workflow.input.cancel_chord",
+  );
 
   if (deliverySelect) {
     let previous = workflow.deliveryBackend;
     deliverySelect.onchange = async () => {
       const chosen = deliverySelect.value;
-      const ok = await saveWorkflow('workflow.delivery.backend', chosen,
-        () => { deliverySelect.value = previous; });
+      const ok = await saveWorkflow("workflow.delivery.backend", chosen, () => {
+        deliverySelect.value = previous;
+      });
       if (ok) previous = chosen;
     };
   }
@@ -739,12 +777,16 @@ function renderWorkflow(workflow) {
     let previous = workflow.inputBackend;
     inputSelect.onchange = async () => {
       const chosen = inputSelect.value;
-      const ok = await saveWorkflow('workflow.input.backend', chosen,
-        () => { inputSelect.value = previous; });
+      const ok = await saveWorkflow("workflow.input.backend", chosen, () => {
+        inputSelect.value = previous;
+      });
       if (!ok) return;
       previous = chosen;
       showEvdevRows(chosen);
-      showWorkflowStatus('Saved. Restart Sussurro for the new input source to take effect', false);
+      showWorkflowStatus(
+        "Saved. Restart Sussurro for the new input source to take effect",
+        false,
+      );
     };
   }
 }
@@ -752,19 +794,21 @@ function renderWorkflow(workflow) {
 // Binds a text field that saves on blur or Enter, reverting a rejected value.
 function bindTextSetting(field, initial, key) {
   if (!field) return;
-  field.value = initial || '';
+  field.value = initial || "";
 
   let previous = field.value;
   const commit = async () => {
     if (field.value === previous) return;
     const chosen = field.value;
-    const ok = await saveWorkflow(key, chosen, () => { field.value = previous; });
+    const ok = await saveWorkflow(key, chosen, () => {
+      field.value = previous;
+    });
     if (ok) previous = chosen;
   };
 
   field.onblur = commit;
-  field.onkeydown = event => {
-    if (event.key === 'Enter') {
+  field.onkeydown = (event) => {
+    if (event.key === "Enter") {
       event.preventDefault();
       field.blur();
     }
@@ -775,23 +819,33 @@ function bindTextSetting(field, initial, key) {
 // Push-to-talk and toggle are independent bindings, either of which may be
 // unset. There is no mode: each key does what it is bound to do.
 function renderHotkey(pushToTalk, toggle, isWayland) {
-  const pttRow     = document.getElementById('hotkey-x11');
-  const toggleRow  = document.getElementById('hotkey-toggle-row');
-  const waylandRow = document.getElementById('hotkey-wayland');
+  const pttRow = document.getElementById("hotkey-x11");
+  const toggleRow = document.getElementById("hotkey-toggle-row");
+  const waylandRow = document.getElementById("hotkey-wayland");
 
   if (isWayland) {
-    if (pttRow)     pttRow.hidden    = true;
-    if (toggleRow)  toggleRow.hidden = true;
+    if (pttRow) pttRow.hidden = true;
+    if (toggleRow) toggleRow.hidden = true;
     if (waylandRow) waylandRow.hidden = false;
     return;
   }
 
   if (waylandRow) waylandRow.hidden = true;
 
-  bindHotkeyRow(pttRow, 'hotkey-display', 'hotkey-edit-btn',
-                pushToTalk, window.savePushToTalkHotkey);
-  bindHotkeyRow(toggleRow, 'hotkey-toggle-display', 'hotkey-toggle-edit-btn',
-                toggle, window.saveToggleHotkey);
+  bindHotkeyRow(
+    pttRow,
+    "hotkey-display",
+    "hotkey-edit-btn",
+    pushToTalk,
+    window.savePushToTalkHotkey,
+  );
+  bindHotkeyRow(
+    toggleRow,
+    "hotkey-toggle-display",
+    "hotkey-toggle-edit-btn",
+    toggle,
+    window.saveToggleHotkey,
+  );
 }
 
 function bindHotkeyRow(row, displayId, buttonId, trigger, save) {
@@ -802,12 +856,15 @@ function bindHotkeyRow(row, displayId, buttonId, trigger, save) {
 
   const btn = document.getElementById(buttonId);
   if (btn) {
-    btn.onclick = () => showRecordModal((combo) => save(combo).then((res) => {
-        if (typeof res !== 'string' || !res.startsWith('error')) {
-          updateHotkeyDisplay(displayId, combo);
-        }
-        return res;
-      }));
+    btn.onclick = () =>
+      showRecordModal((combo) =>
+        save(combo).then((res) => {
+          if (typeof res !== "string" || !res.startsWith("error")) {
+            updateHotkeyDisplay(displayId, combo);
+          }
+          return res;
+        }),
+      );
   }
 }
 
@@ -817,20 +874,20 @@ function updateHotkeyDisplay(displayId, trigger) {
   display.replaceChildren();
   if (!trigger) {
     // An unset binding says so rather than rendering an empty row.
-    const unset = document.createElement('span');
-    unset.className = 'hotkey-unset';
-    unset.textContent = 'Not set';
+    const unset = document.createElement("span");
+    unset.className = "hotkey-unset";
+    unset.textContent = "Not set";
     display.appendChild(unset);
     return;
   }
-  trigger.split('+').forEach((key, index) => {
+  trigger.split("+").forEach((key, index) => {
     if (index > 0) {
-      const separator = document.createElement('span');
-      separator.className = 'hotkey-separator';
-      separator.textContent = '+';
+      const separator = document.createElement("span");
+      separator.className = "hotkey-separator";
+      separator.textContent = "+";
       display.appendChild(separator);
     }
-    const keycap = document.createElement('kbd');
+    const keycap = document.createElement("kbd");
     keycap.textContent = key;
     display.appendChild(keycap);
   });
@@ -838,49 +895,53 @@ function updateHotkeyDisplay(displayId, trigger) {
 
 // ---- Record hotkey modal ----
 const MAX_HOTKEY_KEYS = 3;
-const MODIFIER_KEY_NAMES = new Set(['ctrl', 'shift', 'alt', 'super']);
+const MODIFIER_KEY_NAMES = new Set(["ctrl", "shift", "alt", "super"]);
 
 function keyNameFromEvent(e) {
   switch (e.key) {
-    case 'Control': return 'ctrl';
-    case 'Shift':   return 'shift';
-    case 'Alt':     return 'alt';
-    case 'Meta':    return 'super';
+    case "Control":
+      return "ctrl";
+    case "Shift":
+      return "shift";
+    case "Alt":
+      return "alt";
+    case "Meta":
+      return "super";
     default: {
       const k = e.key.toLowerCase();
-      return k === ' ' ? 'space' : k;
+      return k === " " ? "space" : k;
     }
   }
 }
 
 function buildTriggerFromSet(keys) {
-  const mods = [...keys].filter(k =>  MODIFIER_KEY_NAMES.has(k));
-  const main = [...keys].filter(k => !MODIFIER_KEY_NAMES.has(k));
-  return [...mods, ...main].join('+');
+  const mods = [...keys].filter((k) => MODIFIER_KEY_NAMES.has(k));
+  const main = [...keys].filter((k) => !MODIFIER_KEY_NAMES.has(k));
+  return [...mods, ...main].join("+");
 }
 
 function showRecordModal(save) {
-  const modal   = document.getElementById('hotkey-modal');
-  const preview = document.getElementById('hotkey-modal-preview');
+  const modal = document.getElementById("hotkey-modal");
+  const preview = document.getElementById("hotkey-modal-preview");
   if (!modal) return;
-  modal.classList.add('visible');
+  modal.classList.add("visible");
 
   const keysHeld = new Set();
-  let lastCombo  = '';
-  let finalized  = false;
+  let lastCombo = "";
+  let finalized = false;
 
   function updatePreview() {
     if (!preview) return;
     if (keysHeld.size === 0) {
-      preview.textContent = lastCombo || 'Press keys…';
+      preview.textContent = lastCombo || "Press keys…";
     } else {
       preview.textContent = buildTriggerFromSet(keysHeld);
     }
   }
 
   function cleanup() {
-    document.removeEventListener('keydown', downHandler);
-    document.removeEventListener('keyup',   upHandler);
+    document.removeEventListener("keydown", downHandler);
+    document.removeEventListener("keyup", upHandler);
   }
 
   function downHandler(e) {
@@ -896,39 +957,39 @@ function showRecordModal(save) {
     e.preventDefault();
     if (finalized) return;
     // Snapshot the full combo on the first key release
-    if (lastCombo === '' && keysHeld.size > 0) {
+    if (lastCombo === "" && keysHeld.size > 0) {
       lastCombo = buildTriggerFromSet(keysHeld);
     }
     const name = keyNameFromEvent(e);
     keysHeld.delete(name);
     updatePreview();
     // Finalize once all keys are released
-    if (keysHeld.size === 0 && lastCombo !== '') {
+    if (keysHeld.size === 0 && lastCombo !== "") {
       // Must contain at least one non-modifier key
-      const parts = lastCombo.split('+');
-      const hasMainKey = parts.some(p => !MODIFIER_KEY_NAMES.has(p));
+      const parts = lastCombo.split("+");
+      const hasMainKey = parts.some((p) => !MODIFIER_KEY_NAMES.has(p));
       if (!hasMainKey) {
         // Only modifiers were pressed — reset and keep waiting
-        lastCombo = '';
+        lastCombo = "";
         updatePreview();
         return;
       }
       finalized = true;
       cleanup();
       await save(lastCombo);
-      modal.classList.remove('visible');
+      modal.classList.remove("visible");
     }
   }
 
-  document.addEventListener('keydown', downHandler);
-  document.addEventListener('keyup',   upHandler);
+  document.addEventListener("keydown", downHandler);
+  document.addEventListener("keyup", upHandler);
 
-  const cancelBtn = document.getElementById('hotkey-modal-cancel');
+  const cancelBtn = document.getElementById("hotkey-modal-cancel");
   if (cancelBtn) {
     cancelBtn.onclick = () => {
       finalized = true;
       cleanup();
-      modal.classList.remove('visible');
+      modal.classList.remove("visible");
     };
   }
 }
