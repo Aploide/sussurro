@@ -626,8 +626,7 @@ func (p *Pipeline) processSegment(samples []float32) {
 
 // processSegmentWithPartial runs the final whole-buffer pass while retaining
 // the last text already shown to the user. Whisper can regress on an
-// independent pass; a shorter result must not discard words that its previous
-// pass had already recognised.
+// independent pass, but a streaming pass can also invent a trailing phrase.
 func (p *Pipeline) processSegmentWithPartial(samples []float32, partial string) {
 	defer p.wg.Done()
 	defer func() {
@@ -689,30 +688,47 @@ func (p *Pipeline) processSegmentWithPartial(samples []float32, partial string) 
 	text = StripNonSpeechMarkers(text)
 
 	// The final pass is an independent decode and can regress despite seeing
-	// more audio. The log that prompted sussurro-3jn showed it ending
-	// mid-sentence while the last partial already held the missing words.
-	if finalPassShorter(text, partial) {
+	// more audio. Preserve a shorter result that ends mid-sentence, as in
+	// sussurro-3jn. A complete shorter result is authoritative: the streaming
+	// pass may have invented a trailing phrase, as in sussurro-d2h.
+	finalChars := utf8.RuneCountInString(strings.TrimSpace(text))
+	partialChars := utf8.RuneCountInString(strings.TrimSpace(partial))
+	minimumText := partial
+	if finalPassLooksTruncated(text, partial) {
 		// Transcript bodies remain debug-only: warning-level logging must not
 		// expose a user's dictated text merely because recognition regressed.
-		p.log.Warn("Final pass shorter than the last partial; preserving partial",
-			"final_chars", utf8.RuneCountInString(strings.TrimSpace(text)),
-			"partial_chars", utf8.RuneCountInString(strings.TrimSpace(partial)))
+		p.log.Warn("Final pass appears truncated; preserving the last partial",
+			"final_chars", finalChars, "partial_chars", partialChars)
 		text = partial
+	} else if finalChars < partialChars {
+		p.log.Warn("Final pass rejected trailing text from the last partial",
+			"final_chars", finalChars, "partial_chars", partialChars)
+		// Cleanup must not restore the rejected streaming suffix merely because
+		// its input is shorter than the partial.
+		minimumText = text
 	}
 
 	// Recognition is done; what follows is cleanup and delivery. Announce the
 	// change so the overlay stops claiming to transcribe.
 	p.notifyPhase(session.StateCleaningUp, text)
 
-	p.finishSegment(text, partial, start, asrDuration)
+	p.finishSegment(text, minimumText, start, asrDuration)
 }
 
-// finalPassShorter enforces the delivery invariant from sussurro-3jn. A final
-// decode can correct words as well as lose them, but there is no reliable way
-// to distinguish those cases from text alone. Prefer the last result already
-// shown to the user rather than silently deleting any of it.
+// finalPassShorter reports whether a later stage returned less text than the
+// last result retained for delivery.
 func finalPassShorter(final, partial string) bool {
 	return utf8.RuneCountInString(strings.TrimSpace(final)) < utf8.RuneCountInString(strings.TrimSpace(partial))
+}
+
+// finalPassLooksTruncated distinguishes a mid-sentence regression from a
+// complete final decode that rejected a suffix invented by a streaming pass.
+func finalPassLooksTruncated(final, partial string) bool {
+	final = strings.TrimSpace(final)
+	if !finalPassShorter(final, partial) {
+		return false
+	}
+	return final == "" || !sentenceEnd(final)
 }
 
 // completeFromPartial delivers text a streaming pass already produced,
@@ -739,9 +755,9 @@ func (p *Pipeline) completeFromPartial(text string) {
 }
 
 // finishSegment turns a recognised transcription into a published result.
-// minimumText is the last partial shown in the overlay, or empty when
-// streaming produced none. Cleanup may rewrite it, but must not make the
-// delivered result shorter than text the user already saw.
+// minimumText is the shortest recognition result cleanup may deliver. It is
+// normally the last partial, or the final decode when that decode rejected an
+// invented streaming suffix.
 //
 // asrDuration is how long recognition took, or zero on the partial-reuse path
 // where none ran, so the completion log can attribute the wait after speech

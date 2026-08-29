@@ -483,6 +483,35 @@ func TestFinalPassCannotTruncateTheLastPartial(t *testing.T) {
 	}
 }
 
+// TestFinalPassRemovesHallucinatedPartialSuffix reproduces sussurro-d2h
+// through the real stop path. The streaming pass invented trailing words that
+// disappeared when the final whole-buffer pass decoded the completed audio.
+func TestFinalPassRemovesHallucinatedPartialSuffix(t *testing.T) {
+	const final = "the intended sentence ends here."
+	const partial = final + " followed by words that were never spoken"
+
+	asr := &sequenceTranscriber{texts: []string{partial, final}}
+	consumer := &recordingConsumer{}
+	p := newTestPipeline(t, asr, &passthroughCleaner{}, stubContext{info: &ctxProvider.ContextInfo{}})
+	p.SetResultConsumer(consumer)
+	streamer := primePartial(t, p, asr)
+
+	p.isRecording.Store(true)
+	p.audioBuffer = make([]float32, 64000)
+	if !p.StopRecording() {
+		t.Fatal("StopRecording() = false, want the recording stopped")
+	}
+	p.wg.Wait()
+	streamer.Wait()
+
+	if len(consumer.results) != 1 {
+		t.Fatalf("got %d results, want 1", len(consumer.results))
+	}
+	if got := consumer.results[0]; got.Raw != final || got.Text != final {
+		t.Errorf("delivered Raw=%q Text=%q, want final decode %q", got.Raw, got.Text, final)
+	}
+}
+
 func TestFinalPassFailurePreservesTheLastPartial(t *testing.T) {
 	asr := &sequenceTranscriber{
 		texts: []string{completePartial, ""},
@@ -549,6 +578,28 @@ func TestFinalPassShorter(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := finalPassShorter(tt.final, tt.partial); got != tt.want {
 				t.Errorf("finalPassShorter(%q, %q) = %v, want %v", tt.final, tt.partial, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFinalPassLooksTruncated(t *testing.T) {
+	tests := []struct {
+		name    string
+		final   string
+		partial string
+		want    bool
+	}{
+		{name: "mid-sentence final", final: "the intended sentence", partial: "the intended sentence ends here", want: true},
+		{name: "empty final", final: "", partial: "speech was already recognised", want: true},
+		{name: "complete final rejects suffix", final: "the intended sentence.", partial: "the intended sentence. Invented suffix", want: false},
+		{name: "longer final", final: "the final added words", partial: "the final", want: false},
+		{name: "no partial", final: "some result", partial: "", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := finalPassLooksTruncated(tt.final, tt.partial); got != tt.want {
+				t.Errorf("finalPassLooksTruncated(%q, %q) = %v, want %v", tt.final, tt.partial, got, tt.want)
 			}
 		})
 	}
