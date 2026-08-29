@@ -317,10 +317,12 @@ func (m *Manager) OnPhase(state session.State, partial string) {
 // transcription so the user can read what was produced. render() displays it,
 // then hides the overlay a second later.
 func (m *Manager) OnFinished(text string) {
+	status := m.completionStatus()
 	m.Present(ViewModel{
 		State:      session.StateIdle,
 		Transcript: text,
-		Status:     m.completionStatus(),
+		Copied:     status == "Copied",
+		Status:     status,
 		Mode:       ViewExpanded,
 	})
 }

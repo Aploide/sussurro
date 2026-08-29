@@ -36,6 +36,7 @@ struct OverlayData {
     char        *transcript;
     char        *status;
     gboolean     provisional;   /* text is still being revised */
+    gboolean     copied;        /* text is ready to paste */
     int          panel_height;  /* 0 when showing the capsule */
 
     /* Animation timer source id, 0 when stopped. The timer only runs while
@@ -389,6 +390,8 @@ static int draw_panel(cairo_t *cr, OverlayData *od, gboolean paint)
            still change under them. */
         if (od->provisional) {
             set_source_color(cr, od->palette.provisional, 1.0);
+        } else if (od->copied) {
+            set_source_color(cr, od->palette.copied, 1.0);
         } else {
             set_source_color(cr, od->palette.primary, 0.95);
         }
@@ -1170,6 +1173,7 @@ typedef struct {
     char      *text;
     char      *status;
     int        provisional;
+    int        copied;
 } IdleTranscriptArg;
 
 /* Applies a transcript update on the GTK main thread, resizing the window to
@@ -1190,6 +1194,7 @@ static gboolean idle_set_transcript(gpointer data)
     od->transcript  = arg->text   ? g_strdup(arg->text)   : NULL;
     od->status      = arg->status ? g_strdup(arg->status) : NULL;
     od->provisional = arg->provisional ? TRUE : FALSE;
+    od->copied      = arg->copied ? TRUE : FALSE;
 
     /* One size calculation for every state. Measured against a throwaway
        surface because the height depends on how the text wraps, which only
@@ -1219,7 +1224,7 @@ done:
 }
 
 void overlay_present_async(GtkWidget *win, int state, const char *text,
-                           const char *status, int provisional)
+                           const char *status, int provisional, int copied)
 {
     IdleTranscriptArg *arg = g_new0(IdleTranscriptArg, 1);
     arg->win         = win;
@@ -1227,6 +1232,7 @@ void overlay_present_async(GtkWidget *win, int state, const char *text,
     arg->text        = text   ? g_strdup(text)   : NULL;
     arg->status      = status ? g_strdup(status) : NULL;
     arg->provisional = provisional;
+    arg->copied      = copied;
     gdk_threads_add_idle(idle_set_transcript, arg);
 }
 

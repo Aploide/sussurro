@@ -47,6 +47,9 @@ type ViewModel struct {
 	Transcript string
 	// Partial reports whether Transcript is still being revised.
 	Partial bool
+	// Copied reports that Transcript has reached the clipboard and is ready to
+	// paste. Native transcript renderers use it as a visual confirmation.
+	Copied bool
 	// Status is a short line describing what the user can do next, or the
 	// error that just occurred.
 	Status string

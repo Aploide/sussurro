@@ -128,6 +128,7 @@ func nativeOverlayPalette(palette overlayPalette) C.OverlayPalette {
 		primary:      nativeOverlayColor(palette.Primary),
 		secondary:    nativeOverlayColor(palette.Secondary),
 		provisional:  nativeOverlayColor(palette.Provisional),
+		copied:       nativeOverlayColor(palette.Copied),
 		track:        nativeOverlayColor(palette.Track),
 		fill:         nativeOverlayColor(palette.Fill),
 		warning:      nativeOverlayColor(palette.Warning),
@@ -237,7 +238,11 @@ func (o *linuxOverlay) Present(model ViewModel) {
 	// One call, not a SetState followed by a transcript update: separate
 	// idle callbacks let the GTK loop draw between them, which is how the
 	// transcribing capsule appeared in place of text already on screen.
-	C.overlay_present_async((*C.GtkWidget)(o.win), nativeState, ctext, cstatus, provisional)
+	copied := C.int(0)
+	if model.Copied {
+		copied = 1
+	}
+	C.overlay_present_async((*C.GtkWidget)(o.win), nativeState, ctext, cstatus, provisional, copied)
 }
 
 func (o *linuxOverlay) PushRMS(rms float32) {

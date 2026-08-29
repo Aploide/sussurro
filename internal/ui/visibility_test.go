@@ -514,6 +514,9 @@ func TestClipboardOnlyDeliveryIsConfirmed(t *testing.T) {
 		if model.Status != "Copied" {
 			t.Errorf("Status = %q, want the copy confirmed", model.Status)
 		}
+		if !model.Copied {
+			t.Error("Copied = false after clipboard-only delivery")
+		}
 	default:
 		t.Fatal("OnFinished queued nothing")
 	}
@@ -537,6 +540,9 @@ func TestPasteDeliveryKeepsTheGenericStatus(t *testing.T) {
 	case model := <-manager.stateChangeCh:
 		if model.Status != "Done" {
 			t.Errorf("Status = %q, want the generic completion status", model.Status)
+		}
+		if model.Copied {
+			t.Error("Copied = true for paste delivery")
 		}
 	default:
 		t.Fatal("OnFinished queued nothing")

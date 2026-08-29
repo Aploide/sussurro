@@ -14,8 +14,8 @@ import (
 func paletteColors(p overlayPalette) map[string]overlayColor {
 	return map[string]overlayColor{
 		"background": p.Background, "border": p.Border, "primary": p.Primary,
-		"secondary": p.Secondary, "provisional": p.Provisional, "track": p.Track,
-		"fill": p.Fill, "warning": p.Warning, "shimmer base": p.ShimmerBase,
+		"secondary": p.Secondary, "provisional": p.Provisional, "copied": p.Copied,
+		"track": p.Track, "fill": p.Fill, "warning": p.Warning, "shimmer base": p.ShimmerBase,
 		"shimmer peak": p.ShimmerPeak,
 	}
 }
@@ -62,6 +62,19 @@ func contrastRatio(a, b overlayColor) float64 {
 		la, lb = lb, la
 	}
 	return (la + 0.05) / (lb + 0.05)
+}
+
+func TestCopiedOverlayTextIsGreen(t *testing.T) {
+	palettes := map[string]overlayPalette{
+		"light": lightOverlayPalette, "linux dark": linuxDarkOverlayPalette,
+		"windows dark": windowsDarkOverlayPalette, "darwin dark": darwinDarkOverlayPalette,
+	}
+	for name, palette := range palettes {
+		color := palette.Copied
+		if color.G <= color.R || color.G <= color.B {
+			t.Errorf("%s copied colour = %+v, want green to be dominant", name, color)
+		}
+	}
 }
 
 func TestLightOverlayTextAndWaveformContrastAcrossDesktopBackdrops(t *testing.T) {
@@ -171,6 +184,10 @@ func TestNativeOverlayPaletteContract(t *testing.T) {
 		!strings.Contains(linux, "cairo_set_source_rgba(cr, color.r, color.g, color.b") ||
 		!strings.Contains(linux, "cairo_set_source_rgba(cr, 0, 0, 0, 0)") {
 		t.Error("overlay_linux.c has a visible Cairo colour outside the palette helper and structural clear")
+	}
+	if !strings.Contains(linux, "else if (od->copied)") ||
+		!strings.Contains(linux, "od->palette.copied") {
+		t.Error("overlay_linux.c does not render copied transcript text with the copied palette colour")
 	}
 
 	windows := readOverlaySource(t, "overlay_windows.c")
