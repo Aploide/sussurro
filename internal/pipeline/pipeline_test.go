@@ -512,6 +512,42 @@ func TestFinalPassRemovesHallucinatedPartialSuffix(t *testing.T) {
 	}
 }
 
+// TestFinalPassKeepsBetterSentenceBoundaryWithoutCleanup reproduces
+// sussurro-xvj.69 through the real stop path. The longer partial joined two
+// sentences without punctuation; the shorter final decode restored the full
+// stop and capitalised the following clause even though that clause was still
+// unfinished.
+func TestFinalPassKeepsBetterSentenceBoundaryWithoutCleanup(t *testing.T) {
+	const partial = "Please send an attachment PDF sharing the invoice or receipt for the payment How do I get another copy of the receipt"
+	const final = "Please send the attachment PDF with the invoice or receipt for payment. How do I get another copy of the receipt"
+
+	asr := &sequenceTranscriber{texts: []string{partial, final}}
+	cleaner := &stubCleaner{}
+	consumer := &recordingConsumer{}
+	p := newTestPipeline(t, asr, cleaner, stubContext{info: &ctxProvider.ContextInfo{}})
+	p.SetSkipLLMCleanup(true)
+	p.SetResultConsumer(consumer)
+	streamer := primePartial(t, p, asr)
+
+	p.isRecording.Store(true)
+	p.audioBuffer = make([]float32, 64000)
+	if !p.StopRecording() {
+		t.Fatal("StopRecording() = false, want the recording stopped")
+	}
+	p.wg.Wait()
+	streamer.Wait()
+
+	if cleaner.calls != 0 {
+		t.Fatalf("CleanupText called %d times, want cleanup disabled", cleaner.calls)
+	}
+	if len(consumer.results) != 1 {
+		t.Fatalf("got %d results, want 1", len(consumer.results))
+	}
+	if got := consumer.results[0]; got.Raw != final || got.Text != final {
+		t.Errorf("delivered Raw=%q Text=%q, want punctuated final decode %q", got.Raw, got.Text, final)
+	}
+}
+
 func TestFinalPassFailurePreservesTheLastPartial(t *testing.T) {
 	asr := &sequenceTranscriber{
 		texts: []string{completePartial, ""},
@@ -593,6 +629,8 @@ func TestFinalPassLooksTruncated(t *testing.T) {
 		{name: "mid-sentence final", final: "the intended sentence", partial: "the intended sentence ends here", want: true},
 		{name: "empty final", final: "", partial: "speech was already recognised", want: true},
 		{name: "complete final rejects suffix", final: "the intended sentence.", partial: "the intended sentence. Invented suffix", want: false},
+		{name: "final restores internal boundary", final: "first sentence. second unfinished", partial: "first sentence second unfinished with extra words", want: false},
+		{name: "same boundaries preserve partial", final: "first sentence. second unfinished", partial: "first sentence. second unfinished with extra words", want: true},
 		{name: "longer final", final: "the final added words", partial: "the final", want: false},
 		{name: "no partial", final: "some result", partial: "", want: false},
 	}

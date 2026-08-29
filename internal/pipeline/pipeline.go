@@ -721,14 +721,28 @@ func finalPassShorter(final, partial string) bool {
 	return utf8.RuneCountInString(strings.TrimSpace(final)) < utf8.RuneCountInString(strings.TrimSpace(partial))
 }
 
-// finalPassLooksTruncated distinguishes a mid-sentence regression from a
-// complete final decode that rejected a suffix invented by a streaming pass.
+// finalPassLooksTruncated distinguishes a regression from a structurally
+// better final decode. A shorter final is still authoritative when it ends a
+// sentence or restores a sentence boundary missing from the partial.
 func finalPassLooksTruncated(final, partial string) bool {
 	final = strings.TrimSpace(final)
 	if !finalPassShorter(final, partial) {
 		return false
 	}
-	return final == "" || !sentenceEnd(final)
+	if final == "" {
+		return true
+	}
+	return !sentenceEnd(final) && sentenceBoundaryCount(final) <= sentenceBoundaryCount(partial)
+}
+
+func sentenceBoundaryCount(text string) int {
+	count := 0
+	for word := range strings.FieldsSeq(text) {
+		if sentenceEnd(word) {
+			count++
+		}
+	}
+	return count
 }
 
 // completeFromPartial delivers text a streaming pass already produced,
