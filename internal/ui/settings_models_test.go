@@ -79,8 +79,8 @@ func TestOfficialLLMDownloadAndSelectionStayConnected(t *testing.T) {
 		t.Errorf("download name = %q", name)
 	}
 
-	js := readAsset(t, "app.js")
-	if strings.Contains(js, "if (m.type === 'llm')") {
+	js := compactAssetSyntax(readAsset(t, "app.js"))
+	if strings.Contains(js, compactAssetSyntax("if (m.type === 'llm')")) {
 		t.Error("app.js still disables every LLM radio")
 	}
 	for _, want := range []string{
@@ -89,7 +89,7 @@ func TestOfficialLLMDownloadAndSelectionStayConnected(t *testing.T) {
 		"if (!m.installed) { await reloadSettings(); return; }",
 		"if (res.startsWith('error')) { await reloadSettings(); return; }",
 	} {
-		if !strings.Contains(js, want) {
+		if !strings.Contains(js, compactAssetSyntax(want)) {
 			t.Errorf("app.js is missing selection contract %q", want)
 		}
 	}

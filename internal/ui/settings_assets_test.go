@@ -23,6 +23,13 @@ func readAsset(t *testing.T, name string) string {
 	return string(body)
 }
 
+// compactAssetSyntax keeps contract tests focused on behavior rather than the
+// formatter's quote style, line wrapping, or declaration alignment.
+func compactAssetSyntax(asset string) string {
+	asset = strings.ReplaceAll(asset, "'", `"`)
+	return strings.Join(strings.Fields(asset), "")
+}
+
 var (
 	elementIDPattern = regexp.MustCompile(`id="(workflow-[^"]+)"`)
 	getElementByID   = regexp.MustCompile(`getElementById\(["'](workflow-[^"']+)["']\)`)
@@ -269,14 +276,14 @@ func TestEmbeddedSettingsPageIncludesThemeAssets(t *testing.T) {
 }
 
 func TestThemeControlOffersEveryConfiguredValue(t *testing.T) {
-	html := readAsset(t, "index.html")
-	js := readAsset(t, "app.js")
+	html := compactAssetSyntax(readAsset(t, "index.html"))
+	js := compactAssetSyntax(readAsset(t, "app.js"))
 
 	for _, theme := range []string{"system", "light", "dark"} {
-		if !strings.Contains(html, `option value="`+theme+`"`) {
+		if !strings.Contains(html, compactAssetSyntax(`option value="`+theme+`"`)) {
 			t.Errorf("Appearance control has no %q option", theme)
 		}
-		if !strings.Contains(js, `'`+theme+`'`) {
+		if !strings.Contains(js, `"`+theme+`"`) {
 			t.Errorf("app.js does not recognize theme %q", theme)
 		}
 	}
@@ -285,17 +292,18 @@ func TestThemeControlOffersEveryConfiguredValue(t *testing.T) {
 		"document.documentElement.dataset.theme = chosen",
 		"renderTheme(data.theme)",
 	} {
-		if !strings.Contains(js, contract) {
+		if !strings.Contains(js, compactAssetSyntax(contract)) {
 			t.Errorf("app.js is missing theme contract %q", contract)
 		}
 	}
-	if !strings.Contains(html, `id="appearance-status" role="status" aria-live="polite"`) {
+	statusContract := `id="appearance-status" role="status" aria-live="polite"`
+	if !strings.Contains(html, compactAssetSyntax(statusContract)) {
 		t.Error("Appearance save result has no accessible live status")
 	}
 }
 
 func TestThemePalettesCoverOverridesAndSystemPreference(t *testing.T) {
-	css := readAsset(t, "style.css")
+	css := compactAssetSyntax(readAsset(t, "style.css"))
 
 	for _, selector := range []string{
 		`:root[data-theme="dark"]`,
@@ -303,7 +311,7 @@ func TestThemePalettesCoverOverridesAndSystemPreference(t *testing.T) {
 		`@media (prefers-color-scheme: light)`,
 		`:root[data-theme="system"]`,
 	} {
-		if !strings.Contains(css, selector) {
+		if !strings.Contains(css, compactAssetSyntax(selector)) {
 			t.Errorf("style.css has no %s palette selector", selector)
 		}
 	}
@@ -311,46 +319,46 @@ func TestThemePalettesCoverOverridesAndSystemPreference(t *testing.T) {
 	// Explicit light and system-light must stay the same palette. Every light
 	// declaration appears once in each block.
 	for _, declaration := range []string{
-		`--bg:                   #f5f5f7`,
-		`--surface:              #ffffff`,
-		`--surface2:             #ededf0`,
-		`--border:               #d2d2d7`,
-		`--text:                 #1d1d1f`,
-		`--muted:                #5f6368`,
-		`--accent:               #16833b`,
-		`--red:                  #c62828`,
-		`--blue:                 #0066cc`,
-		`--modal-scrim:          rgba(0, 0, 0, 0.45)`,
-		`fill='%235f6368'`,
+		`--bg: #f5f5f7`,
+		`--surface: #ffffff`,
+		`--surface2: #ededf0`,
+		`--border: #d2d2d7`,
+		`--text: #1d1d1f`,
+		`--muted: #5f6368`,
+		`--accent: #16833b`,
+		`--red: #c62828`,
+		`--blue: #0066cc`,
+		`--modal-scrim: rgba(0, 0, 0, 0.45)`,
+		`fill="%235f6368"`,
 	} {
-		if count := strings.Count(css, declaration); count != 2 {
+		if count := strings.Count(css, compactAssetSyntax(declaration)); count != 2 {
 			t.Errorf("light palette declaration %q appears %d times, want explicit and system", declaration, count)
 		}
 	}
 
 	// Pin the dark palette so appearance changes remain deliberate and reviewed.
 	for _, declaration := range []string{
-		`--bg:                   #111113`,
-		`--surface:              #1a1a1c`,
-		`--surface2:             #222224`,
-		`--border:               #2e2e30`,
-		`--text:                 #e8e8ea`,
-		`--muted:                #a0a0a8`,
-		`--accent:               #30d158`,
-		`--red:                  #ff453a`,
-		`--blue:                 #0a84ff`,
-		`--subtle-hover:         rgba(255, 255, 255, 0.02)`,
-		`--subtle-selected:      rgba(255, 255, 255, 0.04)`,
-		`--control-hover:        #2e2e30`,
+		`--bg: #111113`,
+		`--surface: #1a1a1c`,
+		`--surface2: #222224`,
+		`--border: #2e2e30`,
+		`--text: #e8e8ea`,
+		`--muted: #a0a0a8`,
+		`--accent: #30d158`,
+		`--red: #ff453a`,
+		`--blue: #0a84ff`,
+		`--subtle-hover: rgba(255, 255, 255, 0.02)`,
+		`--subtle-selected: rgba(255, 255, 255, 0.04)`,
+		`--control-hover: #2e2e30`,
 		`--control-hover-border: #444444`,
-		`--toggle-knob:          #ffffff`,
-		`--modal-scrim:          rgba(0, 0, 0, 0.6)`,
-		`--preview-bg:           rgba(255, 255, 255, 0.05)`,
-		`--info-bg:              rgba(10, 132, 255, 0.10)`,
-		`--info-border:          rgba(10, 132, 255, 0.25)`,
-		`fill='%23a0a0a8'`,
+		`--toggle-knob: #ffffff`,
+		`--modal-scrim: rgba(0, 0, 0, 0.6)`,
+		`--preview-bg: rgba(255, 255, 255, 0.05)`,
+		`--info-bg: rgba(10, 132, 255, 0.1)`,
+		`--info-border: rgba(10, 132, 255, 0.25)`,
+		`fill="%23a0a0a8"`,
 	} {
-		if !strings.Contains(css, declaration) {
+		if !strings.Contains(css, compactAssetSyntax(declaration)) {
 			t.Errorf("dark palette no longer contains %q", declaration)
 		}
 	}
