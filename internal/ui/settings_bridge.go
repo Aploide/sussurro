@@ -16,10 +16,10 @@ import (
 
 // modelInfo describes a model for the settings UI.
 type modelInfo struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"desc"`
-	Size        string `json:"size"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Description  string `json:"desc"`
+	Size         string `json:"size"`
 	Installed    bool   `json:"installed"`
 	Active       bool   `json:"active"`
 	Downloadable bool   `json:"downloadable"`

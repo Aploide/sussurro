@@ -15,8 +15,8 @@ import (
 type renderedModelFlow struct {
 	Error                 string `json:"error"`
 	FailureRestoredActive bool   `json:"failureRestoredActive"`
-	DownloadEnabled       bool `json:"downloadEnabled"`
-	SelectionActivated    bool `json:"selectionActivated"`
+	DownloadEnabled       bool   `json:"downloadEnabled"`
+	SelectionActivated    bool   `json:"selectionActivated"`
 }
 
 func TestRenderedModelSelectionFlow(t *testing.T) {

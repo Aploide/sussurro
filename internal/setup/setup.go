@@ -567,10 +567,10 @@ func (pr *progressReader) invokeCallback() {
 
 type progressReader struct {
 	io.Reader
-	Total   int64
-	Current int64
-	Name    string
-	Last    int64
+	Total    int64
+	Current  int64
+	Name     string
+	Last     int64
 	Output   io.Writer
 	Callback ProgressCallback
 }

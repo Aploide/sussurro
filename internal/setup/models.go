@@ -8,8 +8,8 @@ const (
 	ModelKindLLM ModelKind = "llm"
 
 	qwenRepositoryURL = "https://huggingface.co/cesp99/qwen3-sussurro/resolve/main/"
-	defaultLLMURL      = qwenRepositoryURL + "qwen3-sussurro-q4_k_m.gguf"
-	defaultLLMSize     = "1.28 GB"
+	defaultLLMURL     = qwenRepositoryURL + "qwen3-sussurro-q4_k_m.gguf"
+	defaultLLMSize    = "1.28 GB"
 )
 
 // ModelSpec is a model Sussurro knows how to download and use. GGUF files not
