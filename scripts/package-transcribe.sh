@@ -10,8 +10,8 @@ set -e
 # ── Auto-detection ─────────────────────────────────────────────────────────────
 
 # Version: extracted from internal/version/version.go
-DETECTED_VERSION=$(grep 'Version = ' internal/version/version.go 2>/dev/null \
-    | sed 's/.*"\(.*\)"/\1/' | tr -d '[:space:]') || DETECTED_VERSION="unknown"
+DETECTED_VERSION=$(grep 'Version = ' internal/version/version.go 2>/dev/null |
+    sed 's/.*"\(.*\)"/\1/' | tr -d '[:space:]') || DETECTED_VERSION="unknown"
 
 # Platform: uname -s lowercased (darwin / linux)
 DETECTED_PLATFORM=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -19,9 +19,9 @@ DETECTED_PLATFORM=$(uname -s | tr '[:upper:]' '[:lower:]')
 # Arch: normalise uname -m to Go-style names (amd64 / arm64)
 DETECTED_RAW_ARCH=$(uname -m)
 case "${DETECTED_RAW_ARCH}" in
-    x86_64)        DETECTED_ARCH="amd64"  ;;
-    aarch64|arm64) DETECTED_ARCH="arm64"  ;;
-    *)             DETECTED_ARCH="${DETECTED_RAW_ARCH}" ;;
+x86_64) DETECTED_ARCH="amd64" ;;
+aarch64 | arm64) DETECTED_ARCH="arm64" ;;
+*) DETECTED_ARCH="${DETECTED_RAW_ARCH}" ;;
 esac
 
 VERSION=${1:-"${DETECTED_VERSION}"}
@@ -35,7 +35,7 @@ fi
 
 # MSYS2 / Git Bash report MINGW64_NT-* / MSYS_NT-* → windows
 case "${PLATFORM}" in
-    mingw*|msys*|cygwin*) PLATFORM="windows" ;;
+mingw* | msys* | cygwin*) PLATFORM="windows" ;;
 esac
 
 # Binary name differs on Windows
@@ -126,7 +126,7 @@ cp configs/default.yaml "${RELEASE_DIR}/config.example.yaml"
     echo "Documentation:"
     echo "--------------"
     echo "Full docs:  https://github.com/aploide/sussurro/blob/master/docs/transcribe.md"
-} > "${RELEASE_DIR}/INSTALL.txt"
+} >"${RELEASE_DIR}/INSTALL.txt"
 
 # ── Tarball + checksum ─────────────────────────────────────────────────────────
 
@@ -135,7 +135,7 @@ if [[ "${PLATFORM}" == "windows" ]]; then
     ARCHIVE="${RELEASE_NAME}.zip"
     echo "Creating zip..."
     cd release
-    if command -v zip &> /dev/null; then
+    if command -v zip &>/dev/null; then
         zip -qr "${ARCHIVE}" "${RELEASE_NAME}/"
     else
         bsdtar -a -cf "${ARCHIVE}" "${RELEASE_NAME}/"
@@ -151,10 +151,10 @@ fi
 
 echo "Generating checksum..."
 cd release
-if command -v sha256sum &> /dev/null; then
-    sha256sum "${ARCHIVE}" > "${ARCHIVE}.sha256"
-elif command -v shasum &> /dev/null; then
-    shasum -a 256 "${ARCHIVE}" > "${ARCHIVE}.sha256"
+if command -v sha256sum &>/dev/null; then
+    sha256sum "${ARCHIVE}" >"${ARCHIVE}.sha256"
+elif command -v shasum &>/dev/null; then
+    shasum -a 256 "${ARCHIVE}" >"${ARCHIVE}.sha256"
 else
     echo "Warning: sha256sum or shasum not found. Skipping checksum generation."
 fi
