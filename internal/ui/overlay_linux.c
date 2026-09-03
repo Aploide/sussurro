@@ -38,7 +38,7 @@ struct OverlayData {
     gboolean     provisional;   /* text is still being revised */
     gboolean     copied;        /* text is ready to paste */
     gboolean     finalizing;    /* final recognition pass is running */
-    int          panel_height;  /* 0 when showing the capsule */
+    int          panel_height;  /* current fixed-width panel height */
 
     /* Animation timer source id, 0 when stopped. The timer only runs while
        the overlay is mapped: a hidden capsule must cost nothing. */
@@ -798,6 +798,7 @@ GtkWidget *overlay_create(const OverlayPalette *dark_palette,
     od->window        = win;
     od->drawing_area  = da;
     od->state         = OVERLAY_STATE_IDLE;
+    od->panel_height  = OVERLAY_REST_HEIGHT;
     od->theme_mode    = OVERLAY_THEME_SYSTEM;
     od->system_dark   = TRUE;
     od->dark_palette  = *dark_palette;
@@ -1149,7 +1150,10 @@ static gboolean idle_set_visible(gpointer data)
     OverlayData  *od  = (OverlayData *)g_object_get_data(G_OBJECT(arg->win), "overlay-data");
 
     if (arg->state) {
-        if (od) overlay_start_animation(od);
+        if (od) {
+            reposition_overlay(arg->win, PANEL_WIDTH, od->panel_height);
+            overlay_start_animation(od);
+        }
         gtk_widget_show_all(arg->win);
     } else {
         if (od) overlay_stop_animation(od);
