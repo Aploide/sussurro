@@ -38,7 +38,7 @@ On first run Sussurro will guide you through downloading the AI models.
 
 ## Features
 
-- **Built-in Native Overlay**: A minimal, aesthetically clean floating capsule shows recording/transcribing state — always on top, no taskbar entry *(Linux, macOS & Windows)*
+- **Built-in Native Overlay**: A minimal, aesthetically clean floating panel shows recording state, live transcript text, and how full the recording buffer is — always on top, no taskbar entry *(Linux, macOS & Windows; text and the buffer gauge on Linux and macOS)*
 - **Settings UI**: Dark-themed settings window accessible via system tray or right-click on the overlay *(Linux, macOS & Windows)*
 - **Smart Cleanup**: Removes filler words, handles self-corrections, prevents hallucinations
 - **Local Processing**: No data leaves your machine
@@ -57,10 +57,10 @@ On first run Sussurro will guide you through downloading the AI models.
 
 | Platform | Default hotkey | Default mode | Access Settings |
 | ---------- | --------------- | ------------- | ---------------- |
-| Linux X11 | `Ctrl+Shift+Space` | Push to Talk | System tray or right-click capsule |
-| Linux Wayland | configured in DE | n/a (external shortcut) | System tray or right-click capsule |
-| macOS | `Cmd+Shift+Space` | Push to Talk | System tray or right-click capsule |
-| Windows | `Ctrl+Shift+Space` | Push to Talk | System tray or right-click capsule |
+| Linux X11 | `Ctrl+Shift+Space` | Push to Talk | System tray or right-click overlay |
+| Linux Wayland | configured in DE | n/a (external shortcut) | System tray or right-click overlay |
+| macOS | `Cmd+Shift+Space` | Push to Talk | System tray or right-click overlay |
+| Windows | `Ctrl+Shift+Space` | Push to Talk | System tray or right-click overlay |
 
 The hotkey mode can be changed at any time from **Settings → Global Hotkey → Mode**.
 
@@ -71,7 +71,7 @@ The hotkey mode can be changed at any time from **Settings → Global Hotkey →
 By default Sussurro delivers each transcription as soon as it is ready. That
 behaviour is unchanged, and nothing below is enabled unless you ask for it.
 
-**Review mode** holds the text instead, so you can check it first:
+**Review mode** holds the text instead, so you can check it first *(Linux and macOS — the Windows overlay cannot yet show the held text, and Settings says so)*:
 
 ```yaml
 workflow:
@@ -136,15 +136,17 @@ Requires GTK3 and WebKit2GTK dev headers on Linux. A source build on Linux picks
 
 ---
 
-## UI: The Overlay Capsule
+## UI: The Overlay
 
-When Sussurro runs (Linux, macOS, or Windows), a sleek pill-shaped capsule appears at the bottom-center of your screen:
+When Sussurro runs (Linux, macOS, or Windows), an overlay appears at the bottom-center of your screen. Its bottom edge never moves; on Linux and macOS transcript text grows it upwards as you speak, and shrinks it back as the text clears.
 
 | State | Appearance |
 | ------- | ----------- |
 | **Idle** | 7 softly pulsing white dots |
 | **Recording** | 7 waveform bars animated by your voice |
-| **Transcribing** | "transcribing" text with a shimmer effect |
+| **After recording** | a shimmer-animated status word |
+
+Along the bottom edge, in every state, sits the waveform and a gauge showing how full the recording buffer is, so a long dictation approaching the max-duration cap reads at a glance. On Windows the overlay is still the capsule alone.
 
 **Accessing Settings:**
 
@@ -152,7 +154,7 @@ When Sussurro runs (Linux, macOS, or Windows), a sleek pill-shaped capsule appea
 |--------|-----|
 | Command line | `sussurro --settings` opens Settings in the running instance, on any display server. Bind it to a shortcut or a launcher entry if you don't use a tray. |
 | System tray | Click the Sussurro icon → **Open Settings** (on KDE, new icons may sit behind the **^** "Show hidden icons" chevron) |
-| Right-click overlay | Right-click the capsule → **Open Settings**. The capsule hides when idle while a tray widget is showing the icon; with no tray widget on any panel it stays visible. |
+| Right-click overlay | Right-click the overlay → **Open Settings**. It hides when idle while a tray widget is showing the icon; with no tray widget on any panel it stays visible. |
 | Trigger socket | `scripts/trigger.sh settings` — the same thing `--settings` does, for shortcut tools that already use the script |
 
 The settings window lets you switch Whisper models, download models with a live progress bar, select the transcription language, change the global hotkey, and choose the hotkey mode. All changes take effect immediately — no restart required.

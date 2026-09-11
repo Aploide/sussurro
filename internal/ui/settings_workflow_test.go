@@ -7,16 +7,18 @@ import (
 	"github.com/aploide/sussurro/internal/config"
 )
 
-// probeFor builds a capability probe describing a specific host.
+// probeFor builds a capability probe describing a specific host. Linux and
+// macOS draw transcript text in their overlays; Windows draws only the capsule.
 func probeFor(goos string, installed ...string) capabilityProbe {
 	tools := make(map[string]bool, len(installed))
 	for _, tool := range installed {
 		tools[tool] = true
 	}
 	return capabilityProbe{
-		GOOS:           goos,
-		ToolAvailable:  func(tool string) bool { return tools[tool] },
-		EvdevAvailable: func() (bool, string) { return false, "requires membership of the 'input' group" },
+		GOOS:            goos,
+		ToolAvailable:   func(tool string) bool { return tools[tool] },
+		EvdevAvailable:  func() (bool, string) { return false, "requires membership of the 'input' group" },
+		OverlayPresents: goos == "linux" || goos == "darwin",
 	}
 }
 
@@ -180,19 +182,37 @@ func TestModeAndDeliveryChangesAreMarkedAsNeedingRestart(t *testing.T) {
 	}
 }
 
-// Review text is only rendered by the Linux overlay, and cancel only reaches
-// the controller through the Unix trigger socket, so elsewhere the mode is
-// shown but cannot be chosen (M15).
-func TestReviewModeIsLinuxOnly(t *testing.T) {
-	linux := findChoice(t, buildWorkflowSettings(defaultConfig(), probeFor("linux")).Modes, string(config.ModeReview))
-	if !linux.Available {
-		t.Errorf("review mode unavailable on linux: %q", linux.Reason)
-	}
-	for _, goos := range []string{"windows", "darwin"} {
-		other := findChoice(t, buildWorkflowSettings(defaultConfig(), probeFor(goos)).Modes, string(config.ModeReview))
-		if other.Available || other.Reason == "" {
-			t.Errorf("review mode on %s: available=%v reason=%q, want unavailable with a reason", goos, other.Available, other.Reason)
+// Review mode needs an overlay that can draw the held text. The Linux and
+// macOS panels do; the Windows capsule does not, so there the mode is listed
+// but cannot be chosen (M15).
+func TestReviewModeFollowsOverlayTextSupport(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin"} {
+		mode := findChoice(t, buildWorkflowSettings(defaultConfig(), probeFor(goos)).Modes, string(config.ModeReview))
+		if !mode.Available {
+			t.Errorf("review mode unavailable on %s: %q", goos, mode.Reason)
 		}
+		if mode.Reason != "" {
+			t.Errorf("review mode on %s carries reason %q while available", goos, mode.Reason)
+		}
+	}
+
+	windows := findChoice(t, buildWorkflowSettings(defaultConfig(), probeFor("windows")).Modes, string(config.ModeReview))
+	if windows.Available || windows.Reason == "" {
+		t.Errorf("review mode on windows: available=%v reason=%q, want unavailable with a reason",
+			windows.Available, windows.Reason)
+	}
+}
+
+// The reason a host cannot run review mode has to be the overlay, not the
+// operating system: a probe that draws text makes it available whatever GOOS
+// says, which is what stops a second platform list drifting out of date.
+func TestReviewModeIgnoresGOOSWhenTheOverlayDraws(t *testing.T) {
+	probe := probeFor("windows")
+	probe.OverlayPresents = true
+
+	mode := findChoice(t, buildWorkflowSettings(defaultConfig(), probe).Modes, string(config.ModeReview))
+	if !mode.Available {
+		t.Errorf("review mode unavailable with a text-drawing overlay: %q", mode.Reason)
 	}
 }
 

@@ -10,7 +10,7 @@ import (
 // socket and the framing, so the Go client is exercised against a real
 // server rather than a hand-rolled dial.
 func TestSendReachesTheRunningInstance(t *testing.T) {
-	runtimeDir := t.TempDir()
+	runtimeDir := socketDir(t)
 	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
 
 	dispatch := &fakeDispatcher{}
@@ -40,7 +40,7 @@ func TestSendReachesTheRunningInstance(t *testing.T) {
 }
 
 func TestSendReportsWhenNotRunning(t *testing.T) {
-	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("XDG_RUNTIME_DIR", socketDir(t))
 
 	_, err := Send(CommandSettings)
 	if err == nil || !strings.Contains(err.Error(), "not running") {

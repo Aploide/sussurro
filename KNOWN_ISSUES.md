@@ -36,11 +36,12 @@ the helper is built for CPU and `make` prints a note saying so.
 The review workflow is opt-in and off by default; immediate dictation is
 unaffected by everything here.
 
-- **Review mode is Linux-only for now**: the Linux overlay renders partial and
-  reviewed text, but the Windows and macOS overlays still draw only the
-  capsule, and `cancel` reaches the controller only through the Unix trigger
-  socket. Settings lists the mode as unavailable there, and the streamer is
-  left off so no partials are computed that cannot be shown.
+- **Review mode is not available on Windows**: the Linux and macOS overlays
+  render partial and reviewed text, but the Windows overlay still draws only
+  the capsule. Settings lists the mode as unavailable there, and the streamer
+  is left off so no partials are computed that cannot be shown. The gate is
+  the overlay's ability to draw text, not the operating system, so a Windows
+  overlay that gains it becomes available without a second list to update.
 - **evdev requires the `input` group**: `workflow.input.backend: evdev` reads
   Linux input devices directly and fails with an explanatory error without
   membership. `auto` never opens `/dev/input`, so this affects only hosts that

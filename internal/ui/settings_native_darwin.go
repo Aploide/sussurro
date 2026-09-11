@@ -43,6 +43,29 @@ static void intercept_close(void *win) {
     }
     [w setDelegate:g_settings_delegate];
 }
+
+// work_area_size reports the usable screen area, excluding the menu bar and
+// the Dock, so a window can be capped to what actually fits rather than to a
+// guess about the smallest display anyone might have.
+//
+// visibleFrame is in points, which is the same unit NSWindow geometry — and
+// therefore webview's SetSize — takes. Retina scaling lives below that and
+// must not be multiplied back in here.
+static void work_area_size(int *width, int *height) {
+    *width = 0;
+    *height = 0;
+    // The screen carrying the key window is where a new window is placed, so
+    // it is the one whose work area bounds it.
+    NSScreen *screen = [NSScreen mainScreen];
+    if (!screen) {
+        NSArray<NSScreen *> *screens = [NSScreen screens];
+        if (screens.count == 0) return;
+        screen = screens[0];
+    }
+    NSRect area = [screen visibleFrame];
+    *width  = (int)area.size.width;
+    *height = (int)area.size.height;
+}
 */
 import "C"
 import "unsafe"
@@ -74,11 +97,16 @@ func windowScale() float64 {
 	return 1.0
 }
 
-// workAreaSize returns zero so the caller keeps its built-in budget.
+// workAreaSize reports the usable screen dimensions in the units SetSize
+// takes. Zero means the display could not be queried, and the caller falls
+// back to its conservative built-in budget.
 //
-// Not yet implemented for macOS: NSScreen.visibleFrame would supply it, but
-// the clamp only bites on displays smaller than the content needs, and the
-// built-in budget is already safe there.
+// Returning zero unconditionally was safe but wasteful: the built-in budget
+// describes a 1366x768 laptop, so on any larger Mac display the settings
+// window was capped well below what fits, and the tallest tabs scrolled for
+// no reason.
 func workAreaSize() (int, int) {
-	return 0, 0
+	var width, height C.int
+	C.work_area_size(&width, &height)
+	return int(width), int(height)
 }

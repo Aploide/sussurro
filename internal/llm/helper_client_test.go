@@ -290,7 +290,14 @@ func TestResolveHelperPathHonorsOverride(t *testing.T) {
 }
 
 func TestResolveHelperPathUsesRealExecutableSiblingThroughSymlink(t *testing.T) {
-	realDir := t.TempDir()
+	// The expectation has to go through EvalSymlinks for the same reason the
+	// production code does: on macOS t.TempDir() hands back a path under
+	// /var, which is itself a symlink to /private/var, so an unresolved
+	// "want" never matches the resolved sibling the function returns.
+	realDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	executable := filepath.Join(realDir, "sussurro")
 	helper := filepath.Join(realDir, helperBinaryName())
 	if err := os.WriteFile(executable, []byte("app"), 0o700); err != nil {

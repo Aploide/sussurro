@@ -71,6 +71,13 @@ type Manager struct {
 	// where taking that lock is what stalled capture in sussurro-xvj.36.
 	fillSource func() (float64, bool)
 
+	// trayIconRecording is the state the tray icon currently shows, and
+	// trayIconSet records that one has been pushed at all, so the first
+	// update is never mistaken for a no-op. Both are read from the update
+	// goroutine while the tray's own callbacks may still be settling.
+	trayIconRecording atomic.Bool
+	trayIconSet       atomic.Bool
+
 	// trayReady reports whether a system tray is currently showing the icon.
 	// Some desktops never host an SNI item, and a tray widget can be removed
 	// while the app runs; there the overlay's right-click menu is the only
@@ -146,8 +153,9 @@ func (m *Manager) Run() {
 		func() { m.Quit() },
 	)
 
-	// 5. System tray (runs its own goroutine internally on Linux via DBus).
-	go m.runTray()
+	// 5. System tray. How it is started is platform-specific: macOS needs it
+	//    attached to this thread's AppKit loop, the others run their own.
+	m.startTray()
 
 	// 6. The overlay is created unmapped and stays that way while the tray is
 	//    given a chance to appear. Only if it does not does the overlay come

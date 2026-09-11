@@ -255,7 +255,7 @@ static void reposition_overlay(GtkWidget *win, int width, int height)
     if (monitor) gdk_monitor_get_geometry(monitor, &geo);
 
     int x = geo.x + (geo.width - width) / 2;
-    int y = geo.y + geo.height - height - 24;
+    int y = geo.y + geo.height - height - OVERLAY_BOTTOM_MARGIN;
     gtk_window_move(GTK_WINDOW(win), x, y);
 #endif
 }
@@ -343,7 +343,7 @@ static PangoLayout *panel_text_layout(cairo_t *cr, OverlayData *od)
 /* Rounded rectangle path for the expanded panel. */
 static void panel_path(cairo_t *cr, double w, double h)
 {
-    const double r = 12.0;
+    const double r = PANEL_RADIUS;
     cairo_new_sub_path(cr);
     cairo_arc(cr, w - r, r,     r, -G_PI / 2, 0);
     cairo_arc(cr, w - r, h - r, r, 0,          G_PI / 2);
@@ -840,7 +840,8 @@ GtkWidget *overlay_create(const OverlayPalette *dark_palette,
     gtk_layer_set_anchor(GTK_WINDOW(win), GTK_LAYER_SHELL_EDGE_BOTTOM, TRUE);
     gtk_layer_set_anchor(GTK_WINDOW(win), GTK_LAYER_SHELL_EDGE_LEFT,   FALSE);
     gtk_layer_set_anchor(GTK_WINDOW(win), GTK_LAYER_SHELL_EDGE_RIGHT,  FALSE);
-    gtk_layer_set_margin(GTK_WINDOW(win), GTK_LAYER_SHELL_EDGE_BOTTOM, 24);
+    gtk_layer_set_margin(GTK_WINDOW(win), GTK_LAYER_SHELL_EDGE_BOTTOM,
+                         OVERLAY_BOTTOM_MARGIN);
     gtk_layer_set_exclusive_zone(GTK_WINDOW(win), -1);
     gtk_layer_set_keyboard_mode(GTK_WINDOW(win), GTK_LAYER_SHELL_KEYBOARD_MODE_NONE);
     gtk_layer_set_namespace(GTK_WINDOW(win), "sussurro");

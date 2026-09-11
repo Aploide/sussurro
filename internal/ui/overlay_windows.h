@@ -3,7 +3,10 @@
 #include "overlay_state.h"
 #include "overlay_palette.h"
 
-/* ---- Geometry (identical to overlay_linux.h) ---- */
+/* ---- Geometry ----
+ * The Windows overlay is still the capsule: it draws no transcript text, so it
+ * does not share the panel geometry in overlay_panel.h that the GTK and Cocoa
+ * backends now use. These values describe the pill alone. */
 #define OVERLAY_WIDTH    220
 #define OVERLAY_HEIGHT    52
 #define OVERLAY_RADIUS    26.0f

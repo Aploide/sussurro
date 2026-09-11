@@ -30,7 +30,7 @@ func (m *Manager) onTrayReady() {
 	// and only then may the overlay stop standing in as the fallback.
 	watchTrayHost(m.onTrayHosted)
 
-	systray.SetIcon(trayIcon)
+	setTrayIcon(trayIcon, true)
 	systray.SetTooltip("Sussurro")
 
 	mSettings := systray.AddMenuItem("Open Settings", "Open the settings window")
@@ -77,10 +77,34 @@ func (m *Manager) onTrayExit() {
 }
 
 // updateTrayIcon swaps the tray icon based on recording state.
+//
+// Only a genuine change is pushed. Every published view model reaches this,
+// including one per partial transcription — several a second while streaming —
+// and each SetIcon re-decodes the image. On macOS it also hops to the main
+// thread and waits for it, so re-setting the icon it already has would stall
+// the update goroutine behind AppKit for no visible result.
 func (m *Manager) updateTrayIcon(state AppState) {
-	if state == StateRecording {
-		systray.SetIcon(trayIconRec)
-	} else {
-		systray.SetIcon(trayIcon)
+	recording := state == StateRecording
+	if !m.trayIconChanged(recording) {
+		return
 	}
+	if recording {
+		setTrayIcon(trayIconRec, false)
+		return
+	}
+	setTrayIcon(trayIcon, true)
+}
+
+// trayIconChanged reports whether the icon on screen differs from the one this
+// state calls for, and records the new one. The first call always reports a
+// change, so the icon is pushed once even when the initial state matches the
+// default.
+//
+// Both swaps run unconditionally: short-circuiting the second would leave the
+// "already pushed" flag unset on a first call that did change the icon, and
+// the next matching state would then push a redundant update.
+func (m *Manager) trayIconChanged(recording bool) bool {
+	pushed := m.trayIconSet.Swap(true)
+	unchanged := m.trayIconRecording.Swap(recording) == recording
+	return !(unchanged && pushed)
 }

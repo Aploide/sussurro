@@ -53,8 +53,14 @@ LLAMA_STAMP   = $(LLAMA_DIR)/.stamp-$(GO_LLAMA_COMMIT)-$(LLAMA_BACKEND)
 # desktop to keep responsive, and halving their few cores (macos-14 has 3)
 # doubled the release build time, so CI=<anything> uses every core.
 NCORES    := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)
-BUILD_JOBS ?= $(if $(CI),$(NCORES),$(shell awk 'BEGIN { n = int($(NCORES) / 2); print n < 1 ? 1 : n }'))
-NPROCS    := $(BUILD_JOBS)
+# The ternary is parenthesised because BSD awk (macOS) parses `print a ? b : c`
+# as `(print a) ? b : c` and dies with a syntax error. It printed that error on
+# every single make invocation — $(shell) passes stderr through — while the
+# empty result left NPROCS unset, so every `-j $(NPROCS)` below became a bare
+# `-j` and the native builds forked without any limit at all.
+BUILD_JOBS ?= $(if $(CI),$(NCORES),$(shell awk 'BEGIN { n = int($(NCORES) / 2); print (n < 1 ? 1 : n) }'))
+# Last line of defence: an unusable awk must not turn into an unbounded -j.
+NPROCS    := $(or $(strip $(BUILD_JOBS)),1)
 
 # Run compilers at low CPU and IO priority, so an interactive desktop keeps
 # its responsiveness even while a long build saturates its share of cores.
@@ -175,7 +181,12 @@ endif
 endif
 
 # ---- UI / overlay dependencies (Linux only) ----
-ifneq ($(OS),Windows_NT)
+# Guarded on Linux, not merely "not Windows": GTK and WebKitGTK exist on
+# neither macOS nor Windows, and probing for them on macOS printed "UI build
+# will fail" on every single make invocation while the Cocoa build was in fact
+# fine. The variables below expand to empty elsewhere, which is what the
+# darwin and Windows recipes already assume.
+ifeq ($(UNAME_S),Linux)
 # The pkg-config module is gtk-layer-shell-0; "gtk-layer-shell" is the *package*
 # name on most distros and never resolves, so probe both (older 0.6 releases
 # shipped only the unsuffixed .pc).
@@ -216,7 +227,7 @@ endif
 # StatusNotifierItem protocol. No libappindicator / libayatana-appindicator is
 # linked, so there is no backend to select at build time.
 UI_TAGS :=
-endif  # !Windows_NT
+endif  # Linux
 
 # Whisper CGO link flags
 VULKAN_LDFLAGS ?=
@@ -237,7 +248,18 @@ LLAMA_LDFLAGS := -lstdc++ -fopenmp -static
 else
 LLAMA_LDFLAGS := $(LLAMA_VULKAN_LDFLAGS)
 endif
-TEST_LDFLAGS := $(WHISPER_LDFLAGS) $(LLAMA_LDFLAGS)
+
+# The Cocoa frameworks the overlay, tray, and settings window link against.
+# The cgo directives in the darwin sources name them too, so this is belt and
+# braces — but `build` passes them explicitly and `test` compiles the same
+# packages, so leaving them out here is a difference waiting to bite.
+ifeq ($(UNAME_S),Darwin)
+DARWIN_UI_LDFLAGS := -framework Cocoa -framework QuartzCore -framework CoreVideo -framework Foundation
+else
+DARWIN_UI_LDFLAGS :=
+endif
+
+TEST_LDFLAGS := $(WHISPER_LDFLAGS) $(LLAMA_LDFLAGS) $(DARWIN_UI_LDFLAGS)
 
 # Export environment variables for CGO
 export C_INCLUDE_PATH
@@ -400,12 +422,13 @@ ifeq ($(OS),Windows_NT)
 	CGO_LDFLAGS="$(WHISPER_LDFLAGS)" \
 	go build $(GO_LDFLAGS) -o $(BUILD_DIR)/$(APP_NAME)$(EXE) ./$(CMD_DIR)
 else ifeq ($(UNAME_S),Darwin)
-	CGO_LDFLAGS="$(WHISPER_LDFLAGS) -framework Cocoa -framework QuartzCore -framework CoreVideo -framework Foundation" \
-	go build $(GO_LDFLAGS) -o $(BUILD_DIR)/$(APP_NAME) ./$(CMD_DIR)
+	@echo "  Build jobs   : $(NPROCS) of $(NCORES) cores ($(NICE))"
+	CGO_LDFLAGS="$(WHISPER_LDFLAGS) $(DARWIN_UI_LDFLAGS)" \
+	$(NICE) go build $(GO_LDFLAGS) -o $(BUILD_DIR)/$(APP_NAME) ./$(CMD_DIR)
 else
 	@echo "  Layer shell  : $(HAS_LAYER_SHELL)$(if $(LAYER_SHELL_PC), ($(LAYER_SHELL_PC)))"
 	@echo "  Vulkan       : whisper $(HAS_VULKAN), llm helper $(HAS_LLAMA_VULKAN)"
-	@echo "  Build jobs   : $(BUILD_JOBS) of $(NCORES) cores ($(NICE))"
+	@echo "  Build jobs   : $(NPROCS) of $(NCORES) cores ($(NICE))"
 	@echo "  Build tags   : $(UI_TAGS)"
 	PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_UI)" \
 	CGO_CFLAGS="$(LAYER_CFLAGS) $(WV_CFLAGS)" \

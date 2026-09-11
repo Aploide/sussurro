@@ -30,11 +30,26 @@ config:
 - **Linux release binaries are CPU-only.** Vulkan acceleration is a
   build-time option of a source build (see *Added*), so `models.llm.gpu_layers`
   is inert on the published Linux artifacts.
-- **Review mode is Linux-only for now**: the Windows and macOS overlays do not
-  yet render partial or reviewed text, so `workflow.mode: review` is marked
-  unavailable there.
+- **Review mode is unavailable on Windows only**: macOS now renders partial
+  and reviewed text, so `workflow.mode: review` and live transcription are
+  offered there as well as on Linux. The Windows overlay still draws only the
+  capsule, and `workflow.mode: review` stays marked unavailable there.
+- **The macOS overlay is now the same panel as the Linux one**, not a
+  220x52 capsule: a fixed-width panel whose bottom edge holds still while
+  transcript text grows it upwards, carrying the waveform and the
+  recording-buffer gauge along that bottom edge in every state.
 
 ### Added
+- **macOS draws the same overlay panel as Linux.** The Cocoa backend renders
+  the live transcript, the provisional/finalizing/copied text colours, and the
+  recording-buffer gauge, all on the shared panel geometry
+  (`internal/ui/overlay_panel.h`). Live transcription and review mode follow:
+  both were gated on the overlay being able to show text, and both are now
+  offered on macOS.
+- **The macOS settings window is sized to the real display.** `workAreaSize`
+  now reports `NSScreen.visibleFrame`, where it previously returned zero and
+  left the window capped to a built-in budget describing a 1366x768 laptop —
+  so the tallest tabs scrolled on any larger Mac display for no reason.
 - **`sussurro --settings`** opens the Settings window of the running instance
   over the trigger socket, on every display server and without `nc` or
   `socat`; the route to Settings no longer depends on a tray widget being
@@ -88,6 +103,39 @@ config:
 - Settings are grouped into tabs, with larger text.
 
 ### Fixed
+- **No tray icon appeared on macOS.** `systray.Run` was called from a
+  goroutine, and its darwin backend runs `[NSApp run]` on whatever thread
+  invokes it; AppKit accepts that only on the main thread, which the webview
+  already owns. macOS now registers the status item through
+  `systray.RunWithExternalLoop` from the main thread and lets the existing run
+  loop pump it.
+- **The idle tray icon is a template image on macOS**, so the solid white
+  glyph is tinted to the menu bar's own foreground colour instead of being
+  invisible against a light one. The recording icon stays plain, because its
+  meaning is in its colour. The icon is also only pushed when it actually
+  changes — every partial transcript reached that call, and on macOS each push
+  waits on the main thread.
+- **The macOS overlay covered the Dock.** It was placed relative to the raw
+  display rect; it now uses the work area, as the GTK backend does. It also
+  picks its display when it appears and holds it, rather than re-deriving it
+  from the focused window on every update — which could teleport the panel to
+  another screen and re-clamp its height mid-dictation.
+- **macOS animations ran at double speed on a ProMotion display.** The
+  display-link callback advanced the clock by a fixed 1/60 s regardless of the
+  refresh rate it was actually firing at.
+- **`make` mis-parsed its own job count on macOS.** BSD awk rejects
+  `print a ? b : c`, so every invocation printed an awk syntax error,
+  `BUILD_JOBS` came out empty, and every `-j $(NPROCS)` in the native builds
+  became a bare `-j`, forking without any limit.
+- **`make` warned that the UI build would fail on macOS**, because it probed
+  for GTK and WebKitGTK on every platform that is not Windows. The probe is
+  now Linux-only, where those libraries are actually used.
+- **Two tests failed only on macOS**: the helper-path test compared an
+  unresolved `/var` path against a resolved `/private/var` one, and the
+  trigger-socket tests bound sockets under `t.TempDir()`, whose test-named
+  paths exceed the 104-byte `sun_path` limit.
+- **The Settings window reported `LINUX` as the platform on Windows**; only
+  macOS had a branch.
 - **The global hotkey never registered in UI mode**: it was installed against
   a nil overlay before the window existed, so the X11 grab silently did
   nothing.

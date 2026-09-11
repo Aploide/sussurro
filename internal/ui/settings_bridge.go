@@ -301,8 +301,11 @@ func buildInitialData(mgr *Manager) initialData {
 	}
 
 	platform := "LINUX"
-	if runtime.GOOS == "darwin" {
+	switch runtime.GOOS {
+	case "darwin":
 		platform = "MACOS"
+	case "windows":
+		platform = "WINDOWS"
 	}
 
 	isWayland := os.Getenv("WAYLAND_DISPLAY") != "" ||

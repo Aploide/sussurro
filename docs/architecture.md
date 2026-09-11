@@ -142,7 +142,9 @@ application. Every part is off by default; see
 
 - **Role**: The Manager publishes immutable `ViewModel` values describing what
   to show. Platforms that can render transcript text implement the optional
-  `Presenter` interface; the rest fall back to the existing capsule.
+  `Presenter` interface — Linux and macOS do, Windows does not — and the rest
+  fall back to the capsule. `ui.OverlayPresents()` answers the same question
+  before the overlay exists, which is when the pipeline has to be wired.
 
 ---
 
@@ -150,7 +152,7 @@ application. Every part is off by default; see
 
 The UI layer runs alongside the pipeline and provides visual feedback without blocking transcription.
 
-### Overlay Capsule
+### Overlay
 
 **Linux** (`internal/ui/overlay_linux.c`)
 
@@ -161,19 +163,39 @@ The UI layer runs alongside the pipeline and provides visual feedback without bl
 
 **macOS** (`internal/ui/overlay_darwin.m`)
 
-- Implemented in Objective-C on top of **Cocoa** and **CoreVideo** (`CVDisplayLink` for smooth 60 fps animation).
+- Implemented in Objective-C on top of **Cocoa** and **CoreVideo** (`CVDisplayLink` for smooth 60 fps animation). The display link runs only while the panel is on screen.
 - `NSPanel` at `NSStatusWindowLevel` with `hidesOnDeactivate=NO` and `NSWindowCollectionBehaviorFullScreenAuxiliary` so it stays visible above full-screen apps.
 - Global hotkey registered via **`golang.design/x/hotkey`** (CGEventTap) in `app_darwin.go`, after `[NSApp run]` is active.
 - Uses `orderFrontRegardless` instead of `makeKeyAndOrderFront` to avoid stealing keyboard focus.
-- **Frosted-glass backdrop**: an `NSVisualEffectView` (`NSVisualEffectMaterialHUDWindow`, `NSVisualEffectBlendingModeBehindWindow`, `NSAppearanceNameVibrantDark`) sits below the drawing view and is masked to the pill silhouette via a `CAShapeLayer`, so the OS renders a real blur of whatever is behind the window.
-- **1.5 px white border** drawn as an inset pill stroke (`rgba(1, 1, 1, 0.25)`) over a light dark tint (`rgba(0, 0, 0, 0.28)`).
+- **Frosted-glass backdrop**: an `NSVisualEffectView` (`NSVisualEffectMaterialHUDWindow`, `NSVisualEffectBlendingModeBehindWindow`, `NSAppearanceNameVibrantDark`) sits below the drawing view and is masked to the panel silhouette via a `CAShapeLayer`, so the OS renders a real blur of whatever is behind the window. The mask is re-cut whenever the panel resizes.
+- The drawing view is **flipped** (`isFlipped` returns `YES`), so its geometry reads the same way as the Cairo original it mirrors: origin top-left, y growing downwards.
 
-**Shared visual states** (both platforms):
+**The unified panel** (`internal/ui/overlay_panel.h`, Linux and macOS)
+
+Both backends draw one overlay in every state rather than a capsule that swaps
+for a panel — swapping between two shapes produced a visible jolt, and made
+anything drawn on the capsule vanish the moment text appeared. The geometry
+constants are shared by both so the two cannot drift apart.
+
+- A **permanent control row** is anchored to the bottom edge: the waveform (or
+  the status word, once recording stops) on the left, the recording-buffer
+  gauge filling the rest. The bottom edge never moves.
+- **Transcript text grows the panel upwards** from its resting height. Past a
+  cap of 60% of the screen height the panel stops growing and the text
+  anchors to its end, so the newest words stay on screen.
+- Text colour distinguishes **provisional** (still being revised),
+  **finalizing**, and **copied** from settled text.
+
+**Shared visual states** (all platforms):
 
 - **Idle** — 7 softly pulsing white dots
 - **Recording** — 7 waveform bars scaled live by microphone RMS
-- **Transcribing** — shimmer-animated "transcribing" label
-- Right-click context menu on the capsule: **Open Settings** / **Quit**.
+- **Post-recording** — a shimmer-animated status word
+- Right-click context menu on the overlay: **Open Settings** / **Quit**.
+
+The Windows overlay still draws only the capsule; `ui.OverlayPresents()`
+reports which backends render text, and review mode and partial transcription
+are gated on it rather than on `GOOS`.
 
 ### Global Hotkey (`internal/hotkey`, `internal/ui/app_*.go`)
 
@@ -189,11 +211,20 @@ The UI layer runs alongside the pipeline and provides visual feedback without bl
 - **Hotkey recording modal**: displays a live preview of the key combination as keys are held, and finalises the combo on key release. Requires at least one non-modifier key.
 - **Model switch UX**: selecting a different Whisper model writes the new path to `~/.sussurro/config.yaml` and updates `mgr.cfg` in memory (so the active badge reflects the new selection immediately). A persistent blue banner prompts the user to restart to load the new model; the running pipeline is not interrupted.
 - On macOS, `NSWindowDelegate` intercepts the close button to hide (not destroy) the window, preserving the WebKit backing store across open/close cycles.
+- **Sizing** (`settings_native_*.go`): the window is sized so its CSS viewport matches what the content needs. `workAreaSize()` reports the usable screen — `gdk_monitor_get_workarea` on Linux, `NSScreen.visibleFrame` on macOS — so the cap follows the real display rather than a built-in 1366x768 assumption. `windowScale()` corrects for fractional display scaling, which only Linux applies to page content; macOS sizes in points and returns 1.0.
 
 ### System Tray (`internal/ui/app.go`)
 
 - Powered by **`fyne.io/systray`**.
 - On Linux the backend is pure Go over the DBus StatusNotifierItem protocol — no `libappindicator3` / `libayatana-appindicator3` is linked, so a single binary runs on every distro regardless of which variant it ships. macOS uses the native `NSStatusItem`; Windows uses `Shell_NotifyIcon`.
+- **How it is started is platform-specific** (`tray_platform_*.go`). Linux and
+  Windows use `systray.Run` on a goroutine of its own. macOS cannot: that call
+  runs `[NSApp run]` on whatever goroutine invoked it, and AppKit requires the
+  main thread — which the webview already owns. macOS therefore uses
+  `systray.RunWithExternalLoop` and calls the returned start function on the
+  main thread from `Manager.Run`, letting the webview's run loop pump the
+  status item.
+- **Icon rendering is platform-specific too.** The idle glyph is solid white and is pushed on macOS as a *template image*, so AppKit reads only its alpha and tints it to the menu bar's foreground colour — a plain white icon disappears against a light menu bar. The recording glyph is red and is pushed as authored, because a template would erase the distinction. The icon is pushed only when it changes: every published view model reaches `updateTrayIcon`, including one per partial transcript.
 - Menu: **Open Settings** / **Quit**.
 
 ### Process Exit
@@ -204,5 +235,5 @@ The UI layer runs alongside the pipeline and provides visual feedback without bl
 ### Main Thread Ownership
 
 - In UI mode on Linux, `webview.Run()` owns the main OS thread (calls `gtk_main` internally).
-- In UI mode on macOS, `[NSApp run]` (called inside `webview.Run()`) owns the main OS thread.
+- In UI mode on macOS, `[NSApp run]` (called inside `webview.Run()`) owns the main OS thread. The tray's status item and the overlay panel are both created on that thread before the loop starts, and every later update is marshalled onto it with `dispatch_async(dispatch_get_main_queue(), ...)`.
 - In headless mode (`--no-ui`), `golang.design/x/mainthread` owns the main thread so that `golang.design/x/hotkey` works correctly on X11 and macOS.

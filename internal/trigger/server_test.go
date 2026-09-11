@@ -371,7 +371,7 @@ func TestReleaseWithNothingRecordingIsIdle(t *testing.T) {
 
 func TestStartRequiresADispatcher(t *testing.T) {
 	server := newTestServer(nil, nil)
-	server.socket = filepath.Join(t.TempDir(), "sussurro.sock")
+	server.socket = filepath.Join(socketDir(t), "sussurro.sock")
 
 	if err := server.Start(nil); err == nil {
 		t.Fatal("Start(nil) error = nil, want a refusal")
@@ -381,7 +381,7 @@ func TestStartRequiresADispatcher(t *testing.T) {
 func TestServerRespondsOverTheSocket(t *testing.T) {
 	dispatch := &fakeDispatcher{}
 	server := newTestServer(dispatch, &fakeHandler{})
-	server.socket = filepath.Join(t.TempDir(), "sussurro.sock")
+	server.socket = filepath.Join(socketDir(t), "sussurro.sock")
 
 	if err := server.Start(dispatch); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -402,7 +402,7 @@ func TestClientWithoutTrailingNewlineIsAnswered(t *testing.T) {
 	// newline and keep the connection open for the reply.
 	dispatch := &fakeDispatcher{}
 	server := newTestServer(dispatch, &fakeHandler{})
-	server.socket = filepath.Join(t.TempDir(), "sussurro.sock")
+	server.socket = filepath.Join(socketDir(t), "sussurro.sock")
 	server.readTimeout = 100 * time.Millisecond
 	if err := server.Start(dispatch); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -421,7 +421,7 @@ func TestClientWithoutTrailingNewlineIsAnswered(t *testing.T) {
 func TestSilentClientIsNotTreatedAsAToggle(t *testing.T) {
 	dispatch := &fakeDispatcher{}
 	server := newTestServer(dispatch, &fakeHandler{})
-	server.socket = filepath.Join(t.TempDir(), "sussurro.sock")
+	server.socket = filepath.Join(socketDir(t), "sussurro.sock")
 	server.readTimeout = 50 * time.Millisecond
 	if err := server.Start(dispatch); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -511,7 +511,7 @@ func TestSettingsRefusedWithoutUI(t *testing.T) {
 func TestServerRejectsUnknownCommandOverTheSocket(t *testing.T) {
 	dispatch := &fakeDispatcher{}
 	server := newTestServer(dispatch, nil)
-	server.socket = filepath.Join(t.TempDir(), "sussurro.sock")
+	server.socket = filepath.Join(socketDir(t), "sussurro.sock")
 
 	if err := server.Start(dispatch); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -529,7 +529,7 @@ func TestServerRejectsUnknownCommandOverTheSocket(t *testing.T) {
 func TestStopIsIdempotent(t *testing.T) {
 	dispatch := &fakeDispatcher{}
 	server := newTestServer(dispatch, nil)
-	server.socket = filepath.Join(t.TempDir(), "sussurro.sock")
+	server.socket = filepath.Join(socketDir(t), "sussurro.sock")
 
 	if err := server.Start(dispatch); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -608,7 +608,7 @@ func TestDeliverWithNothingReadyIsNotAnError(t *testing.T) {
 // first one's socket. Both would then appear to work while only one received
 // commands.
 func TestNewServerRefusesALiveSocket(t *testing.T) {
-	dir := t.TempDir()
+	dir := socketDir(t)
 	t.Setenv("XDG_RUNTIME_DIR", dir)
 
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -630,7 +630,7 @@ func TestNewServerRefusesALiveSocket(t *testing.T) {
 // TestNewServerReplacesAStaleSocket keeps the crash-recovery path working: a
 // socket file left by a dead process must not block startup forever.
 func TestNewServerReplacesAStaleSocket(t *testing.T) {
-	dir := t.TempDir()
+	dir := socketDir(t)
 	t.Setenv("XDG_RUNTIME_DIR", dir)
 
 	// A socket file nobody is accepting on, as a crashed run would leave.

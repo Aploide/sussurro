@@ -48,6 +48,9 @@ type capabilityProbe struct {
 	GOOS string
 	// EvdevAvailable reports whether /dev/input can be read.
 	EvdevAvailable func() (bool, string)
+	// OverlayPresents reports whether this platform's overlay draws
+	// transcript text. Review mode has nowhere to show held text without it.
+	OverlayPresents bool
 }
 
 // buildWorkflowSettings renders the current workflow configuration together
@@ -71,15 +74,18 @@ func buildWorkflowSettings(cfg *config.Config, probe capabilityProbe) workflowSe
 	}
 }
 
-// interactionModeChoices lists the interaction modes. Review needs the overlay
-// to draw the reviewed text and the trigger socket client for cancel, and only
-// the Linux overlay does either yet, so elsewhere it is listed but unavailable.
+// interactionModeChoices lists the interaction modes. Review needs an overlay
+// that can draw the reviewed text; cancel travels over the trigger socket,
+// which every platform with a Unix socket now runs. The requirement is
+// therefore asked of the overlay rather than of GOOS — the Linux and macOS
+// panels draw text, the Windows capsule does not, and the day it does it
+// becomes available without a second list to remember to update.
 // The workflow is wired once at startup, so a change only applies after a
 // restart.
 func interactionModeChoices(probe capabilityProbe) []choice {
 	reviewAvailable, reviewReason := true, ""
-	if probe.GOOS != "linux" {
-		reviewAvailable, reviewReason = false, "Linux only for now"
+	if !probe.OverlayPresents {
+		reviewAvailable, reviewReason = false, "the overlay on this platform cannot show reviewed text"
 	}
 	return []choice{
 		{Value: string(config.ModeImmediate), Label: "Immediate", Available: true, Restart: true},
@@ -148,9 +154,10 @@ func deliveryBackendChoices(probe capabilityProbe) []choice {
 // hostCapabilities probes the machine the application is running on.
 func hostCapabilities() capabilityProbe {
 	return capabilityProbe{
-		GOOS:           runtime.GOOS,
-		ToolAvailable:  delivery.ToolAvailable,
-		EvdevAvailable: evdevAvailable,
+		GOOS:            runtime.GOOS,
+		ToolAvailable:   delivery.ToolAvailable,
+		EvdevAvailable:  evdevAvailable,
+		OverlayPresents: OverlayPresents(),
 	}
 }
 
