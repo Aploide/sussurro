@@ -89,7 +89,9 @@ func (outcome InputOutcome) Stopped() bool { return outcome == InputStopped }
 
 // Recorder is the immediate-mode recording control consumed by input events.
 type Recorder interface {
-	StartRecording()
+	// StartRecording reports whether a recording began; it is refused while
+	// one is already running or the previous one is still being transcribed.
+	StartRecording() bool
 	StopRecording() bool
 }
 
@@ -103,8 +105,9 @@ func DispatchImmediateInput(recorder Recorder, event InputEvent) (recordingStopp
 func dispatchImmediateInput(recorder Recorder, event InputEvent) InputOutcome {
 	switch event {
 	case InputPress:
-		recorder.StartRecording()
-		return InputStarted
+		if recorder.StartRecording() {
+			return InputStarted
+		}
 	case InputRelease:
 		if recorder.StopRecording() {
 			return InputStopped
@@ -113,8 +116,9 @@ func dispatchImmediateInput(recorder Recorder, event InputEvent) InputOutcome {
 		if recorder.StopRecording() {
 			return InputStopped
 		}
-		recorder.StartRecording()
-		return InputStarted
+		if recorder.StartRecording() {
+			return InputStarted
+		}
 	}
 	return InputIgnored
 }

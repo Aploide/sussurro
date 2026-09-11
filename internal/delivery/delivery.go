@@ -59,6 +59,10 @@ type Backend interface {
 	Type(text string) error
 	// Submit sends the Enter key.
 	Submit() error
+	// CanSubmit reports whether Submit can work on this host. Delivery checks
+	// it before typing, so a submit request the backend cannot honour fails
+	// up front instead of after the text has already been inserted.
+	CanSubmit() bool
 	// Name identifies the backend for logging and diagnostics.
 	Name() string
 }
@@ -112,6 +116,11 @@ func (d *Deliverer) Do(action Action, text string) error {
 	}
 	if text == "" {
 		return fmt.Errorf("delivery: refusing to %s empty text", action)
+	}
+	// Refuse before touching the window: pasting and then failing on Enter
+	// would leave the text inserted, and a retry would paste it again.
+	if action.Submits() && !d.backend.CanSubmit() {
+		return fmt.Errorf("delivery via %s: cannot submit on this host; deliver without submit instead", d.backend.Name())
 	}
 
 	d.waiter.WaitForRelease()

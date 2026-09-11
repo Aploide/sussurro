@@ -16,7 +16,9 @@ type Capabilities struct {
 	// available. Nil means the host cannot paste either.
 	Clipboard Backend
 	// ClipboardWrite stages text without pasting, for the clipboard-only
-	// backend. Nil falls back to the Clipboard backend's own staging.
+	// backend. It is the only capability that backend needs, so a host with a
+	// clipboard but no paste injector can still run clipboard-only. Nil means
+	// the host has no clipboard at all.
 	ClipboardWrite ClipboardWriter
 }
 
@@ -59,8 +61,11 @@ func SelectBackend(name BackendName, capabilities Capabilities) (Backend, error)
 		return newYdotoolBackend(capabilities.Run), nil
 
 	case BackendClipboardOnly:
-		if capabilities.Clipboard == nil {
-			return nil, fmt.Errorf("delivery backend %q is unavailable on this host", name)
+		// Only the clipboard is needed: requiring the paste injector here
+		// would make review mode unavailable on exactly the hosts (no uinput
+		// access) where clipboard-only is the sensible choice.
+		if capabilities.ClipboardWrite == nil {
+			return nil, fmt.Errorf("delivery backend %q requires a clipboard on this host", name)
 		}
 		return NewClipboardOnlyBackend(capabilities.ClipboardWrite, string(BackendClipboardPaste)), nil
 

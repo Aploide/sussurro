@@ -88,8 +88,13 @@ func buildWorkflow(
 	return workflow{
 		dispatch:   controller,
 		controller: controller,
-		partial: func(generation uint64, text string) {
-			controller.OnPartial(session.SessionID(generation), text)
+		partial: func(_ uint64, text string) {
+			// The streamer's generation counts its own starts and stops and
+			// does not line up with controller sessions; the recognizer knows
+			// which session the recording belongs to.
+			if id, ok := recognizer.Active(); ok {
+				controller.OnPartial(id, text)
+			}
 		},
 	}
 }
@@ -146,7 +151,8 @@ func selectDeliveryBackend(cfg *config.Config, injector delivery.Injector, log *
 //
 // Failure to start is not fatal. On Wayland it is the only input route, but
 // elsewhere the hotkeys still work, so a taken socket degrades rather than
-// preventing dictation entirely.
+// preventing dictation entirely. The native input backend is the one setting
+// that leaves the socket off altogether (see useTriggerSocket).
 //
 // uiMgr is the running interface, or nil in headless mode, and gates the
 // settings command. It is taken as the concrete type rather than trigger.UI so

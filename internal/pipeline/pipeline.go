@@ -98,6 +98,9 @@ type Pipeline struct {
 	// lastDropWarn throttles the drop warning: the audio thread can drop
 	// hundreds of frames a second, and one line per frame would bury the log.
 	lastDropWarn atomic.Int64
+	// dropsReported is how many dropped frames the capture loop has already
+	// warned about, so it warns only when the count has moved since.
+	dropsReported atomic.Uint64
 }
 
 // StopReason names what ended a recording, so the log can distinguish a user
@@ -224,9 +227,24 @@ func (p *Pipeline) runAfterCurrentLocked() {
 	}
 }
 
-// SetOnCompletion sets a callback to be called when processing is done
+// SetOnCompletion adds a callback to be called when processing is done. It
+// fires after every pass, including ones that published no result. Callbacks
+// compose in installation order rather than replacing one another, so the
+// review recognizer's hook cannot be lost to a later diagnostic one. Must be
+// called before Start().
 func (p *Pipeline) SetOnCompletion(callback func()) {
-	p.onCompletion = callback
+	if callback == nil {
+		return
+	}
+	previous := p.onCompletion
+	if previous == nil {
+		p.onCompletion = callback
+		return
+	}
+	p.onCompletion = func() {
+		previous()
+		callback()
+	}
 }
 
 // SetResultConsumer installs the consumer that receives completed recognition
@@ -240,6 +258,13 @@ func (p *Pipeline) SetResultConsumer(consumer ResultConsumer) {
 // which is the default.
 func (p *Pipeline) SetStreamer(streamer *Streamer) {
 	p.streamer = streamer
+}
+
+// Recording reports whether audio is currently being captured. Unlike
+// SnapshotRecording it copies nothing, so it is the right check when only
+// the state is wanted.
+func (p *Pipeline) Recording() bool {
+	return p.isRecording.Load()
 }
 
 // SnapshotRecording returns a copy of the audio captured so far, and whether a
@@ -308,10 +333,24 @@ func (p *Pipeline) warnIfSlow(step string, start time.Time) {
 }
 
 // onFrameDropped records a discarded audio frame. It runs on the realtime
-// audio thread, so it does no allocation, takes no lock, and rate-limits
-// itself rather than logging every frame.
+// audio thread, so it only bumps a counter: no allocation, no lock, and no
+// logging, since the logger itself formats and writes. The warning is
+// emitted from the capture loop, which is the goroutine that failed to keep
+// up (see warnIfDropped).
 func (p *Pipeline) onFrameDropped() {
-	total := p.droppedFrames.Add(1)
+	p.droppedFrames.Add(1)
+}
+
+// warnIfDropped reports frames dropped since the last warning. It runs on
+// the capture goroutine, off the realtime thread, and is rate-limited by the
+// same window as the slow-step warnings.
+func (p *Pipeline) warnIfDropped() {
+	total := p.droppedFrames.Load()
+	if total == 0 || total == p.dropsReported.Load() {
+		// total == 0 also covers a StartRecording reset caught between its
+		// two stores, which would otherwise warn about nothing.
+		return
+	}
 
 	now := time.Now().UnixNano()
 	last := p.lastDropWarn.Load()
@@ -319,10 +358,10 @@ func (p *Pipeline) onFrameDropped() {
 		return
 	}
 	if !p.lastDropWarn.CompareAndSwap(last, now) {
-		// Another callback is already reporting this window.
 		return
 	}
-	p.log.Warn("Dropping captured audio; the consumer is not keeping up",
+	p.dropsReported.Store(total)
+	p.log.Warn("Dropped captured audio; the consumer is not keeping up",
 		"dropped_frames_total", total)
 }
 
@@ -365,13 +404,16 @@ func (p *Pipeline) Stop() {
 	p.log.Debug("Pipeline stopped")
 }
 
-// StartRecording begins accumulating audio data
-func (p *Pipeline) StartRecording() {
+// StartRecording begins accumulating audio data. It reports whether a
+// recording began: it is refused while the pipeline is stopped, already
+// recording, or still transcribing the previous recording, so a caller that
+// tracks sessions does not open one that will never produce a result.
+func (p *Pipeline) StartRecording() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	if p.stopped || p.isRecording.Load() || p.isTranscribing {
-		return
+		return false
 	}
 
 	// Drain channel to ensure no stale audio is included
@@ -383,6 +425,7 @@ func (p *Pipeline) StartRecording() {
 	p.recordingStart = time.Now()
 	// Per-recording, so the count logged at stop describes this utterance.
 	p.droppedFrames.Store(0)
+	p.dropsReported.Store(0)
 	// Reuse the backing array from the previous recording to avoid re-allocating
 	// every time. On the very first recording we make an upfront allocation sized
 	// to the configured max duration so appends never need to grow the slice.
@@ -397,6 +440,7 @@ func (p *Pipeline) StartRecording() {
 	if p.streamer != nil {
 		p.streamer.Start()
 	}
+	return true
 }
 
 // StopRecording stops accumulating and triggers processing
@@ -520,15 +564,10 @@ func (p *Pipeline) notifyFinished(text string) {
 
 // tooShortMessage is shown when a recording is discarded for being below the
 // recognition floor. The acceptance criterion for sussurro-xvj.52 is that a
-// genuine lower bound is reported rather than the dictation vanishing.
-const tooShortMessage = "Too short to transcribe"
-
-// notifyTooShort tells the user their dictation was discarded as too short,
-// reusing the finished-text path so the message appears where the transcript
+// genuine lower bound is reported rather than the dictation vanishing. It
+// travels through the finished-text path so it appears where the transcript
 // would have been rather than the overlay simply closing.
-func (p *Pipeline) notifyTooShort() {
-	p.notifyFinished(tooShortMessage)
-}
+const tooShortMessage = "Too short to transcribe"
 
 // reusableTailSamples is how much unseen audio a partial may have missed and
 // still be reused. Speech shorter than this cannot carry a word, so nothing
@@ -591,6 +630,7 @@ func (p *Pipeline) captureLoop() {
 // has reached its configured ceiling. Finalization happens after releasing the
 // pipeline lock: the streaming worker snapshots under the same lock.
 func (p *Pipeline) handleCapturedChunk(chunk []float32, maxSamples int) {
+	p.warnIfDropped()
 	lockWait := time.Now()
 	p.mu.Lock()
 	p.warnIfSlow("acquiring the pipeline lock", lockWait)
@@ -660,7 +700,11 @@ func (p *Pipeline) processSegmentWithPartial(samples []float32, partial string) 
 		p.log.Warn("Recording too short for recognition, discarding",
 			"duration", time.Duration(durationSeconds*float64(time.Second)).Round(time.Millisecond),
 			"minimum", min)
-		p.notifyTooShort()
+		// Recorded as the final text so the single deferred notifyFinished
+		// carries it. Emitting it directly and then letting the deferred
+		// notification follow with an idle state wiped the message before
+		// the user could read it.
+		p.setFinalText(tooShortMessage)
 		return
 	}
 
@@ -679,7 +723,7 @@ func (p *Pipeline) processSegmentWithPartial(samples []float32, partial string) 
 		p.log.Warn("Final pass failed; preserving the last partial",
 			"partial_chars", utf8.RuneCountInString(strings.TrimSpace(partial)))
 		p.notifyPhase(session.StateCleaningUp, partial)
-		p.finishSegment(partial, partial, start, asrDuration)
+		p.finishSegment(partial, start, asrDuration)
 		return
 	}
 
@@ -700,7 +744,6 @@ func (p *Pipeline) processSegmentWithPartial(samples []float32, partial string) 
 	// pass may have invented a trailing phrase, as in sussurro-d2h.
 	finalChars := utf8.RuneCountInString(strings.TrimSpace(text))
 	partialChars := utf8.RuneCountInString(strings.TrimSpace(partial))
-	minimumText := partial
 	if finalPassLooksTruncated(text, partial) {
 		// Transcript bodies remain debug-only: warning-level logging must not
 		// expose a user's dictated text merely because recognition regressed.
@@ -710,16 +753,13 @@ func (p *Pipeline) processSegmentWithPartial(samples []float32, partial string) 
 	} else if finalChars < partialChars {
 		p.log.Warn("Final pass rejected trailing text from the last partial",
 			"final_chars", finalChars, "partial_chars", partialChars)
-		// Cleanup must not restore the rejected streaming suffix merely because
-		// its input is shorter than the partial.
-		minimumText = text
 	}
 
 	// Recognition is done; what follows is cleanup and delivery. Announce the
 	// change so the overlay stops claiming to transcribe.
 	p.notifyPhase(session.StateCleaningUp, text)
 
-	p.finishSegment(text, minimumText, start, asrDuration)
+	p.finishSegment(text, start, asrDuration)
 }
 
 // finalPassShorter reports whether a later stage returned less text than the
@@ -829,18 +869,19 @@ func (p *Pipeline) completeFromPartial(text string) {
 		}
 	}()
 
-	p.finishSegment(text, text, time.Now(), 0)
+	p.finishSegment(text, time.Now(), 0)
 }
 
 // finishSegment turns a recognised transcription into a published result.
-// minimumText is the shortest recognition result cleanup may deliver. It is
-// normally the last partial, or the final decode when that decode rejected an
-// invented streaming suffix.
+//
+// The text is already reconciled against the last streaming partial by the
+// caller; nothing here compares lengths again. Cleanup is deletion-only, so a
+// shorter result is its normal, correct output.
 //
 // asrDuration is how long recognition took, or zero on the partial-reuse path
 // where none ran, so the completion log can attribute the wait after speech
 // ends to a stage rather than reporting one opaque total.
-func (p *Pipeline) finishSegment(text, minimumText string, start time.Time, asrDuration time.Duration) {
+func (p *Pipeline) finishSegment(text string, start time.Time, asrDuration time.Duration) {
 
 	// A word-count floor used to sit here, discarding anything under four
 	// words as a false positive. That silently lost ordinary short dictations
@@ -901,11 +942,15 @@ func (p *Pipeline) finishSegment(text, minimumText string, start time.Time, asrD
 		cleanedText = p.llmEngine.NormalizeDictionary(text)
 	}
 
-	if finalPassShorter(cleanedText, minimumText) {
-		p.log.Warn("Cleanup shorter than the last partial; preserving partial",
-			"cleaned_chars", utf8.RuneCountInString(strings.TrimSpace(cleanedText)),
-			"partial_chars", utf8.RuneCountInString(strings.TrimSpace(minimumText)))
-		cleanedText = minimumText
+	// A length guard used to sit here, reverting to the recognised text
+	// whenever cleanup returned fewer characters. Cleanup removes fillers and
+	// normalises dictionary terms, so its output is routinely shorter, and
+	// the guard threw away every such edit whenever streaming was on. Only a
+	// cleaner that erased the dictation outright is still overridden.
+	if strings.TrimSpace(cleanedText) == "" {
+		p.log.Warn("Cleanup returned no text; delivering the recognised text",
+			"raw_chars", utf8.RuneCountInString(strings.TrimSpace(text)))
+		cleanedText = text
 		cleaned = false
 	}
 

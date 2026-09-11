@@ -13,9 +13,20 @@ import (
 // Manager is the top-level UI controller.
 // It implements StateNotifier so the pipeline can call it directly.
 type Manager struct {
-	cfg      *config.Config
-	overlay  Overlay
-	settings *settingsWindow
+	cfg     *config.Config
+	overlay Overlay
+
+	// settings is created inside Run(), while the tray menu and the trigger
+	// socket's settings command can already be asking for it from their own
+	// goroutines, so it is published atomically rather than plainly assigned.
+	settings atomic.Pointer[settingsWindow]
+
+	// clipboardOnly is the delivery method fixed at startup. The pipeline's
+	// delivery consumer is wired once from the same config, so a later
+	// Settings change to workflow.delivery.backend must not change the
+	// status word before the restart that applies it — and reading the live
+	// config here raced with the Settings goroutine writing it.
+	clipboardOnly bool
 
 	// themeCallback applies a successfully saved appearance change. Settings
 	// and native UI callbacks can arrive on different goroutines.
@@ -33,8 +44,15 @@ type Manager struct {
 	// this process is running the immediate workflow.
 	hotkeyMu       sync.Mutex
 	bindings       HotkeyBindings
-	reviewMode     bool
 	replaceHotkeys func(Overlay, HotkeyBindings)
+
+	// reviewMode reports that the review controller is driving presentation.
+	// The pipeline's own notifications are then ignored: its OnFinished
+	// follows the controller's Ready card on the same channel and would
+	// replace it with an idle model that hides the overlay a second later.
+	// Atomic because the pipeline reads it from its goroutines while startup
+	// may still be settling it.
+	reviewMode atomic.Bool
 
 	// Called when the user toggles lowercase output in Settings.
 	onLowercaseOutput func(bool)
@@ -65,6 +83,7 @@ type Manager struct {
 	// has nothing to linger over. Both are guarded by hideMu.
 	hideMu         sync.Mutex
 	hideTimer      *time.Timer
+	hideSeq        uint64
 	overlayVisible bool
 
 	// hideLingerOverride shortens the linger in tests. Zero means hideLinger.
@@ -77,14 +96,25 @@ type Manager struct {
 
 // NewManager constructs the Manager.  Call Run() to start the event loop.
 func NewManager(cfg *config.Config) (*Manager, error) {
-	return &Manager{
+	m := &Manager{
 		cfg:            cfg,
-		reviewMode:     cfg.Workflow.ReviewEnabled(),
+		clipboardOnly:  cfg.Workflow.ClipboardOnlyDelivery(),
 		replaceHotkeys: reinstallOverlayHotkey,
 		stateChangeCh:  make(chan ViewModel, 16),
 		rmsCh:          make(chan float32, 256),
 		quitCh:         make(chan struct{}),
-	}, nil
+	}
+	m.reviewMode.Store(cfg.Workflow.ReviewEnabled())
+	return m, nil
+}
+
+// SetReviewMode records whether a review controller is presenting to this
+// Manager. NewManager assumes the configured mode; the caller corrects it when
+// review mode could not be wired and dictation fell back to immediate, since
+// the pipeline is then the only source of overlay updates and must not be
+// ignored.
+func (m *Manager) SetReviewMode(enabled bool) {
+	m.reviewMode.Store(enabled)
 }
 
 // Run initialises the overlay and settings window, starts the tray, and
@@ -95,7 +125,8 @@ func (m *Manager) Run() {
 	m.configureOverlayTheme()
 
 	// 2. Create the webview settings window (hidden).
-	m.settings = newSettingsWindow(m)
+	settings := newSettingsWindow(m)
+	m.settings.Store(settings)
 
 	// 3. Apply the hotkey now that the overlay exists.
 	//
@@ -110,7 +141,7 @@ func (m *Manager) Run() {
 
 	// 4. Right-click context menu on the overlay (fallback when tray isn't visible).
 	installOverlayContextMenu(m.overlay,
-		func() { m.settings.Show() },
+		func() { settings.Show() },
 		func() { m.Quit() },
 	)
 
@@ -131,7 +162,7 @@ func (m *Manager) Run() {
 	go m.processUpdates()
 
 	// 8. Block in the webview / GTK / NSApp main loop.
-	m.settings.Run()
+	settings.Run()
 }
 
 // hideLinger is how long finished text stays on screen after a dictation
@@ -174,15 +205,21 @@ func (m *Manager) render(model ViewModel) {
 	// over, and taking this path for it meant showing the overlay purely to
 	// hide it a second later. That is what flashed the overlay at startup,
 	// where markTrayReady renders exactly such a model (sussurro-xvj.62).
-	hasResult := model.Transcript != "" || m.overlayVisible
-	if model.Visible() || !trayReady || !hasResult {
+	//
+	// Without a tray host the overlay never hides, but finished text still
+	// has to age out: lingerExpired clears it and leaves the capsule up, so
+	// the linger applies to any text, and only the going-idle case depends on
+	// the tray.
+	hasResult := model.Transcript != "" || (trayReady && m.overlayVisible)
+	if model.Visible() || !hasResult {
 		m.overlayVisible = model.Visible() || !trayReady
 		m.hideMu.Unlock()
 		present(m.overlay, model, trayReady)
 		return
 	}
 
-	// Draw the finished state and keep it on screen for the linger, then hide.
+	// Draw the finished state and keep it on screen for the linger, then hide
+	// (or, with no tray host, clear the text and keep the capsule).
 	//
 	// present() hides whenever the model is not Visible(), and a finished
 	// dictation is StateIdle, so the draw has to bypass that decision — going
@@ -199,21 +236,34 @@ func (m *Manager) render(model ViewModel) {
 	}
 	m.overlay.Show()
 
+	m.hideSeq++
+	seq := m.hideSeq
 	m.hideTimer = time.AfterFunc(m.lingerFor(), func() {
-		m.hideMu.Lock()
-		m.hideTimer = nil
-		m.hideMu.Unlock()
-
-		// Clear the text as it goes, so a later show cannot flash the
-		// previous dictation.
-		cleared := model
-		cleared.Transcript = ""
-		m.hideMu.Lock()
-		m.overlayVisible = false
-		m.hideMu.Unlock()
-		present(m.overlay, cleared, trayReady)
+		m.lingerExpired(seq, model, trayReady)
 	})
 	m.hideMu.Unlock()
+}
+
+// lingerExpired hides the overlay once a finished dictation's linger has run
+// out. seq identifies the linger that fired: Stop() cannot cancel a callback
+// that has already started and is waiting on hideMu, so one whose sequence
+// is no longer current has been superseded by a newer model and must not
+// hide what that model put on screen.
+func (m *Manager) lingerExpired(seq uint64, model ViewModel, trayReady bool) {
+	m.hideMu.Lock()
+	defer m.hideMu.Unlock()
+	if seq != m.hideSeq || m.hideTimer == nil {
+		return
+	}
+	m.hideTimer = nil
+	m.overlayVisible = !trayReady
+
+	// Clear the text as it goes, so a later show cannot flash the previous
+	// dictation. The lock is held across the draw so a model arriving now
+	// renders after this hide, never before it.
+	cleared := model
+	cleared.Transcript = ""
+	present(m.overlay, cleared, trayReady)
 }
 
 // trayGracePeriod is how long the tray is given to register before the overlay
@@ -284,17 +334,29 @@ func (m *Manager) Quit() {
 // would otherwise dereference nil. Dropping the request is right here — the
 // window the user asked for does not exist yet.
 func (m *Manager) ToggleSettings() {
-	if m.settings == nil {
-		return
+	if settings := m.settings.Load(); settings != nil {
+		settings.Toggle()
 	}
-	m.settings.Toggle()
+}
+
+// showSettings raises the settings window. The tray menu uses it: "Settings"
+// there should never mean "close settings". Dropped before Run() has created
+// the window, for the same reason as ToggleSettings.
+func (m *Manager) showSettings() {
+	if settings := m.settings.Load(); settings != nil {
+		settings.Show()
+	}
 }
 
 // --- StateNotifier implementation (compatible with pipeline.StateNotifier) ---
 
 // OnStateChange is called by the pipeline from its own goroutine.
+//
+// In review mode the controller's presenter owns the overlay and reports the
+// same lifecycle through review-aware models, so the pipeline's view is
+// dropped here rather than letting it collapse held text.
 func (m *Manager) OnStateChange(state AppState) {
-	if !state.Valid() {
+	if !state.Valid() || m.reviewMode.Load() {
 		return
 	}
 	m.publish(CompactModel(state))
@@ -304,6 +366,9 @@ func (m *Manager) OnStateChange(state AppState) {
 // on screen while post-recording work runs, rather than blanking it, and
 // labels the phase that is actually running.
 func (m *Manager) OnPhase(state session.State, partial string) {
+	if m.reviewMode.Load() {
+		return
+	}
 	m.Present(ViewModel{
 		State:      state,
 		Transcript: partial,
@@ -317,7 +382,14 @@ func (m *Manager) OnPhase(state session.State, partial string) {
 // OnFinished implements pipeline.TranscribingNotifier: it shows the completed
 // transcription so the user can read what was produced. render() displays it,
 // then hides the overlay a second later.
+//
+// That linger-and-hide is exactly wrong in review mode, where the same result
+// has just been presented as the Ready card and is waiting on the user, so
+// the notification is ignored there.
 func (m *Manager) OnFinished(text string) {
+	if m.reviewMode.Load() {
+		return
+	}
 	status := m.completionStatus()
 	m.Present(ViewModel{
 		State:      session.StateIdle,
@@ -334,7 +406,7 @@ func (m *Manager) OnFinished(text string) {
 // typing into. Copying without pasting is not, so it says so explicitly
 // rather than leaving the user unsure whether anything was delivered.
 func (m *Manager) completionStatus() string {
-	if m.cfg != nil && m.cfg.Workflow.ClipboardOnlyDelivery() {
+	if m.clipboardOnly {
 		// Short enough to sit in the overlay's waveform slot, which is where
 		// status words are shown once recording has stopped.
 		return "Copied"
@@ -452,7 +524,7 @@ func (m *Manager) effectiveHotkeyBindings() HotkeyBindings {
 
 func (m *Manager) effectiveHotkeyBindingsLocked() HotkeyBindings {
 	bindings := m.bindings
-	if !m.reviewMode {
+	if !m.reviewMode.Load() {
 		bindings.Edit = ""
 	}
 	return bindings

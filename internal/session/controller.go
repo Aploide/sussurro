@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"sync"
+	"time"
 )
 
 // ReviewState is the lifecycle of a review-mode dictation. Immediate mode does
@@ -59,8 +60,11 @@ type SessionID uint64
 // Recognizer drives capture and transcription for the controller. Calls are
 // made from the controller's goroutine and must not block.
 type Recognizer interface {
-	// StartCapture begins recording for the given session.
-	StartCapture(id SessionID)
+	// StartCapture begins recording for the given session. It reports whether
+	// recording actually started; false leaves the controller where it was,
+	// so a press during in-flight transcription cannot open a session that
+	// will never see a result.
+	StartCapture(id SessionID) bool
 	// StopCapture ends recording and starts final transcription. The result
 	// is expected via Controller.OnResult.
 	StopCapture(id SessionID)
@@ -89,6 +93,11 @@ type Presenter interface {
 	OnReviewText(text string)
 	OnDeliveryError(err error)
 }
+
+// tapThreshold separates a tap on the push-to-talk key over ready text, which
+// delivers it, from a hold, which records a revision instruction. It matches
+// the "tap to deliver" hint the overlay shows.
+const tapThreshold = 250 * time.Millisecond
 
 // Controller is the review-mode state machine. It is platform-neutral: input
 // gestures, transcription, editing, delivery, and presentation all arrive
@@ -126,6 +135,15 @@ type Controller struct {
 	// editOwner identifies which press entered Editing. Only its matching
 	// release may stop that capture.
 	editOwner editGestureOwner
+	// editPressedAt is when the legacy press entered Editing, so its release
+	// can tell a tap from a hold.
+	editPressedAt time.Time
+
+	// spawn runs work that must not block the gesture source, such as a
+	// delivery that waits for key release and types into another window.
+	spawn func(func())
+	// now is the clock the tap threshold is measured against.
+	now func() time.Time
 }
 
 type editGestureOwner uint8
@@ -151,6 +169,8 @@ func NewController(
 		deliverer:  deliverer,
 		presenter:  presenter,
 		log:        log,
+		spawn:      func(work func()) { go work() },
+		now:        time.Now,
 	}
 }
 
@@ -189,65 +209,108 @@ func (c *Controller) setState(state ReviewState) func() {
 // resulting state.
 func (c *Controller) Handle(event InputEvent) ReviewState {
 	c.inputMu.Lock()
-	defer c.inputMu.Unlock()
-	return c.handle(event)
+	state, after := c.handle(event)
+	c.inputMu.Unlock()
+	if after != nil {
+		after()
+	}
+	return state
 }
 
-func (c *Controller) handle(event InputEvent) ReviewState {
+// handle applies event under inputMu. The returned function, if any, is work
+// the gesture requested that must run once inputMu is released, so a
+// delivery started by a tap cannot hold up the next gesture or a cancel.
+func (c *Controller) handle(event InputEvent) (ReviewState, func()) {
 	switch event {
 	case InputPress:
-		return c.press()
+		return c.press(), nil
 	case InputRelease:
 		return c.release()
 	case InputToggle:
 		return c.toggle()
 	case InputEditPress:
-		return c.editPress()
+		return c.editPress(), nil
 	case InputEditRelease:
-		return c.editRelease()
+		return c.editRelease(), nil
 	default:
 		c.log.Debug("Ignoring invalid input event", "event", event)
-		return c.State()
+		return c.State(), nil
 	}
+}
+
+// startCapture asks the recognizer to record for a new session while inputMu
+// is held. It returns the session to transition into, or false when recording
+// could not start — typically because the previous transcription is still in
+// flight — in which case the controller stays where it is.
+func (c *Controller) startCapture() (SessionID, bool) {
+	c.mu.Lock()
+	c.current++
+	id := c.current
+	c.mu.Unlock()
+
+	if !c.recognizer.StartCapture(id) {
+		c.log.Debug("Capture did not start", "session", id)
+		return id, false
+	}
+	return id, true
 }
 
 // press starts a recording, or starts capturing an edit instruction when text
 // is already held for review.
 func (c *Controller) press() ReviewState {
 	c.mu.Lock()
+	state := c.state
+	c.mu.Unlock()
 
-	var notify func()
-	switch c.state {
+	switch state {
 	case ReviewIdle:
-		c.current++
+		id, ok := c.startCapture()
+		if !ok {
+			return c.State()
+		}
+
+		c.mu.Lock()
+		// The capture succeeded, but a callback may have moved on meanwhile.
+		if c.state != ReviewIdle || c.current != id {
+			state := c.state
+			c.mu.Unlock()
+			c.recognizer.CancelCapture(id)
+			return state
+		}
 		c.text = ""
 		c.previous = ""
 		c.hasPrevious = false
 		c.instruction = ""
 		c.editOwner = editGestureNone
-		notify = c.setState(ReviewRecording)
-		id := c.current
+		notify := c.setState(ReviewRecording)
 		c.mu.Unlock()
 		notify()
-		c.recognizer.StartCapture(id)
 		return ReviewRecording
 
 	case ReviewReady:
 		// Holding the gesture over ready text records a revision instead of
-		// starting a fresh dictation.
-		c.current++
+		// starting a fresh dictation; a tap delivers it (see release).
+		id, ok := c.startCapture()
+		if !ok {
+			return c.State()
+		}
+
+		c.mu.Lock()
+		if c.state != ReviewReady || c.current != id {
+			state := c.state
+			c.mu.Unlock()
+			c.recognizer.CancelCapture(id)
+			return state
+		}
 		c.instruction = ""
 		c.editOwner = editGestureLegacy
-		notify = c.setState(ReviewEditing)
-		id := c.current
+		c.editPressedAt = c.now()
+		notify := c.setState(ReviewEditing)
 		c.mu.Unlock()
 		notify()
-		c.recognizer.StartCapture(id)
 		return ReviewEditing
 
 	default:
-		state := c.state
-		c.mu.Unlock()
 		c.log.Debug("Ignoring press", "state", state)
 		return state
 	}
@@ -264,16 +327,26 @@ func (c *Controller) editPress() ReviewState {
 		c.log.Debug("Ignoring edit press", "state", state)
 		return state
 	}
+	c.mu.Unlock()
 
-	c.current++
+	id, ok := c.startCapture()
+	if !ok {
+		return c.State()
+	}
+
+	c.mu.Lock()
+	if c.state != ReviewReady || c.current != id {
+		state := c.state
+		c.mu.Unlock()
+		c.recognizer.CancelCapture(id)
+		return state
+	}
 	c.instruction = ""
 	c.editOwner = editGestureDedicated
 	notify := c.setState(ReviewEditing)
-	id := c.current
 	c.mu.Unlock()
 
 	notify()
-	c.recognizer.StartCapture(id)
 	return ReviewEditing
 }
 
@@ -300,7 +373,10 @@ func (c *Controller) editRelease() ReviewState {
 }
 
 // release ends a recording or an edit instruction and begins the async work.
-func (c *Controller) release() ReviewState {
+// The returned function, if any, delivers the held text after inputMu is
+// released: a tap on the push-to-talk key over ready text delivers rather
+// than editing.
+func (c *Controller) release() (ReviewState, func()) {
 	c.mu.Lock()
 
 	switch c.state {
@@ -310,7 +386,7 @@ func (c *Controller) release() ReviewState {
 		c.mu.Unlock()
 		notify()
 		c.recognizer.StopCapture(id)
-		return ReviewFinalizing
+		return ReviewFinalizing, nil
 
 	case ReviewEditing:
 		if c.editOwner != editGestureLegacy {
@@ -318,27 +394,47 @@ func (c *Controller) release() ReviewState {
 			owner := c.editOwner
 			c.mu.Unlock()
 			c.log.Debug("Ignoring release", "state", state, "owner", owner)
-			return state
+			return state, nil
 		}
 		c.editOwner = editGestureNone
-		notify := c.setState(ReviewApplyingEdit)
 		id := c.current
+		if c.now().Sub(c.editPressedAt) < tapThreshold {
+			// Too brief to hold an instruction: the user tapped to deliver.
+			// The capture is abandoned and the text goes back to Ready so
+			// Deliver finds it there.
+			notify := c.setState(ReviewReady)
+			c.mu.Unlock()
+			c.recognizer.CancelCapture(id)
+			notify()
+			return ReviewReady, func() {
+				c.spawn(func() {
+					// Backend failures are already presented by Deliver;
+					// ErrNothingToDeliver means a newer gesture won the race.
+					if err := c.Deliver(false); err != nil {
+						c.log.Debug("Tap delivery did not complete", "error", err)
+					}
+				})
+			}
+		}
+		notify := c.setState(ReviewApplyingEdit)
 		c.mu.Unlock()
 		notify()
 		c.recognizer.StopCapture(id)
-		return ReviewApplyingEdit
+		return ReviewApplyingEdit, nil
 
 	default:
+		// Ready is reached without a release when the recording hit the
+		// duration cap while the key was still held; that release is spent.
 		state := c.state
 		c.mu.Unlock()
 		c.log.Debug("Ignoring release", "state", state)
-		return state
+		return state, nil
 	}
 }
 
 // toggle starts a recording when idle and ends it when recording, so a single
 // gesture can drive the whole flow.
-func (c *Controller) toggle() ReviewState {
+func (c *Controller) toggle() (ReviewState, func()) {
 	c.mu.Lock()
 	state := c.state
 	c.mu.Unlock()
@@ -347,7 +443,7 @@ func (c *Controller) toggle() ReviewState {
 	case ReviewRecording, ReviewEditing:
 		return c.release()
 	default:
-		return c.press()
+		return c.press(), nil
 	}
 }
 
@@ -371,6 +467,15 @@ func (c *Controller) OnPartial(id SessionID, text string) {
 // OnResult accepts a completed transcription. In Finalizing it becomes the
 // reviewed text; in ApplyingEdit it is the spoken instruction, which is handed
 // to the editor. Results from superseded or cancelled sessions are dropped.
+//
+// Recording and Editing are accepted too: the pipeline finalises on its own
+// when a recording hits the duration cap, so the result can arrive while the
+// key is still held. The release that follows then finds nothing to stop.
+//
+// An empty result means the pipeline published nothing — the recording was
+// too short, silent, or recognition failed. There is no text to review, so
+// the session ends rather than waiting in Finalizing for a result that will
+// never come.
 func (c *Controller) OnResult(id SessionID, text string) {
 	c.mu.Lock()
 
@@ -382,7 +487,15 @@ func (c *Controller) OnResult(id SessionID, text string) {
 	}
 
 	switch c.state {
-	case ReviewFinalizing:
+	case ReviewRecording, ReviewFinalizing:
+		if text == "" {
+			c.text = ""
+			notify := c.setState(ReviewIdle)
+			c.mu.Unlock()
+			c.log.Debug("No text to review", "session", id)
+			notify()
+			return
+		}
 		c.text = text
 		notify := c.setState(ReviewReady)
 		reviewed := c.text
@@ -392,10 +505,18 @@ func (c *Controller) OnResult(id SessionID, text string) {
 			c.presenter.OnReviewText(reviewed)
 		}
 
-	case ReviewApplyingEdit:
+	case ReviewEditing, ReviewApplyingEdit:
+		// A capped edit capture leaves Editing without its release; the
+		// release must then not stop a capture that is already over.
+		c.editOwner = editGestureNone
 		c.instruction = text
 		current, instruction := c.text, c.instruction
+		notify := func() {}
+		if c.state == ReviewEditing {
+			notify = c.setState(ReviewApplyingEdit)
+		}
 		c.mu.Unlock()
+		notify()
 		// An empty instruction cannot revise anything; keep the text as-is.
 		if instruction == "" {
 			c.finishEdit(id, current)
@@ -488,7 +609,7 @@ func (c *Controller) Deliver(submit bool) error {
 	}
 
 	notify := c.setState(ReviewDelivering)
-	id, text := c.current, c.text
+	text := c.text
 	c.mu.Unlock()
 	notify()
 
@@ -496,10 +617,13 @@ func (c *Controller) Deliver(submit bool) error {
 
 	c.mu.Lock()
 	// A cancel during delivery must not drag the controller back out of Idle.
-	if id != c.current || c.state != ReviewDelivering {
+	// The check is on state alone: every takeover that matters (Cancel) leaves
+	// Delivering, whereas a refused press bumps the session id without
+	// changing state, and nothing else would ever leave Delivering then.
+	if c.state != ReviewDelivering {
 		state := c.state
 		c.mu.Unlock()
-		c.log.Debug("Discarding delivery outcome for superseded session", "session", id, "state", state)
+		c.log.Debug("Discarding delivery outcome for superseded session", "state", state)
 		return err
 	}
 
@@ -574,10 +698,13 @@ func NewImmediateDispatcher(recorder Recorder) InputDispatcher {
 // Dispatch implements InputDispatcher for review mode.
 func (c *Controller) Dispatch(event InputEvent) InputOutcome {
 	c.inputMu.Lock()
-	defer c.inputMu.Unlock()
-
 	before := c.State()
-	after := c.handle(event)
+	after, work := c.handle(event)
+	c.inputMu.Unlock()
+	if work != nil {
+		work()
+	}
+
 	if after == before {
 		return InputIgnored
 	}

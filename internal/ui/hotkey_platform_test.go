@@ -73,3 +73,34 @@ func TestWindowsReplacementRetainsLiveOwnership(t *testing.T) {
 		}
 	}
 }
+
+// The config documents "esc" as a key name; XStringToKeysym only knows
+// "Escape", so the X11 parser has to map it itself or the grab silently
+// registers nothing.
+func TestLinuxKeysymParserKnowsEsc(t *testing.T) {
+	body, err := os.ReadFile("overlay_linux.c")
+	if err != nil {
+		t.Fatalf("reading overlay_linux.c: %v", err)
+	}
+	source := string(body)
+	for _, name := range []string{`"esc"`, `"escape"`} {
+		if !strings.Contains(source, name+")") && !strings.Contains(source, name+" ") {
+			t.Errorf("Linux keysym parser does not map %s", name)
+		}
+	}
+	if !strings.Contains(source, "has no X11 keycode") {
+		t.Error("an unmapped hotkey is still dropped silently")
+	}
+}
+
+// The portal's Read reply wraps the color scheme in two variants (M10); the
+// reader must unwrap until it reaches the integer.
+func TestLinuxPortalReadUnwrapsNestedVariants(t *testing.T) {
+	body, err := os.ReadFile("overlay_linux.c")
+	if err != nil {
+		t.Fatalf("reading overlay_linux.c: %v", err)
+	}
+	if !strings.Contains(string(body), "while (g_variant_is_of_type(value, G_VARIANT_TYPE_VARIANT))") {
+		t.Error("portal_color_scheme does not unwrap nested variants; the startup read is discarded")
+	}
+}

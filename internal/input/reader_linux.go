@@ -96,8 +96,15 @@ func (r *Reader) readLoop() {
 				return
 			default:
 			}
-			if !errors.Is(err, io.EOF) && !errors.Is(err, os.ErrClosed) {
-				r.log.Error("evdev read failed", "error", err)
+			// Nobody asked the loop to stop, so from here on no gesture will
+			// arrive and the hotkey is silently dead. EOF and a closed
+			// device (the keyboard was unplugged, or a suspend cycle
+			// re-created it) are as fatal as a read error, and were once
+			// dropped without a word.
+			if errors.Is(err, io.EOF) || errors.Is(err, os.ErrClosed) {
+				r.log.Error("evdev device closed; recording gestures will no longer arrive", "error", err)
+			} else {
+				r.log.Error("evdev read failed; recording gestures will no longer arrive", "error", err)
 			}
 			return
 		}

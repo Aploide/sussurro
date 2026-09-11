@@ -162,6 +162,40 @@ func TestInputBackendChangesAreMarkedAsNeedingRestart(t *testing.T) {
 	}
 }
 
+// The interaction mode and delivery backend are wired once at startup too
+// (M9): "Saved" without a restart notice left the overlay status lying about
+// what would happen to the next dictation.
+func TestModeAndDeliveryChangesAreMarkedAsNeedingRestart(t *testing.T) {
+	settings := buildWorkflowSettings(defaultConfig(), probeFor("linux"))
+
+	for _, option := range settings.Modes {
+		if !option.Restart {
+			t.Errorf("mode %q is not marked as requiring a restart", option.Value)
+		}
+	}
+	for _, option := range settings.DeliveryBackends {
+		if !option.Restart {
+			t.Errorf("delivery backend %q is not marked as requiring a restart", option.Value)
+		}
+	}
+}
+
+// Review text is only rendered by the Linux overlay, and cancel only reaches
+// the controller through the Unix trigger socket, so elsewhere the mode is
+// shown but cannot be chosen (M15).
+func TestReviewModeIsLinuxOnly(t *testing.T) {
+	linux := findChoice(t, buildWorkflowSettings(defaultConfig(), probeFor("linux")).Modes, string(config.ModeReview))
+	if !linux.Available {
+		t.Errorf("review mode unavailable on linux: %q", linux.Reason)
+	}
+	for _, goos := range []string{"windows", "darwin"} {
+		other := findChoice(t, buildWorkflowSettings(defaultConfig(), probeFor(goos)).Modes, string(config.ModeReview))
+		if other.Available || other.Reason == "" {
+			t.Errorf("review mode on %s: available=%v reason=%q, want unavailable with a reason", goos, other.Available, other.Reason)
+		}
+	}
+}
+
 func TestEveryConfiguredValueIsOffered(t *testing.T) {
 	settings := buildWorkflowSettings(defaultConfig(), probeFor("linux"))
 

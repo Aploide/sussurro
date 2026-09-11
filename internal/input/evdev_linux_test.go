@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -361,4 +362,205 @@ func TestDiscoverKeyboardsDoesNotRequireDeviceAccess(t *testing.T) {
 		}
 	}
 	t.Logf("discovered %d candidate keyboards on this host", len(candidates))
+}
+
+// Capability bitmaps as sysfs prints them: a full keyboard ends in a word
+// with bits 1-31 set; a power button has only KEY_POWER and KEY_SLEEP.
+const (
+	keyboardCapabilities    = "1000000000007 ff98007a404007ff febeffdfffefffff fffffffffffffffe"
+	powerButtonCapabilities = "8000 10000000000000 0"
+)
+
+// fakeDevice describes one input device in a fake /dev and /sys tree.
+type fakeDevice struct {
+	node   string // event name, e.g. "event0"
+	name   string
+	keys   string // contents of capabilities/key; "" omits the file
+	byID   string // by-id link name, "" for none
+	byPath string
+}
+
+// fakeInputTree points discovery at a temporary /dev/input and sysfs layout.
+func fakeInputTree(t *testing.T, devices []fakeDevice) {
+	t.Helper()
+	root := t.TempDir()
+	dev := filepath.Join(root, "dev", "input")
+	sys := filepath.Join(root, "sys", "class", "input")
+	for _, dir := range []string{filepath.Join(dev, "by-id"), filepath.Join(dev, "by-path"), sys} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, device := range devices {
+		node := filepath.Join(dev, device.node)
+		if err := os.WriteFile(node, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		attrs := filepath.Join(sys, device.node, "device")
+		if err := os.MkdirAll(filepath.Join(attrs, "capabilities"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(attrs, "name"), []byte(device.name+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if device.keys != "" {
+			if err := os.WriteFile(filepath.Join(attrs, "capabilities", "key"), []byte(device.keys+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if device.byID != "" {
+			if err := os.Symlink(node, filepath.Join(dev, "by-id", device.byID)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if device.byPath != "" {
+			if err := os.Symlink(node, filepath.Join(dev, "by-path", device.byPath)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	previous := [4]string{byIDDir, byPathDir, eventGlob, sysInputDir}
+	byIDDir = filepath.Join(dev, "by-id")
+	byPathDir = filepath.Join(dev, "by-path")
+	eventGlob = filepath.Join(dev, "event*")
+	sysInputDir = sys
+	t.Cleanup(func() {
+		byIDDir, byPathDir, eventGlob, sysInputDir = previous[0], previous[1], previous[2], previous[3]
+	})
+}
+
+func TestDiscoverKeyboardsPrefersByPathWhenByIDIsEmpty(t *testing.T) {
+	// A laptop: the built-in keyboard has no USB id, so by-id is empty, and
+	// event0 is the power button. Discovery used to fall straight through to
+	// event0 and bind the hotkey to a device that never types anything.
+	fakeInputTree(t, []fakeDevice{
+		{node: "event0", name: "Power Button", keys: powerButtonCapabilities},
+		{node: "event3", name: "AT Translated Set 2 keyboard", keys: keyboardCapabilities,
+			byPath: "platform-i8042-serio-0-event-kbd"},
+	})
+
+	candidates, err := DiscoverKeyboards()
+	if err != nil {
+		t.Fatalf("DiscoverKeyboards() error = %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("candidates = %+v, want only the by-path keyboard", candidates)
+	}
+	if !candidates[0].Stable || filepath.Base(candidates[0].Path) != "platform-i8042-serio-0-event-kbd" {
+		t.Errorf("candidate = %+v, want the stable by-path link", candidates[0])
+	}
+	if candidates[0].Name != "AT Translated Set 2 keyboard" {
+		t.Errorf("Name = %q, want the sysfs name of the link target", candidates[0].Name)
+	}
+
+	device, err := MatchDevice("", candidates)
+	if err != nil {
+		t.Fatalf("MatchDevice() error = %v", err)
+	}
+	if device.Path != candidates[0].Path {
+		t.Errorf("MatchDevice() = %+v, want the laptop keyboard", device)
+	}
+}
+
+func TestDiscoverKeyboardsStillPrefersByID(t *testing.T) {
+	fakeInputTree(t, []fakeDevice{
+		{node: "event3", name: "Internal keyboard", keys: keyboardCapabilities,
+			byPath: "platform-i8042-serio-0-event-kbd"},
+		{node: "event7", name: "USB keyboard", keys: keyboardCapabilities,
+			byID: "usb-Vendor_Keyboard-event-kbd", byPath: "pci-0000:00:14.0-usb-0:1:1.0-event-kbd"},
+	})
+
+	candidates, err := DiscoverKeyboards()
+	if err != nil {
+		t.Fatalf("DiscoverKeyboards() error = %v", err)
+	}
+	if len(candidates) == 0 || filepath.Base(candidates[0].Path) != "usb-Vendor_Keyboard-event-kbd" {
+		t.Fatalf("candidates = %+v, want the by-id keyboard first", candidates)
+	}
+	// The internal keyboard has no by-id entry and by-path was skipped, so
+	// it is only reachable through its event node.
+	if len(candidates) != 2 || candidates[1].Path != filepath.Join(filepath.Dir(byIDDir), "event3") {
+		t.Errorf("candidates = %+v, want the internal keyboard as the unstable fallback", candidates)
+	}
+	if candidates[1].Stable {
+		t.Error("event node candidate marked stable")
+	}
+}
+
+func TestDiscoverKeyboardsFiltersEventNodesByKeyCapability(t *testing.T) {
+	fakeInputTree(t, []fakeDevice{
+		{node: "event0", name: "Power Button", keys: powerButtonCapabilities},
+		{node: "event1", name: "Video Bus", keys: "3e000b00000000 0 0 0"},
+		{node: "event2", name: "PC Speaker", keys: "0"},
+		{node: "event5", name: "Some keyboard", keys: keyboardCapabilities},
+		// No sysfs capabilities at all: kept, since nothing says it is not a
+		// keyboard and dropping it could leave no candidates.
+		{node: "event9", name: "Unknown"},
+	})
+
+	candidates, err := DiscoverKeyboards()
+	if err != nil {
+		t.Fatalf("DiscoverKeyboards() error = %v", err)
+	}
+	var names []string
+	for _, candidate := range candidates {
+		names = append(names, candidate.Name)
+	}
+	if strings.Join(names, ",") != "Some keyboard,Unknown" {
+		t.Errorf("candidates = %v, want only the keyboard and the unclassifiable device", names)
+	}
+}
+
+func TestKeyboardKeysIn(t *testing.T) {
+	tests := []struct {
+		name string
+		caps string
+		want bool
+	}{
+		{name: "full keyboard", caps: keyboardCapabilities, want: true},
+		{name: "keyboard with one word", caps: "fffffffffffffffe", want: true},
+		{name: "power button", caps: powerButtonCapabilities, want: false},
+		{name: "no keys", caps: "0", want: false},
+		{name: "empty", caps: "", want: false},
+		{name: "garbage", caps: "not hex", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := keyboardKeysIn(tt.caps); got != tt.want {
+				t.Errorf("keyboardKeysIn(%q) = %v, want %v", tt.caps, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestReaderLogsAtErrorWhenTheDeviceEnds(t *testing.T) {
+	// An unplugged keyboard ends the stream with EOF. That used to exit the
+	// loop silently, leaving the hotkey dead with nothing in the log.
+	var logged bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelError}))
+	detector := NewDetector(mustParse(t, "ctrl+shift+space"), Chord{})
+
+	reader := NewReader(eventStream(), detector, newRecordingDispatcher(), nil, log)
+	drain(t, reader)
+
+	if !strings.Contains(logged.String(), "level=ERROR") || !strings.Contains(logged.String(), "evdev") {
+		t.Errorf("log = %q, want an ERROR naming evdev", logged.String())
+	}
+}
+
+func TestReaderStopDoesNotLogAnError(t *testing.T) {
+	// The converse: a deliberate Stop closes the device, and that must not
+	// be reported as a failure.
+	var logged bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelError}))
+	detector := NewDetector(mustParse(t, "ctrl+shift+space"), Chord{})
+
+	reader := NewReader(newBlockingSource(), detector, newRecordingDispatcher(), nil, log)
+	reader.Start()
+	reader.Stop()
+
+	if logged.Len() != 0 {
+		t.Errorf("Stop() logged %q, want nothing", logged.String())
+	}
 }

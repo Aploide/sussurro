@@ -453,7 +453,7 @@ func primePartial(t *testing.T, p *Pipeline, asr transcriber) *Streamer {
 // preferring the final pass then discarded words the user had seen.
 func TestFinalPassCannotTruncateTheLastPartial(t *testing.T) {
 	asr := &sequenceTranscriber{texts: []string{completePartial, "the complete sentence includes"}}
-	cleaner := &stubCleaner{text: "the complete sentence includes"}
+	cleaner := &passthroughCleaner{}
 	consumer := &recordingConsumer{}
 	p := newTestPipeline(t, asr, cleaner, stubContext{info: &ctxProvider.ContextInfo{}})
 	p.SetResultConsumer(consumer)
@@ -478,8 +478,95 @@ func TestFinalPassCannotTruncateTheLastPartial(t *testing.T) {
 	if len(consumer.results) != 1 {
 		t.Fatalf("got %d results, want 1", len(consumer.results))
 	}
-	if got := consumer.results[0]; got.Raw != completePartial || got.Text != completePartial || got.Cleaned {
-		t.Errorf("delivered Raw=%q Text=%q Cleaned=%v, want the complete last partial %q", got.Raw, got.Text, got.Cleaned, completePartial)
+	// The reconciled text is what cleanup receives, so the partial reaches
+	// delivery through the ordinary cleaned path rather than as a fallback.
+	if got := consumer.results[0]; got.Raw != completePartial || got.Text != completePartial || !got.Cleaned {
+		t.Errorf("delivered Raw=%q Text=%q Cleaned=%v, want the complete last partial %q cleaned", got.Raw, got.Text, got.Cleaned, completePartial)
+	}
+}
+
+// TestCleanupMayShortenTheLastPartial is the regression for the guard that
+// reverted cleanup output whenever it had fewer characters than the last
+// partial. Cleanup is deletion-only, so its output is shorter by design;
+// with streaming on (the default) every filler removal was being thrown
+// away and the raw partial delivered as Cleaned=false.
+func TestCleanupMayShortenTheLastPartial(t *testing.T) {
+	const partial = "um the quick brown fox"
+	const cleanedText = "the quick brown fox"
+
+	asr := &sequenceTranscriber{texts: []string{partial, partial}}
+	cleaner := &stubCleaner{text: cleanedText}
+	consumer := &recordingConsumer{}
+	p := newTestPipeline(t, asr, cleaner, stubContext{info: &ctxProvider.ContextInfo{}})
+	p.SetResultConsumer(consumer)
+	streamer := primePartial(t, p, asr)
+
+	p.isRecording.Store(true)
+	p.audioBuffer = make([]float32, 64000)
+	if !p.StopRecording() {
+		t.Fatal("StopRecording() = false, want the recording stopped")
+	}
+	p.wg.Wait()
+	streamer.Wait()
+
+	if cleaner.calls != 1 {
+		t.Fatalf("CleanupText called %d times, want 1", cleaner.calls)
+	}
+	if len(consumer.results) != 1 {
+		t.Fatalf("got %d results, want 1", len(consumer.results))
+	}
+	if got := consumer.results[0]; got.Raw != partial || got.Text != cleanedText || !got.Cleaned {
+		t.Errorf("delivered Raw=%q Text=%q Cleaned=%v, want cleaned %q delivered", got.Raw, got.Text, got.Cleaned, cleanedText)
+	}
+}
+
+// TestDictionaryMayShortenRawOutput covers the same guard on the raw path:
+// normalising a recognised term to a shorter canonical spelling must not be
+// undone by a length comparison against the partial.
+func TestDictionaryMayShortenRawOutput(t *testing.T) {
+	const partial = "open the whisper dot c p p repo"
+	const normalised = "open the whisper.cpp repo"
+
+	asr := &sequenceTranscriber{texts: []string{partial, partial}}
+	cleaner := &stubCleaner{dictionaryText: normalised}
+	consumer := &recordingConsumer{}
+	p := newTestPipeline(t, asr, cleaner, stubContext{info: &ctxProvider.ContextInfo{}})
+	p.SetSkipLLMCleanup(true)
+	p.SetResultConsumer(consumer)
+	streamer := primePartial(t, p, asr)
+
+	p.isRecording.Store(true)
+	p.audioBuffer = make([]float32, 64000)
+	if !p.StopRecording() {
+		t.Fatal("StopRecording() = false, want the recording stopped")
+	}
+	p.wg.Wait()
+	streamer.Wait()
+
+	if len(consumer.results) != 1 {
+		t.Fatalf("got %d results, want 1", len(consumer.results))
+	}
+	if got := consumer.results[0]; got.Raw != partial || got.Text != normalised {
+		t.Errorf("delivered Raw=%q Text=%q, want normalised %q delivered", got.Raw, got.Text, normalised)
+	}
+}
+
+// A cleaner that erases the dictation outright is the one case still
+// overridden: the recognised text is delivered instead, marked as not cleaned.
+func TestEmptyCleanupFallsBackToRecognisedText(t *testing.T) {
+	asr := &stubTranscriber{text: "the quick brown fox"}
+	llm := &stubCleaner{text: "   "}
+	consumer := &recordingConsumer{}
+
+	p := newTestPipeline(t, asr, llm, stubContext{info: &ctxProvider.ContextInfo{}})
+	p.SetResultConsumer(consumer)
+	run(p, samplesFor(3))
+
+	if len(consumer.results) != 1 {
+		t.Fatalf("got %d results, want 1", len(consumer.results))
+	}
+	if got := consumer.results[0]; got.Text != asr.text || got.Cleaned {
+		t.Errorf("delivered Text=%q Cleaned=%v, want the recognised text uncleaned", got.Text, got.Cleaned)
 	}
 }
 
@@ -824,18 +911,32 @@ func TestShortDictationIsDelivered(t *testing.T) {
 	}
 }
 
-// A recording below the floor must say so rather than vanish.
+// A recording below the floor must say so rather than vanish. The message
+// used to be emitted directly and then followed by the deferred completion's
+// idle state, which wiped it before the user could read it; it now travels as
+// the final text so that single notification carries it and nothing follows.
 func TestTooShortRecordingIsReported(t *testing.T) {
 	notifier := &finishNotifier{}
+	consumer := &recordingConsumer{}
 	p := newTestPipeline(t, &stubTranscriber{text: "the quick brown fox"},
 		&stubCleaner{text: "cleaned"}, stubContext{info: &ctxProvider.ContextInfo{}})
-	p.SetResultConsumer(&recordingConsumer{})
+	p.SetResultConsumer(consumer)
 	p.uiNotifier = notifier
 
 	run(p, samplesFor(0.1))
 
 	if len(notifier.finished) != 1 || notifier.finished[0] != tooShortMessage {
-		t.Errorf("OnFinished = %q, want the too-short message reported", notifier.finished)
+		t.Errorf("OnFinished = %q, want the too-short message reported exactly once", notifier.finished)
+	}
+	if len(notifier.states) != 0 {
+		t.Errorf("OnStateChange = %v after the too-short message, want nothing to follow it", notifier.states)
+	}
+	if len(consumer.results) != 0 {
+		t.Errorf("got %d results for a too-short recording, want none delivered", len(consumer.results))
+	}
+	// The message must not linger as the next session's final text.
+	if got := p.takeFinalText(); got != "" {
+		t.Errorf("final text after completion = %q, want cleared", got)
 	}
 }
 
@@ -955,6 +1056,37 @@ func TestDroppedFramesAreCounted(t *testing.T) {
 
 	if got := p.droppedFrames.Load(); got != 2 {
 		t.Errorf("droppedFrames = %d, want 2", got)
+	}
+}
+
+// TestDropWarningComesFromTheCaptureLoop pins the drop callback to counting
+// only. Logging formats and writes, which is not work for the realtime audio
+// thread; the capture goroutine reports the drops the next time it runs.
+func TestDropWarningComesFromTheCaptureLoop(t *testing.T) {
+	asr := &stubTranscriber{text: "the quick brown fox"}
+	llm := &stubCleaner{text: "The quick brown fox."}
+	var logged strings.Builder
+	p := newTestPipeline(t, asr, llm, stubContext{info: &ctxProvider.ContextInfo{}})
+	p.log = slog.New(slog.NewTextHandler(&logged, nil))
+
+	p.onFrameDropped()
+	p.onFrameDropped()
+	if logged.Len() != 0 {
+		t.Fatalf("drop callback logged %q, want nothing from the realtime thread", logged.String())
+	}
+
+	p.isRecording.Store(true)
+	p.audioBuffer = make([]float32, 0, 16)
+	p.handleCapturedChunk([]float32{1}, 64000)
+	if !strings.Contains(logged.String(), "dropped_frames_total=2") {
+		t.Errorf("capture loop logged %q, want the dropped frame count", logged.String())
+	}
+
+	// Nothing new dropped: the same count must not be reported again.
+	logged.Reset()
+	p.handleCapturedChunk([]float32{1}, 64000)
+	if logged.Len() != 0 {
+		t.Errorf("capture loop logged %q with no new drops, want nothing", logged.String())
 	}
 }
 

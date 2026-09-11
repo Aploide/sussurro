@@ -28,18 +28,41 @@ type SessionRecognizer struct {
 // NewSessionRecognizer wires a pipeline to a review controller. Install the
 // returned recognizer as the controller's Recognizer, and route the pipeline's
 // results through Consume.
+//
+// The pipeline publishes nothing for a recording that is too short, silent,
+// or fails recognition, so the recognizer also hooks the pipeline's
+// completion: a pass that ends without a result reports an empty one, and the
+// controller ends the session instead of waiting for text that never comes.
 func NewSessionRecognizer(pipe *Pipeline, onResult func(id session.SessionID, text string), log *slog.Logger) *SessionRecognizer {
-	return &SessionRecognizer{pipeline: pipe, onResult: onResult, log: log}
+	r := &SessionRecognizer{pipeline: pipe, onResult: onResult, log: log}
+	pipe.SetOnCompletion(r.onCompleted)
+	return r
 }
 
-// StartCapture begins recording for the given session.
-func (r *SessionRecognizer) StartCapture(id session.SessionID) {
+// StartCapture begins recording for the given session. It reports false, and
+// leaves no session active, when the pipeline refuses to record — typically
+// because the previous recording is still being transcribed.
+func (r *SessionRecognizer) StartCapture(id session.SessionID) bool {
+	if !r.pipeline.StartRecording() {
+		r.log.Debug("Pipeline refused to start recording", "session", id)
+		return false
+	}
+
 	r.mu.Lock()
 	r.active = id
 	r.capturing = true
 	r.mu.Unlock()
+	return true
+}
 
-	r.pipeline.StartRecording()
+// Active returns the session currently capturing or awaiting its result, and
+// whether there is one. Partial transcriptions are attributed to it: the
+// streamer's own generation counter advances on a different schedule and does
+// not identify controller sessions.
+func (r *SessionRecognizer) Active() (session.SessionID, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.active, r.capturing
 }
 
 // StopCapture ends recording and lets final transcription run. The session
@@ -92,3 +115,25 @@ func (r *SessionRecognizer) Consume(result Result) {
 
 // OnResult implements ResultConsumer.
 func (r *SessionRecognizer) OnResult(result Result) { r.Consume(result) }
+
+// onCompleted runs after every pipeline pass. Publication precedes it, so a
+// session that received its result is already inactive; one still waiting got
+// nothing and is closed with an empty result.
+//
+// The pipeline clears its transcribing flag just before this hook runs, so a
+// new capture can start in between; a completion that arrives while the
+// pipeline is recording belongs to the pass before that capture, not to it.
+func (r *SessionRecognizer) onCompleted() {
+	r.mu.Lock()
+	waiting := r.capturing
+	r.mu.Unlock()
+	if !waiting {
+		return
+	}
+	if r.pipeline.Recording() {
+		r.log.Debug("Ignoring completion of a pass that preceded the active capture")
+		return
+	}
+	r.log.Debug("Pipeline pass produced no result; ending session")
+	r.Consume(Result{})
+}

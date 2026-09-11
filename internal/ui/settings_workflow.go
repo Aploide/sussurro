@@ -57,7 +57,7 @@ func buildWorkflowSettings(cfg *config.Config, probe capabilityProbe) workflowSe
 
 	return workflowSettings{
 		Mode:              string(workflow.Mode),
-		Modes:             interactionModeChoices(),
+		Modes:             interactionModeChoices(probe),
 		StreamingEnabled:  workflow.Streaming.Enabled,
 		StreamingInterval: workflow.Streaming.Interval,
 		InputBackend:      string(workflow.Input.Backend),
@@ -71,12 +71,19 @@ func buildWorkflowSettings(cfg *config.Config, probe capabilityProbe) workflowSe
 	}
 }
 
-// interactionModeChoices lists the interaction modes. Both are available
-// everywhere; review changes behaviour rather than requiring anything.
-func interactionModeChoices() []choice {
+// interactionModeChoices lists the interaction modes. Review needs the overlay
+// to draw the reviewed text and the trigger socket client for cancel, and only
+// the Linux overlay does either yet, so elsewhere it is listed but unavailable.
+// The workflow is wired once at startup, so a change only applies after a
+// restart.
+func interactionModeChoices(probe capabilityProbe) []choice {
+	reviewAvailable, reviewReason := true, ""
+	if probe.GOOS != "linux" {
+		reviewAvailable, reviewReason = false, "Linux only for now"
+	}
 	return []choice{
-		{Value: string(config.ModeImmediate), Label: "Immediate", Available: true},
-		{Value: string(config.ModeReview), Label: "Review", Available: true},
+		{Value: string(config.ModeImmediate), Label: "Immediate", Available: true, Restart: true},
+		{Value: string(config.ModeReview), Label: "Review", Available: reviewAvailable, Reason: reviewReason, Restart: true},
 	}
 }
 
@@ -105,21 +112,22 @@ func inputBackendChoices(probe capabilityProbe) []choice {
 
 // deliveryBackendChoices lists the delivery backends with host availability.
 // A tool that is not installed is reported rather than silently unselectable,
-// because installing it is the fix.
+// because installing it is the fix. The backend is selected once at startup,
+// so every choice needs a restart to take effect.
 func deliveryBackendChoices(probe capabilityProbe) []choice {
 	toolChoice := func(value config.DeliveryBackend, label, tool string) choice {
 		if probe.GOOS != "linux" {
-			return choice{Value: string(value), Label: label, Reason: "Linux only"}
+			return choice{Value: string(value), Label: label, Reason: "Linux only", Restart: true}
 		}
 		if probe.ToolAvailable != nil && probe.ToolAvailable(tool) {
-			return choice{Value: string(value), Label: label, Available: true}
+			return choice{Value: string(value), Label: label, Available: true, Restart: true}
 		}
-		return choice{Value: string(value), Label: label, Reason: fmt.Sprintf("%s is not installed", tool)}
+		return choice{Value: string(value), Label: label, Reason: fmt.Sprintf("%s is not installed", tool), Restart: true}
 	}
 
 	return []choice{
-		{Value: string(config.DeliveryAuto), Label: "Automatic", Available: true},
-		{Value: string(config.DeliveryClipboardPaste), Label: "Clipboard paste", Available: true},
+		{Value: string(config.DeliveryAuto), Label: "Automatic", Available: true, Restart: true},
+		{Value: string(config.DeliveryClipboardPaste), Label: "Clipboard paste", Available: true, Restart: true},
 		// Sits with the other clipboard option and ahead of the tool-specific
 		// ones: it is always available, whereas those depend on what the host
 		// has installed. Not a way of inserting text but a decision not to,
@@ -130,6 +138,7 @@ func deliveryBackendChoices(probe capabilityProbe) []choice {
 			Value:     string(config.DeliveryClipboardOnly),
 			Label:     "Copy to clipboard, don't paste",
 			Available: true,
+			Restart:   true,
 		},
 		toolChoice(config.DeliveryWtype, "wtype (Wayland)", "wtype"),
 		toolChoice(config.DeliveryYdotool, "ydotool", "ydotool"),

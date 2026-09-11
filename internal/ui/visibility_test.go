@@ -517,11 +517,11 @@ func TestClipboardOnlyDeliveryIsConfirmed(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Workflow.Delivery.Backend = config.DeliveryClipboardOnly
 
-	manager := &Manager{
-		cfg:           cfg,
-		stateChangeCh: make(chan ViewModel, 8),
-		overlay:       &presentingOverlay{},
+	manager, err := NewManager(cfg)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
 	}
+	manager.overlay = &presentingOverlay{}
 
 	manager.OnFinished("the quick brown fox")
 
@@ -544,11 +544,11 @@ func TestPasteDeliveryKeepsTheGenericStatus(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Workflow.Delivery.Backend = config.DeliveryClipboardPaste
 
-	manager := &Manager{
-		cfg:           cfg,
-		stateChangeCh: make(chan ViewModel, 8),
-		overlay:       &presentingOverlay{},
+	manager, err := NewManager(cfg)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
 	}
+	manager.overlay = &presentingOverlay{}
 
 	manager.OnFinished("the quick brown fox")
 
@@ -571,6 +571,25 @@ func TestCompletionStatusWithoutConfigDoesNotPanic(t *testing.T) {
 	manager := &Manager{}
 	if got := manager.completionStatus(); got != "Done" {
 		t.Errorf("completionStatus() = %q with no config, want %q", got, "Done")
+	}
+}
+
+// TestCompletionStatusIsFixedAtStartup covers the M9 race: the delivery
+// method is wired once from the startup config, so a Settings change to it
+// before the restart that applies it must not change what the overlay
+// reports — and reading the live config raced with Settings writing it.
+func TestCompletionStatusIsFixedAtStartup(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Workflow.Delivery.Backend = config.DeliveryClipboardPaste
+
+	manager, err := NewManager(cfg)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	cfg.Workflow.Delivery.Backend = config.DeliveryClipboardOnly
+
+	if got := manager.completionStatus(); got != "Done" {
+		t.Errorf("completionStatus() = %q after a config change, want the startup method's %q", got, "Done")
 	}
 }
 

@@ -56,6 +56,8 @@ type fakeBackend struct {
 	submits   int
 	typeErr   error
 	submitErr error
+	// noSubmit makes the backend report that Enter is unavailable.
+	noSubmit bool
 }
 
 func (f *fakeBackend) Name() string { return "fake" }
@@ -73,6 +75,8 @@ func (f *fakeBackend) Submit() error {
 	f.submits++
 	return f.submitErr
 }
+
+func (f *fakeBackend) CanSubmit() bool { return !f.noSubmit }
 
 func (f *fakeBackend) stats() (typed []string, submits int) {
 	f.mu.Lock()
@@ -217,6 +221,34 @@ func TestSubmitFailureReported(t *testing.T) {
 
 	if err := d.Do(ActionDeliverAndSubmit, "text"); err == nil {
 		t.Fatal("Do() error = nil, want the submit failure")
+	}
+}
+
+func TestSubmitRefusedBeforeTypingWhenBackendCannotSubmit(t *testing.T) {
+	backend := &fakeBackend{noSubmit: true}
+	waiter := &countingWaiter{}
+	d := NewDeliverer(backend, waiter)
+
+	err := d.Do(ActionDeliverAndSubmit, "text")
+	if err == nil {
+		t.Fatal("Do() error = nil, want a refusal when the backend cannot submit")
+	}
+	if !strings.Contains(err.Error(), "fake") {
+		t.Errorf("error %q does not name the backend", err)
+	}
+	// Pasting first and failing on Enter would leave the text inserted and
+	// paste it a second time on retry, so nothing may reach the window.
+	typed, submits := backend.stats()
+	if len(typed) != 0 || submits != 0 {
+		t.Errorf("backend touched (typed=%v submits=%d), want nothing", typed, submits)
+	}
+	if waiter.count() != 0 {
+		t.Errorf("waits = %d, want 0 when the request is refused up front", waiter.count())
+	}
+
+	// A plain deliver is unaffected.
+	if err := d.Do(ActionDeliver, "text"); err != nil {
+		t.Fatalf("Do(deliver) error = %v", err)
 	}
 }
 
@@ -437,6 +469,38 @@ func TestClipboardBackendSubmitUnsupported(t *testing.T) {
 	}
 }
 
+func TestBackendsReportSubmitSupport(t *testing.T) {
+	runner := &fakeRunner{}
+	wtype, err := SelectBackend(BackendWtype, Capabilities{LookPath: pathWith("wtype"), Run: runner.run})
+	if err != nil {
+		t.Fatalf("SelectBackend(wtype) error = %v", err)
+	}
+	ydotool, err := SelectBackend(BackendYdotool, Capabilities{LookPath: pathWith("ydotool"), Run: runner.run})
+	if err != nil {
+		t.Fatalf("SelectBackend(ydotool) error = %v", err)
+	}
+	stage := func(string) error { return nil }
+
+	tests := []struct {
+		name    string
+		backend Backend
+		want    bool
+	}{
+		{name: "wtype", backend: wtype, want: true},
+		{name: "ydotool", backend: ydotool, want: true},
+		{name: "clipboard without key sender", backend: NewClipboardBackend(stage, &stubInjector{}, nil), want: false},
+		{name: "clipboard with key sender", backend: NewClipboardBackend(stage, &stubInjector{}, func() error { return nil }), want: true},
+		{name: "clipboard-only", backend: NewClipboardOnlyBackend(stage, "clipboard-paste"), want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.backend.CanSubmit(); got != tt.want {
+				t.Errorf("CanSubmit() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestClipboardBackendSubmitUsesProvidedKey(t *testing.T) {
 	submits := 0
 	backend := NewClipboardBackend(func(string) error { return nil }, &stubInjector{}, func() error {
@@ -521,6 +585,38 @@ func TestClipboardOnlyNamesTheWrappedBackend(t *testing.T) {
 	}
 }
 
+func TestClipboardOnlyNeedsOnlyAClipboard(t *testing.T) {
+	// A host without uinput access has no paste injector, so main.go passes
+	// no Clipboard backend. clipboard-only never pastes, so it must still be
+	// selectable there; requiring the injector made review mode silently
+	// fall back to immediate on exactly those hosts.
+	var staged []string
+	backend, err := SelectBackend(BackendClipboardOnly, Capabilities{
+		LookPath: pathWith(),
+		ClipboardWrite: func(text string) error {
+			staged = append(staged, text)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("SelectBackend(clipboard-only) error = %v", err)
+	}
+	if err := backend.Type("text"); err != nil {
+		t.Fatalf("Type() error = %v", err)
+	}
+	if len(staged) != 1 {
+		t.Errorf("staged %d times, want 1", len(staged))
+	}
+
+	// Without any clipboard there is nothing it could do.
+	if _, err := SelectBackend(BackendClipboardOnly, Capabilities{
+		LookPath:  pathWith(),
+		Clipboard: &fakeBackend{},
+	}); err == nil {
+		t.Fatal("SelectBackend(clipboard-only) error = nil without a clipboard writer, want a failure")
+	}
+}
+
 func TestClipboardOnlyDeliversThroughTheDeliverer(t *testing.T) {
 	var staged []string
 	backend := NewClipboardOnlyBackend(func(text string) error {
@@ -537,9 +633,12 @@ func TestClipboardOnlyDeliversThroughTheDeliverer(t *testing.T) {
 	}
 
 	// DeliverAndSubmit cannot work without an insert, and must say so rather
-	// than silently sending Enter.
+	// than silently sending Enter, and it must not stage the text again either.
 	if err := d.Do(ActionDeliverAndSubmit, "text"); err == nil {
 		t.Fatal("Do(submit) error = nil, want a refusal")
+	}
+	if len(staged) != 1 {
+		t.Errorf("staged %d times after a refused submit, want still 1", len(staged))
 	}
 }
 

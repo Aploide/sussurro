@@ -202,9 +202,9 @@ func TestToggleRemainsBackwardCompatible(t *testing.T) {
 
 type controllerRecognizer struct{}
 
-func (controllerRecognizer) StartCapture(session.SessionID)  {}
-func (controllerRecognizer) StopCapture(session.SessionID)   {}
-func (controllerRecognizer) CancelCapture(session.SessionID) {}
+func (controllerRecognizer) StartCapture(session.SessionID) bool { return true }
+func (controllerRecognizer) StopCapture(session.SessionID)       {}
+func (controllerRecognizer) CancelCapture(session.SessionID)     {}
 
 type controllerEditor struct{}
 
@@ -394,6 +394,55 @@ func TestServerRespondsOverTheSocket(t *testing.T) {
 	}
 	if events := dispatch.recorded(); len(events) != 1 || events[0] != session.InputPress {
 		t.Errorf("events = %v, want one press", events)
+	}
+}
+
+func TestClientWithoutTrailingNewlineIsAnswered(t *testing.T) {
+	// A shell one-liner such as printf press | socat may well omit the
+	// newline and keep the connection open for the reply.
+	dispatch := &fakeDispatcher{}
+	server := newTestServer(dispatch, &fakeHandler{})
+	server.socket = filepath.Join(t.TempDir(), "sussurro.sock")
+	server.readTimeout = 100 * time.Millisecond
+	if err := server.Start(dispatch); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(server.Stop)
+
+	reply := sendCommand(t, server.socket, "press")
+	if reply != "RECORDING" {
+		t.Errorf("reply = %q, want RECORDING", reply)
+	}
+	if events := dispatch.recorded(); len(events) != 1 || events[0] != session.InputPress {
+		t.Errorf("events = %v, want one press", events)
+	}
+}
+
+func TestSilentClientIsNotTreatedAsAToggle(t *testing.T) {
+	dispatch := &fakeDispatcher{}
+	server := newTestServer(dispatch, &fakeHandler{})
+	server.socket = filepath.Join(t.TempDir(), "sussurro.sock")
+	server.readTimeout = 50 * time.Millisecond
+	if err := server.Start(dispatch); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(server.Stop)
+
+	conn, err := net.DialTimeout("unix", server.socket, 2*time.Second)
+	if err != nil {
+		t.Fatalf("dialing: %v", err)
+	}
+	defer conn.Close()
+
+	// The server must close the connection after the deadline with no reply
+	// and, above all, no gesture: an empty command line means toggle.
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	reply, err := bufio.NewReader(conn).ReadString('\n')
+	if err == nil || reply != "" {
+		t.Errorf("reply = %q, err = %v, want the connection closed without a reply", reply, err)
+	}
+	if events := dispatch.recorded(); len(events) != 0 {
+		t.Errorf("events = %v, want none for a client that sent nothing", events)
 	}
 }
 

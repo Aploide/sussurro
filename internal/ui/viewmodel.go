@@ -163,7 +163,10 @@ func reviewStatus(state session.ReviewState) string {
 	case session.ReviewFinalizing:
 		return "Finalizing"
 	case session.ReviewReady:
-		return "Tap to deliver, hold to edit, Esc to cancel"
+		// Only gestures that are actually bound: a tap of the push-to-talk
+		// key delivers, holding it (or the edit key) records a revision, and
+		// cancel is a trigger-socket command — there is no Esc binding.
+		return "Tap to deliver, hold to edit, trigger.sh cancel to discard"
 	case session.ReviewEditing:
 		// Also capturing, so the waveform speaks for it.
 		return ""

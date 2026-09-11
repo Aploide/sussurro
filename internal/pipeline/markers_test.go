@@ -22,6 +22,9 @@ func TestStripNonSpeechMarkers(t *testing.T) {
 		{"case insensitive", "[Music] Hello.", "Hello."},
 		{"mid sentence", "The thing [NOISE] works.", "The thing works."},
 		{"before punctuation", "I was talking [MUSIC], then stopped.", "I was talking, then stopped."},
+		{"known lower-case in brackets", "The line was [inaudible] at that point.", "The line was at that point."},
+		{"known marker capitalised", "(Applause) Thank you all.", "Thank you all."},
+		{"upper-case with hyphen", "[CROSS-TALK] Sorry, go on.", "Sorry, go on."},
 		{"empty", "", ""},
 		{"no markers untouched", "Just ordinary dictated text.", "Just ordinary dictated text."},
 	}
@@ -35,13 +38,23 @@ func TestStripNonSpeechMarkers(t *testing.T) {
 	}
 }
 
-// The filter must not eat real speech. A dictated parenthetical is a clause,
-// which is what the length bound distinguishes from a marker.
+// The filter must not eat real speech. A dictated parenthetical is either a
+// clause or an ordinary lower-case word, neither of which is a marker: the
+// filter only strips upper-case tokens and annotations it knows by name.
 func TestStripNonSpeechMarkersKeepsRealSpeech(t *testing.T) {
 	keep := []string{
 		"I went to the shop (the one on the corner, past the church) and bought milk.",
 		"Use the flag (it takes a value longer than a marker would be) when running it.",
 		"Multiply (a plus b) by the total and see what happens next.",
+		// Short dictated parentheticals and emphasis, which the shape-only
+		// filter used to swallow.
+		"The second argument is (optional) and defaults to zero.",
+		"I *really* need this to work by Monday.",
+		"Add the caching layer (maybe) once the tests pass.",
+		"Pass the (user-facing) label through unchanged.",
+		// Single letters are dictated; Whisper's markers are all longer.
+		"Choose (A) or (B) and then press enter.",
+		"It was *I* who asked for it.",
 	}
 
 	for _, in := range keep {

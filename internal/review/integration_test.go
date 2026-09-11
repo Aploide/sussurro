@@ -15,9 +15,9 @@ import (
 // stubRecognizer satisfies the controller without touching audio hardware.
 type stubRecognizer struct{}
 
-func (stubRecognizer) StartCapture(session.SessionID)  {}
-func (stubRecognizer) StopCapture(session.SessionID)   {}
-func (stubRecognizer) CancelCapture(session.SessionID) {}
+func (stubRecognizer) StartCapture(session.SessionID) bool { return true }
+func (stubRecognizer) StopCapture(session.SessionID)       {}
+func (stubRecognizer) CancelCapture(session.SessionID)     {}
 
 // stubEditor is unused by these tests but required by the controller.
 type stubEditor struct{}
@@ -42,6 +42,8 @@ func (b *recordingBackend) Submit() error {
 	b.submits++
 	return nil
 }
+
+func (b *recordingBackend) CanSubmit() bool { return true }
 
 // noWait skips the input-release settle so tests stay fast.
 var noWait = delivery.ReleaseWaiterFunc(func() {})

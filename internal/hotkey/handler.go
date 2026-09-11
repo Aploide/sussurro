@@ -129,10 +129,10 @@ func parseTrigger(trigger string) ([]hotkey.Modifier, hotkey.Key, error) {
 
 // Basic key map - expand as needed
 var keyMap = map[string]hotkey.Key{
-	"space": hotkey.KeySpace,
-	"enter": hotkey.KeyReturn,
-	"tab":   hotkey.KeyTab,
-	"esc":   hotkey.KeyEscape,
+	"space":  hotkey.KeySpace,
+	"enter":  hotkey.KeyReturn,
+	"esc":    hotkey.KeyEscape,
+	"escape": hotkey.KeyEscape,
 	// Digits were omitted, so a trigger like "super+7" failed to register and
 	// the process exited. The overlay's own X11 grab accepted them, so this
 	// only broke --no-ui.
@@ -184,6 +184,16 @@ var keyMap = map[string]hotkey.Key{
 	"x":   hotkey.KeyX,
 	"y":   hotkey.KeyY,
 	"z":   hotkey.KeyZ,
+}
+
+func init() {
+	// golang.design/x/hotkey v0.4.1 defines KeyTab on Linux as 0xff1b, which
+	// is XK_Escape, so a "tab" trigger silently grabbed Escape there. Offer
+	// tab only where upstream maps it to a key of its own; elsewhere the
+	// trigger is rejected with the accepted names rather than bound wrongly.
+	if hotkey.KeyTab != hotkey.KeyEscape {
+		keyMap["tab"] = hotkey.KeyTab
+	}
 }
 
 // knownKeyNames lists the accepted key names, so a rejected trigger says what

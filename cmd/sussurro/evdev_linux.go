@@ -23,8 +23,16 @@ func startEvdevInput(cfg *config.Config, dispatch session.InputDispatcher, onCan
 
 	chord := cfg.Workflow.Input.Chord
 	if chord == "" {
-		// Follow the configured hotkey so one setting drives both backends.
+		// Follow the push-to-talk hotkey so one setting drives both backends.
+		// The evdev detector only reports press and release, so a toggle key
+		// must not be adopted: it would turn into hold-to-record. With no
+		// push-to-talk key the backend does not start, and the native grab —
+		// which does implement toggling — remains in charge.
 		chord = cfg.Hotkey.PushToTalk
+		if chord == "" {
+			log.Warn("evdev input backend needs workflow.input.chord or hotkey.push_to_talk; falling back to native hotkeys")
+			return nil
+		}
 	}
 
 	backend, err := inputpkg.StartEvdev(inputpkg.Options{

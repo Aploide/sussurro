@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"unsafe"
 )
@@ -31,14 +32,25 @@ const evKey = 1
 
 // Device paths. by-id names are stable across reboots and USB port changes,
 // so they are preferred over the event* numbering, which is assignment order.
-const (
+// by-path is the fallback for keyboards without a USB id, above all a
+// laptop's built-in one, which the kernel only exposes there. Variables so
+// tests can point discovery at a fake tree.
+var (
 	byIDDir     = "/dev/input/by-id"
+	byPathDir   = "/dev/input/by-path"
 	eventGlob   = "/dev/input/event*"
 	sysInputDir = "/sys/class/input"
 )
 
-// keyboardSuffix marks the by-id symlinks the kernel creates for keyboards.
+// keyboardSuffix marks the by-id and by-path symlinks udev creates for
+// keyboards.
 const keyboardSuffix = "-event-kbd"
+
+// keyboardKeyMask covers KEY_ESC through KEY_D, bits 1-31 of the EV_KEY
+// capability bitmap. udev applies the same test before it names a device link
+// -event-kbd, so the bare event* fallback classifies devices the way the
+// stable directories do, and a power button or a webcam never comes first.
+const keyboardKeyMask = 0xFFFFFFFE
 
 // DeviceCandidate is a discovered input device.
 type DeviceCandidate struct {
@@ -46,7 +58,8 @@ type DeviceCandidate struct {
 	Path string
 	// Name is the human-readable device name from sysfs, when available.
 	Name string
-	// Stable reports whether Path came from the by-id directory.
+	// Stable reports whether Path came from the by-id or by-path directory,
+	// where names survive reboots.
 	Stable bool
 }
 
@@ -58,15 +71,55 @@ func DiscoverKeyboards() ([]DeviceCandidate, error) {
 	seen := make(map[string]bool)
 
 	// Prefer /dev/input/by-id: those names survive reboots and re-plugging.
-	entries, err := os.ReadDir(byIDDir)
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return nil, fmt.Errorf("reading %s: %w", byIDDir, err)
+	// A laptop keyboard has no by-id entry at all, so by-path is scanned
+	// when by-id offered nothing; on such a host event0 is usually a power
+	// button, which is what the bare fallback used to pick.
+	for _, dir := range []string{byIDDir, byPathDir} {
+		if len(candidates) > 0 {
+			break
+		}
+		stable, err := stableKeyboards(dir, seen)
+		if err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, stable...)
 	}
+
+	// Fall back to the event* nodes for devices with no stable entry,
+	// keeping only those whose sysfs capabilities look like a keyboard.
+	matches, err := filepath.Glob(eventGlob)
+	if err != nil {
+		return nil, fmt.Errorf("globbing %s: %w", eventGlob, err)
+	}
+	sort.Strings(matches)
+	for _, path := range matches {
+		if seen[path] {
+			continue
+		}
+		seen[path] = true
+		if !hasKeyboardKeys(path) {
+			continue
+		}
+		candidates = append(candidates, DeviceCandidate{Path: path, Name: deviceName(path)})
+	}
+
+	return candidates, nil
+}
+
+// stableKeyboards lists the -event-kbd links in dir, marking their targets in
+// seen. A missing directory is not an error: a host without USB keyboards
+// has no by-id at all.
+func stableKeyboards(dir string, seen map[string]bool) ([]DeviceCandidate, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("reading %s: %w", dir, err)
+	}
+	var candidates []DeviceCandidate
 	for _, entry := range entries {
 		if !strings.HasSuffix(entry.Name(), keyboardSuffix) {
 			continue
 		}
-		path := filepath.Join(byIDDir, entry.Name())
+		path := filepath.Join(dir, entry.Name())
 		resolved, err := filepath.EvalSymlinks(path)
 		if err != nil {
 			continue
@@ -81,21 +134,6 @@ func DiscoverKeyboards() ([]DeviceCandidate, error) {
 			Stable: true,
 		})
 	}
-
-	// Fall back to the event* nodes for devices with no by-id entry.
-	matches, err := filepath.Glob(eventGlob)
-	if err != nil {
-		return nil, fmt.Errorf("globbing %s: %w", eventGlob, err)
-	}
-	sort.Strings(matches)
-	for _, path := range matches {
-		if seen[path] {
-			continue
-		}
-		seen[path] = true
-		candidates = append(candidates, DeviceCandidate{Path: path, Name: deviceName(path)})
-	}
-
 	return candidates, nil
 }
 
@@ -106,6 +144,34 @@ func deviceName(path string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(data))
+}
+
+// hasKeyboardKeys reports whether the device at path advertises the main
+// keyboard keys in its EV_KEY capability bitmap. The bitmap is read from
+// sysfs rather than with EVIOCGBIT, which would need permission to open the
+// device. A device whose capabilities cannot be read is kept, so an unusual
+// sysfs layout degrades to the old unfiltered behaviour rather than to no
+// keyboards at all.
+func hasKeyboardKeys(path string) bool {
+	data, err := os.ReadFile(filepath.Join(sysInputDir, filepath.Base(path), "device", "capabilities", "key"))
+	if err != nil {
+		return true
+	}
+	return keyboardKeysIn(string(data))
+}
+
+// keyboardKeysIn parses the sysfs capabilities/key text: space-separated hex
+// words, most significant first, so the last word holds bits 0-63.
+func keyboardKeysIn(capabilities string) bool {
+	words := strings.Fields(capabilities)
+	if len(words) == 0 {
+		return false
+	}
+	low, err := strconv.ParseUint(words[len(words)-1], 16, 64)
+	if err != nil {
+		return false
+	}
+	return low&keyboardKeyMask == keyboardKeyMask
 }
 
 // MatchDevice selects a device by a case-insensitive substring of its name, or

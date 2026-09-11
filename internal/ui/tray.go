@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"log/slog"
 	"runtime"
 
 	"fyne.io/systray"
@@ -21,9 +22,11 @@ func (m *Manager) runTray() {
 }
 
 func (m *Manager) onTrayReady() {
-	// The tray is now a working route to Settings and Quit, so the overlay no
-	// longer has to stay up as the fallback.
-	m.markTrayReady()
+	// systray fires onReady before it has registered with any host, so on
+	// Linux this runs even where no desktop will ever show the icon. Only a
+	// tray that is actually hosted is a working route to Settings and Quit,
+	// and only then may the overlay stop standing in as the fallback.
+	watchTrayHost(m.onTrayHosted)
 
 	systray.SetIcon(trayIcon)
 	systray.SetTooltip("Sussurro")
@@ -36,7 +39,7 @@ func (m *Manager) onTrayReady() {
 		for {
 			select {
 			case <-mSettings.ClickedCh:
-				m.settings.Show()
+				m.showSettings()
 
 			case <-mQuit.ClickedCh:
 				m.Quit()
@@ -44,6 +47,20 @@ func (m *Manager) onTrayReady() {
 			}
 		}
 	}()
+}
+
+// onTrayHosted records the outcome of the tray host probe. A hosted tray
+// releases the overlay to hide when idle; without a host the overlay stays up,
+// because its right-click menu is then the only route to Settings and Quit.
+func (m *Manager) onTrayHosted(hosted bool) {
+	if !hosted {
+		slog.Info("No system tray host found; the overlay stays visible as the route to Settings and Quit")
+		return
+	}
+	if m.trayReady.Load() {
+		return
+	}
+	m.markTrayReady()
 }
 
 // onTrayExit is called by the systray library when it exits (e.g. the OS

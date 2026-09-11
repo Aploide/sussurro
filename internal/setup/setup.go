@@ -107,7 +107,7 @@ models:
     vad_path: {{VAD_PATH}}
     vad_threshold: 0.01
     type: "whisper"
-    threads: 4
+    threads: 0 # 0 = all cores; set a number to cap CPU use
   llm:
     path: {{LLM_PATH}}
     context_size: 4096

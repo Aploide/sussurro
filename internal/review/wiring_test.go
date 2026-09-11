@@ -189,9 +189,10 @@ func TestWiredReviewModeAppliesVoiceEdit(t *testing.T) {
 	app.dispatch.Dispatch(session.InputRelease)
 	app.controller.OnResult(app.controller.SessionID(), "the original text")
 
-	// Holding again over ready text records a correction.
-	app.dispatch.Dispatch(session.InputPress)
-	app.dispatch.Dispatch(session.InputRelease)
+	// The edit gesture over ready text records a correction. (A quick
+	// push-to-talk press and release would read as a tap, which delivers.)
+	app.dispatch.Dispatch(session.InputEditPress)
+	app.dispatch.Dispatch(session.InputEditRelease)
 	app.controller.OnResult(app.controller.SessionID(), "fix the wording")
 
 	waitFor(t, func() bool { return app.controller.State() == session.ReviewReady })

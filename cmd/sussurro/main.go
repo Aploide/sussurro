@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"runtime"
@@ -176,7 +177,16 @@ func run() {
 	// through the session controller, which owns the workflow state; immediate
 	// mode has no controller, so it presents directly. Logging it instead —
 	// which is what this did — makes the whole feature invisible.
-	if cfg.Workflow.Streaming.Enabled {
+	//
+	// Streaming re-transcribes the audio captured so far on every interval, so
+	// it is only worth running where the partial text can be shown: an
+	// overlay that draws nothing but the capsule would pay for it invisibly.
+	// Headless mode keeps logging partials, as it has no other output.
+	switch {
+	case !cfg.Workflow.Streaming.Enabled:
+	case !*noUIFlag && !ui.OverlayPresents():
+		log.Info("Partial transcription disabled: the overlay on this platform does not render text")
+	default:
 		onPartial := flow.partial
 		if onPartial == nil {
 			onPartial = func(generation uint64, text string) {
@@ -207,9 +217,18 @@ func run() {
 	if flow.controller != nil {
 		onCancel = flow.controller.Cancel
 	}
-	if stopEvdev := startEvdevInput(cfg, input, onCancel, log); stopEvdev != nil {
+	stopEvdev := startEvdevInput(cfg, input, onCancel, log)
+	if stopEvdev != nil {
 		defer stopEvdev()
 	}
+
+	// The input backend decides which of the two default routes stay up: the
+	// trigger socket is a control channel that also carries deliver and
+	// cancel, so it is only dropped when the user asked for native hotkeys
+	// alone; the native grab is dropped whenever another key source is in
+	// charge, or the same key would fire twice.
+	useSocket := useTriggerSocket(cfg)
+	evdevActive := stopEvdev != nil
 
 	pipe.SetLowercaseOutput(cfg.App.LowercaseOutput)
 	pipe.SetSkipLLMCleanup(cfg.App.SkipLLMCleanup)
@@ -233,6 +252,9 @@ func run() {
 		}
 
 		pipe.SetUINotifier(uiMgr)
+		// Review mode may have fallen back to immediate above; the Manager
+		// only ignores pipeline notifications while a controller presents.
+		uiMgr.SetReviewMode(flow.controller != nil)
 		// Route review presentation to the overlay now that a UI exists.
 		presentToUI.Set(uiMgr.Present)
 		uiMgr.SetBufferFillSource(pipe.BufferFill)
@@ -260,13 +282,15 @@ func run() {
 		}
 
 		// Set up input handler before entering the UI main loop.
-		if stop := startTriggerServer(flow, input, uiMgr, log); stop != nil {
-			defer stop()
+		socketUp := false
+		if useSocket {
+			if stop := startTriggerServer(flow, input, uiMgr, log); stop != nil {
+				defer stop()
+				socketUp = true
+			}
 		}
 
-		if hotkey.IsWayland() {
-			log.Warn("Wayland: configure keyboard shortcut (see docs/wayland.md)")
-		} else {
+		if useNativeHotkeys(cfg, evdevActive, socketUp, log) {
 			if !cfg.Hotkey.Configured() {
 				log.Warn("No hotkey configured; set hotkey.push_to_talk, hotkey.toggle, or hotkey.edit")
 			} else {
@@ -288,13 +312,15 @@ func run() {
 
 	// No UI here, so the settings command is refused rather than raising a
 	// window that was never created.
-	if stop := startTriggerServer(flow, input, nil, log); stop != nil {
-		defer stop()
+	socketUp := false
+	if useSocket {
+		if stop := startTriggerServer(flow, input, nil, log); stop != nil {
+			defer stop()
+			socketUp = true
+		}
 	}
 
-	if hotkey.IsWayland() {
-		log.Warn("Wayland detected: Configure keyboard shortcut (see docs/wayland.md)")
-	} else {
+	if useNativeHotkeys(cfg, evdevActive, socketUp, log) {
 		log.Info("Using global hotkeys (X11 / macOS)")
 
 		// Headless registers each configured binding separately. Every binding
@@ -348,4 +374,46 @@ func run() {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-sigChan
 	log.Info("Received signal, shutting down...", "signal", sig)
+}
+
+// isWayland is hotkey.IsWayland, indirected so the routing below is testable
+// without a display.
+var isWayland = hotkey.IsWayland
+
+// useTriggerSocket reports whether the trigger socket should listen. Only the
+// native backend turns it off, and only where a native grab can actually work:
+// the socket is the sole route for deliver and cancel, and on Wayland the only
+// input route at all, so auto, trigger, and evdev keep it, as does native on
+// Wayland.
+func useTriggerSocket(cfg *config.Config) bool {
+	return cfg.Workflow.Input.Backend != config.InputNative || isWayland()
+}
+
+// useNativeHotkeys reports whether the in-process global hotkey grab should be
+// installed, logging why not. Wayland cannot grab keys; the trigger backend
+// hands key handling to the compositor; a running evdev reader sees the same
+// keys from the device, so grabbing them as well would fire every gesture
+// twice. A backend that failed to come up — evdev that did not start, or a
+// trigger socket that could not listen — has already fallen back, and the
+// grab is that fallback.
+func useNativeHotkeys(cfg *config.Config, evdevActive, socketUp bool, log *slog.Logger) bool {
+	switch {
+	case cfg.Workflow.Input.Backend == config.InputTrigger && socketUp:
+		log.Info("Native hotkeys disabled: input backend is trigger (see docs/wayland.md)")
+		return false
+	case cfg.Workflow.Input.Backend == config.InputTrigger:
+		log.Error("Trigger socket failed to start; falling back to native hotkeys")
+	case evdevActive:
+		log.Info("Native hotkeys disabled: input backend is evdev")
+		return false
+	}
+	if isWayland() {
+		if socketUp {
+			log.Warn("Wayland: configure keyboard shortcut (see docs/wayland.md)")
+		} else {
+			log.Error("Wayland: no input route is active — native hotkeys cannot grab keys and the trigger socket is not listening")
+		}
+		return false
+	}
+	return true
 }

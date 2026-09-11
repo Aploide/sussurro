@@ -97,6 +97,12 @@ func TestDefaultConfigTemplateWithWindowsPaths(t *testing.T) {
 	if got := v.GetInt("models.llm.gpu_layers"); got != 99 {
 		t.Errorf("models.llm.gpu_layers = %d, want 99", got)
 	}
+	// Whisper's threads setting is now honoured, so a template value of 4
+	// would cap CPU-only recognition at four cores where the binding's
+	// default is every core. Zero leaves that default in place.
+	if got := v.GetInt("models.asr.threads"); got != 0 {
+		t.Errorf("models.asr.threads = %d, want 0 (all cores)", got)
+	}
 	if got := v.GetString("hotkey.push_to_talk"); got != "ctrl+shift+space" {
 		t.Errorf("hotkey.push_to_talk = %q", got)
 	}

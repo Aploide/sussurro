@@ -599,9 +599,13 @@ static KeySym parse_x11_keysym(const char *trigger)
     const char *p = strrchr(trigger, '+');
     const char *key_str = p ? p + 1 : trigger;
 
-    if (strcmp(key_str, "space") == 0) return XK_space;
-    if (strcmp(key_str, "enter") == 0) return XK_Return;
-    if (strcmp(key_str, "tab")   == 0) return XK_Tab;
+    if (strcmp(key_str, "space")  == 0) return XK_space;
+    if (strcmp(key_str, "enter")  == 0) return XK_Return;
+    if (strcmp(key_str, "tab")    == 0) return XK_Tab;
+    /* The config's spelling is "esc"; XStringToKeysym only knows "Escape",
+       so without these the binding silently grabbed nothing. */
+    if (strcmp(key_str, "esc")    == 0) return XK_Escape;
+    if (strcmp(key_str, "escape") == 0) return XK_Escape;
 
     /* Single character keys */
     if (strlen(key_str) == 1) {
@@ -624,10 +628,22 @@ static KeySym parse_x11_keysym(const char *trigger)
 /* System appearance                                                   */
 /* ------------------------------------------------------------------ */
 
+/* Reads the portal's color-scheme value out of its variant wrapping.
+ *
+ * SettingChanged carries the value in one variant; the Read reply wraps it
+ * twice (a "(v)" whose variant holds another variant holding the "u"), so a
+ * single unwrap saw a variant where it expected the integer and the startup
+ * read was silently discarded (M10). Unwrapping until something other than a
+ * variant appears serves both. */
 static gboolean portal_color_scheme(GVariant *wrapped, gboolean *dark)
 {
     if (!wrapped) return FALSE;
     GVariant *value = g_variant_get_variant(wrapped);
+    while (g_variant_is_of_type(value, G_VARIANT_TYPE_VARIANT)) {
+        GVariant *inner = g_variant_get_variant(value);
+        g_variant_unref(value);
+        value = inner;
+    }
     gboolean known = FALSE;
     if (g_variant_is_of_type(value, G_VARIANT_TYPE_UINT32)) {
         guint32 scheme = g_variant_get_uint32(value);
@@ -922,7 +938,13 @@ void overlay_install_hotkey(GtkWidget *win, const char *push_to_talk,
         *mods[binding] = parse_x11_mods(triggers[binding]);
         *keycodes[binding] = XKeysymToKeycode(
             xdpy, parse_x11_keysym(triggers[binding]));
-        if (!*keycodes[binding]) continue;
+        if (!*keycodes[binding]) {
+            /* Say so: a key name the parser does not know used to be
+               dropped silently, leaving a binding that never fired. */
+            g_warning("sussurro: hotkey %s has no X11 keycode; not grabbed",
+                      triggers[binding]);
+            continue;
+        }
         for (int i = 0; i < 4; i++) {
             XGrabKey(xdpy, *keycodes[binding], *mods[binding] | lock_combos[i],
                      xroot, True, GrabModeAsync, GrabModeAsync);
@@ -979,19 +1001,29 @@ void overlay_replace_hotkeys_async(GtkWidget *win, const char *push_to_talk,
 
 /* ---- Async state/RMS update ---- */
 
+/* Applies a state change, clearing the buffer-fill gauge on entry to
+ * RECORDING: that starts a fresh buffer, so the fill is reset rather than
+ * letting the smoothing drag the previous recording's value down across the
+ * first second of the new one.
+ *
+ * Shared by both update paths. The Go side presents through
+ * overlay_present_async whenever transcript text can be drawn, which on Linux
+ * is always, so a reset living only in idle_set_state never ran. */
+static void apply_state(OverlayData *od, int state)
+{
+    if (state == OVERLAY_STATE_RECORDING && od->state != OVERLAY_STATE_RECORDING) {
+        od->fill        = 0.0;
+        od->fill_target = 0.0;
+    }
+    od->state = state;
+}
+
 gboolean idle_set_state(gpointer data)
 {
     IdleStateArg *arg = (IdleStateArg *)data;
     OverlayData  *od  = (OverlayData *)g_object_get_data(G_OBJECT(arg->win), "overlay-data");
     if (od) {
-        /* Entering RECORDING starts a fresh buffer, so clear the fill rather
-           than letting the smoothing drag the previous recording's value down
-           across the first second of the new one. */
-        if (arg->state == OVERLAY_STATE_RECORDING && od->state != OVERLAY_STATE_RECORDING) {
-            od->fill        = 0.0;
-            od->fill_target = 0.0;
-        }
-        od->state = arg->state;
+        apply_state(od, arg->state);
         gtk_widget_queue_draw(od->drawing_area);
     }
     g_free(arg);
@@ -1195,7 +1227,7 @@ static gboolean idle_set_transcript(gpointer data)
     /* State and text are applied together: updating them through separate
        idle callbacks let a draw land between the two, briefly showing the
        transcribing capsule in place of text that was already on screen. */
-    od->state = arg->state;
+    apply_state(od, arg->state);
 
     g_free(od->transcript);
     g_free(od->status);

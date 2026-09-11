@@ -170,12 +170,14 @@ func TestEditorDrivesTheControllerEndToEnd(t *testing.T) {
 		discardLog(),
 	)
 
-	// Dictate, review, then hold again to record an edit instruction.
+	// Dictate, review, then use the edit gesture to record an instruction.
+	// (A quick push-to-talk press and release would read as a tap, which
+	// delivers.)
 	controller.Handle(session.InputPress)
 	controller.Handle(session.InputRelease)
 	controller.OnResult(controller.SessionID(), "The original text.")
-	controller.Handle(session.InputPress)
-	controller.Handle(session.InputRelease)
+	controller.Handle(session.InputEditPress)
+	controller.Handle(session.InputEditRelease)
 	controller.OnResult(controller.SessionID(), "revise it")
 
 	waitFor(t, func() bool { return controller.State() == session.ReviewReady })
@@ -211,8 +213,8 @@ func TestCancelDuringEditDiscardsTheRevision(t *testing.T) {
 	controller.Handle(session.InputPress)
 	controller.Handle(session.InputRelease)
 	controller.OnResult(controller.SessionID(), "the original")
-	controller.Handle(session.InputPress)
-	controller.Handle(session.InputRelease)
+	controller.Handle(session.InputEditPress)
+	controller.Handle(session.InputEditRelease)
 	controller.OnResult(controller.SessionID(), "revise it")
 
 	// The user gives up while the model is still working.

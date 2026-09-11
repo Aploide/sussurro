@@ -140,6 +140,20 @@ func TestReviewModelStatusDescribesAffordances(t *testing.T) {
 	}
 }
 
+// The Ready hint may only name gestures that are bound (M4): nothing listens
+// for Esc, and cancel is a trigger-socket command.
+func TestReviewReadyHintNamesRealGestures(t *testing.T) {
+	status := ReviewModel(session.ReviewReady, "text", false).Status
+	if strings.Contains(status, "Esc") {
+		t.Errorf("Status = %q advertises Esc, which is not bound", status)
+	}
+	for _, want := range []string{"deliver", "edit", "cancel"} {
+		if !strings.Contains(status, want) {
+			t.Errorf("Status = %q, want it to mention %q", status, want)
+		}
+	}
+}
+
 func TestErrorModelKeepsTranscriptVisible(t *testing.T) {
 	model := ErrorModel(session.ReviewReady, "precious text", "Delivery failed: no target")
 

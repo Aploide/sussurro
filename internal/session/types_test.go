@@ -65,13 +65,15 @@ func TestInputEventValues(t *testing.T) {
 }
 
 type fakeRecorder struct {
-	starts     int
-	stops      int
-	stopResult bool
+	starts      int
+	stops       int
+	startResult bool
+	stopResult  bool
 }
 
-func (recorder *fakeRecorder) StartRecording() {
+func (recorder *fakeRecorder) StartRecording() bool {
 	recorder.starts++
+	return recorder.startResult
 }
 
 func (recorder *fakeRecorder) StopRecording() bool {
@@ -100,7 +102,7 @@ func TestDispatchImmediateInput(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			recorder := &fakeRecorder{stopResult: tt.stopResult}
+			recorder := &fakeRecorder{startResult: true, stopResult: tt.stopResult}
 			stopped := DispatchImmediateInput(recorder, tt.event)
 
 			if recorder.starts != tt.wantStarts {
@@ -113,5 +115,24 @@ func TestDispatchImmediateInput(t *testing.T) {
 				t.Fatalf("recordingStopped = %t, want %t", stopped, tt.wantStopped)
 			}
 		})
+	}
+}
+
+func TestDispatchImmediateInputReportsRefusedStart(t *testing.T) {
+	// A recorder still transcribing the previous dictation refuses to start;
+	// the gesture must then read as ignored rather than as a new recording.
+	for _, event := range []InputEvent{InputPress, InputToggle} {
+		recorder := &fakeRecorder{startResult: false}
+		if got := dispatchImmediateInput(recorder, event); got != InputIgnored {
+			t.Errorf("%s with a refusing recorder = %v, want ignored", event, got)
+		}
+		if recorder.starts != 1 {
+			t.Errorf("%s called StartRecording %d times, want 1", event, recorder.starts)
+		}
+	}
+
+	recorder := &fakeRecorder{startResult: true}
+	if got := dispatchImmediateInput(recorder, InputPress); got != InputStarted {
+		t.Errorf("press with a willing recorder = %v, want started", got)
 	}
 }

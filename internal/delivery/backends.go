@@ -45,6 +45,10 @@ func (b *ClipboardBackend) Submit() error {
 	return b.submitKey()
 }
 
+// CanSubmit implements Backend: Enter is only available when the host
+// supplied a key sender.
+func (b *ClipboardBackend) CanSubmit() bool { return b.submitKey != nil }
+
 // commandBackend types text by invoking an external tool.
 type commandBackend struct {
 	name string
@@ -68,6 +72,9 @@ func (b *commandBackend) Type(text string) error {
 func (b *commandBackend) Submit() error {
 	return b.run(b.submitArgs[0], b.submitArgs[1:]...)
 }
+
+// CanSubmit implements Backend. Both tools can send a key.
+func (b *commandBackend) CanSubmit() bool { return len(b.submitArgs) > 0 }
 
 // newWtypeBackend types through the Wayland virtual keyboard protocol.
 // The "--" terminator keeps text starting with a dash from being read as
@@ -138,3 +145,6 @@ func (b *clipboardOnlyBackend) Type(text string) error {
 func (b *clipboardOnlyBackend) Submit() error {
 	return fmt.Errorf("%s cannot submit: nothing was inserted", b.Name())
 }
+
+// CanSubmit implements Backend: never, for the reason Submit gives.
+func (b *clipboardOnlyBackend) CanSubmit() bool { return false }

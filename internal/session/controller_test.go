@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sync"
 	"testing"
+	"time"
 )
 
 type fakeRecognizer struct {
@@ -13,12 +14,15 @@ type fakeRecognizer struct {
 	started  []SessionID
 	stopped  []SessionID
 	canceled []SessionID
+	// refuse makes StartCapture report that recording could not begin.
+	refuse bool
 }
 
-func (f *fakeRecognizer) StartCapture(id SessionID) {
+func (f *fakeRecognizer) StartCapture(id SessionID) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.started = append(f.started, id)
+	return !f.refuse
 }
 
 func (f *fakeRecognizer) StopCapture(id SessionID) {
@@ -136,12 +140,34 @@ func (f *fakePresenter) snapshot() (partials, reviewed []string, errs []error) {
 	return append([]string(nil), f.partials...), append([]string(nil), f.reviewed...), append([]error(nil), f.errs...)
 }
 
+// fakeClock advances by step on every reading, so consecutive gestures read
+// as a hold by default; a zero step makes them read as a tap.
+type fakeClock struct {
+	mu   sync.Mutex
+	now  time.Time
+	step time.Duration
+}
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(c.step)
+	return c.now
+}
+
+func (c *fakeClock) setStep(step time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.step = step
+}
+
 type harness struct {
 	controller *Controller
 	recognizer *fakeRecognizer
 	editor     *fakeEditor
 	deliverer  *fakeDeliverer
 	presenter  *fakePresenter
+	clock      *fakeClock
 }
 
 func newHarness(t *testing.T) *harness {
@@ -151,9 +177,13 @@ func newHarness(t *testing.T) *harness {
 		editor:     &fakeEditor{},
 		deliverer:  &fakeDeliverer{},
 		presenter:  &fakePresenter{},
+		clock:      &fakeClock{now: time.Unix(0, 0), step: time.Second},
 	}
 	h.controller = NewController(h.recognizer, h.editor, h.deliverer, h.presenter,
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h.controller.now = h.clock.Now
+	// Deliveries run inline so tests observe their outcome deterministically.
+	h.controller.spawn = func(work func()) { work() }
 	return h
 }
 
@@ -549,11 +579,12 @@ type orderedRecognizer struct {
 	stopCalled   chan struct{}
 }
 
-func (r *orderedRecognizer) StartCapture(id SessionID) {
+func (r *orderedRecognizer) StartCapture(id SessionID) bool {
 	// A synchronous callback must not deadlock while gesture ordering is held.
 	r.controller.OnPartial(id, "partial")
 	close(r.startEntered)
 	<-r.allowStart
+	return true
 }
 func (r *orderedRecognizer) StopCapture(SessionID)   { close(r.stopCalled) }
 func (r *orderedRecognizer) CancelCapture(SessionID) {}
@@ -903,5 +934,264 @@ func TestSecondEditReplacesTheRetainedRevision(t *testing.T) {
 	}
 	if got := h.controller.Text(); got != "second" {
 		t.Errorf("Text() = %q, want the immediately preceding text", got)
+	}
+}
+
+func TestEmptyResultEndsSessionInsteadOfWedging(t *testing.T) {
+	// Too-short, silent, and failed recordings publish nothing; the recognizer
+	// reports them as an empty result, which must not leave the controller
+	// waiting in Finalizing with no gesture able to move it.
+	h := newHarness(t)
+	h.controller.Handle(InputPress)
+	h.controller.Handle(InputRelease)
+	id := h.controller.SessionID()
+
+	h.controller.OnResult(id, "")
+
+	if got := h.controller.State(); got != ReviewIdle {
+		t.Fatalf("state = %s after an empty result, want idle", got)
+	}
+	_, reviewed, _ := h.presenter.snapshot()
+	if len(reviewed) != 0 {
+		t.Errorf("presented %v for an empty result, want nothing", reviewed)
+	}
+
+	// The next dictation must work normally.
+	h.reachReady(t, "second attempt")
+	if got := h.controller.Text(); got != "second attempt" {
+		t.Errorf("Text() = %q, want the next dictation", got)
+	}
+}
+
+func TestResultWhileRecordingFinishesTheSession(t *testing.T) {
+	// The pipeline finalises on its own at the duration cap while the key is
+	// still held, so the result precedes the release.
+	h := newHarness(t)
+	h.controller.Handle(InputPress)
+	id := h.controller.SessionID()
+
+	h.controller.OnResult(id, "capped text")
+	if got := h.controller.State(); got != ReviewReady {
+		t.Fatalf("state = %s after a capped result, want ready", got)
+	}
+	if got := h.controller.Text(); got != "capped text" {
+		t.Errorf("Text() = %q, want the capped text", got)
+	}
+
+	// The late release has nothing to stop and must not leave Ready.
+	if got := h.controller.Handle(InputRelease); got != ReviewReady {
+		t.Errorf("state = %s after the late release, want ready", got)
+	}
+	if _, stopped, _ := h.recognizer.counts(); stopped != 0 {
+		t.Errorf("stopped %d captures, want none for a capture already over", stopped)
+	}
+	if got := h.deliverer.delivered(); len(got) != 0 {
+		t.Errorf("delivered %v, want nothing until asked", got)
+	}
+}
+
+func TestEmptyResultWhileRecordingReturnsToIdle(t *testing.T) {
+	h := newHarness(t)
+	h.controller.Handle(InputPress)
+
+	h.controller.OnResult(h.controller.SessionID(), "")
+	if got := h.controller.State(); got != ReviewIdle {
+		t.Fatalf("state = %s, want idle", got)
+	}
+	if got := h.controller.Handle(InputRelease); got != ReviewIdle {
+		t.Errorf("state = %s after the late release, want idle", got)
+	}
+}
+
+func TestResultWhileEditingAppliesTheInstruction(t *testing.T) {
+	// A capped edit capture delivers its instruction before the release.
+	h := newHarness(t)
+	h.editor.autoBack = h.controller
+	h.editor.reply = "revised"
+	h.reachReady(t, "original")
+
+	h.controller.Handle(InputPress)
+	h.controller.OnResult(h.controller.SessionID(), "revise it")
+
+	if got := h.controller.State(); got != ReviewReady {
+		t.Fatalf("state = %s, want ready after the edit", got)
+	}
+	if got := h.controller.Text(); got != "revised" {
+		t.Errorf("Text() = %q, want the revised text", got)
+	}
+	// The release that follows must not start a second edit or a delivery.
+	if got := h.controller.Handle(InputRelease); got != ReviewReady {
+		t.Errorf("state = %s after the late release, want ready", got)
+	}
+	if calls, _, _ := h.editor.stats(); calls != 1 {
+		t.Errorf("editor calls = %d, want 1", calls)
+	}
+	if got := h.deliverer.delivered(); len(got) != 0 {
+		t.Errorf("delivered %v, want nothing", got)
+	}
+}
+
+func TestRefusedCaptureLeavesStateUnchanged(t *testing.T) {
+	t.Run("idle", func(t *testing.T) {
+		h := newHarness(t)
+		h.recognizer.refuse = true
+
+		if got := h.controller.Handle(InputPress); got != ReviewIdle {
+			t.Fatalf("state = %s when capture is refused, want idle", got)
+		}
+		if outcome := h.controller.Dispatch(InputToggle); outcome != InputIgnored {
+			t.Errorf("toggle outcome = %v when capture is refused, want ignored", outcome)
+		}
+		// Nothing started, so a release must not try to stop anything.
+		h.controller.Handle(InputRelease)
+		if _, stopped, _ := h.recognizer.counts(); stopped != 0 {
+			t.Errorf("stopped %d captures, want none", stopped)
+		}
+	})
+
+	t.Run("ready", func(t *testing.T) {
+		h := newHarness(t)
+		h.reachReady(t, "held text")
+		h.recognizer.refuse = true
+
+		if got := h.controller.Handle(InputPress); got != ReviewReady {
+			t.Fatalf("state = %s when edit capture is refused, want ready", got)
+		}
+		if got := h.controller.Handle(InputEditPress); got != ReviewReady {
+			t.Fatalf("state = %s when dedicated edit capture is refused, want ready", got)
+		}
+		if got := h.controller.Text(); got != "held text" {
+			t.Errorf("Text() = %q, want the held text untouched", got)
+		}
+	})
+}
+
+func TestTapOverReadyTextDelivers(t *testing.T) {
+	h := newHarness(t)
+	h.reachReady(t, "tap to deliver")
+	h.clock.setStep(0)
+
+	if got := h.controller.Handle(InputPress); got != ReviewEditing {
+		t.Fatalf("press moved to %s, want editing until the release decides", got)
+	}
+	editing := h.controller.SessionID()
+	// The gesture itself lands in Ready; delivery then runs off the lock.
+	if got := h.controller.Handle(InputRelease); got != ReviewReady {
+		t.Fatalf("release returned %s for a tap, want ready", got)
+	}
+	if got := h.controller.State(); got != ReviewIdle {
+		t.Fatalf("state = %s after a tap, want idle once delivered", got)
+	}
+
+	if got := h.deliverer.delivered(); len(got) != 1 || got[0] != "tap to deliver" {
+		t.Errorf("delivered %v, want the held text once", got)
+	}
+	h.deliverer.mu.Lock()
+	submits := append([]bool(nil), h.deliverer.submits...)
+	h.deliverer.mu.Unlock()
+	if len(submits) != 1 || submits[0] {
+		t.Errorf("submit flags = %v, want a plain delivery", submits)
+	}
+	// The abandoned edit capture must be cancelled, not finalised.
+	h.recognizer.mu.Lock()
+	canceled, stopped := append([]SessionID(nil), h.recognizer.canceled...), len(h.recognizer.stopped)
+	h.recognizer.mu.Unlock()
+	if len(canceled) != 1 || canceled[0] != editing {
+		t.Errorf("cancelled %v, want the edit capture %d", canceled, editing)
+	}
+	if stopped != 1 {
+		t.Errorf("stopped %d captures, want only the original dictation", stopped)
+	}
+	if calls, _, _ := h.editor.stats(); calls != 0 {
+		t.Errorf("editor calls = %d, want none for a tap", calls)
+	}
+}
+
+func TestTapDeliveryFailureKeepsTextInReady(t *testing.T) {
+	h := newHarness(t)
+	h.deliverer.err = errors.New("no paste target")
+	h.reachReady(t, "precious")
+	h.clock.setStep(0)
+
+	h.controller.Handle(InputPress)
+	h.controller.Handle(InputRelease)
+
+	if got := h.controller.State(); got != ReviewReady {
+		t.Errorf("state = %s, want ready so the text survives", got)
+	}
+	if got := h.controller.Text(); got != "precious" {
+		t.Errorf("Text() = %q, want the text preserved", got)
+	}
+}
+
+func TestTapDispatchOutcome(t *testing.T) {
+	h := newHarness(t)
+	h.reachReady(t, "text")
+	h.clock.setStep(0)
+
+	if outcome := h.controller.Dispatch(InputPress); outcome != InputStarted {
+		t.Fatalf("press outcome = %v, want started", outcome)
+	}
+	// A tap neither starts nor stops a capture from the caller's view.
+	if outcome := h.controller.Dispatch(InputRelease); outcome != InputIgnored {
+		t.Errorf("tap release outcome = %v, want ignored", outcome)
+	}
+	if got := h.deliverer.delivered(); len(got) != 1 {
+		t.Errorf("delivered %v, want the text once", got)
+	}
+}
+
+func TestHoldOverReadyTextStillEdits(t *testing.T) {
+	h := newHarness(t)
+	h.reachReady(t, "text")
+	h.clock.setStep(tapThreshold)
+
+	h.controller.Handle(InputPress)
+	if got := h.controller.Handle(InputRelease); got != ReviewApplyingEdit {
+		t.Fatalf("state = %s after holding for the threshold, want applying-edit", got)
+	}
+	if got := h.deliverer.delivered(); len(got) != 0 {
+		t.Errorf("delivered %v for a hold, want nothing", got)
+	}
+}
+
+func TestDedicatedEditTapDoesNotDeliver(t *testing.T) {
+	// Only the overloaded push-to-talk gesture advertises tap-to-deliver; the
+	// dedicated edit key always records an instruction.
+	h := newHarness(t)
+	h.reachReady(t, "text")
+	h.clock.setStep(0)
+
+	h.controller.Handle(InputEditPress)
+	if got := h.controller.Handle(InputEditRelease); got != ReviewApplyingEdit {
+		t.Fatalf("state = %s, want applying-edit", got)
+	}
+	if got := h.deliverer.delivered(); len(got) != 0 {
+		t.Errorf("delivered %v for an edit tap, want nothing", got)
+	}
+}
+
+func TestTapDeliveryRunsOffTheGestureLock(t *testing.T) {
+	// Delivery waits for key release and types into another window, so it
+	// must not run while the gesture lock is held: a cancel arriving during
+	// delivery would otherwise deadlock.
+	h := newHarness(t)
+	h.reachReady(t, "text")
+	h.clock.setStep(0)
+	h.deliverer.onCall = func() { h.controller.Cancel() }
+
+	done := make(chan struct{})
+	go func() {
+		h.controller.Handle(InputPress)
+		h.controller.Handle(InputRelease)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("tap delivery deadlocked against cancel")
+	}
+	if got := h.controller.State(); got != ReviewIdle {
+		t.Errorf("state = %s, want idle", got)
 	}
 }

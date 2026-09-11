@@ -672,15 +672,31 @@ function showWorkflowStatus(message, isError) {
 }
 
 // Saves one workflow setting, reverting the control if Go rejects the value.
-async function saveWorkflow(key, value, revert) {
+// restartFor names what a restart is needed for, or is empty when the change
+// applies live: a plain "Saved" for something that only takes effect after a
+// restart left the next dictation behaving differently from what Settings
+// showed.
+async function saveWorkflow(key, value, revert, restartFor) {
   const result = await window.saveWorkflowSetting(key, String(value));
   if (typeof result === "string" && result.startsWith("error:")) {
     showWorkflowStatus(result.slice("error:".length).trim(), true);
     if (revert) revert();
     return false;
   }
-  showWorkflowStatus("Saved", false);
+  showWorkflowStatus(
+    restartFor
+      ? `Saved. Restart Sussurro for ${restartFor} to take effect`
+      : "Saved",
+    false,
+  );
   return true;
+}
+
+// Names what a restart is for when the chosen option is marked restart by Go,
+// which is where the knowledge of what is wired at startup lives.
+function restartNoteFor(choices, value, what) {
+  const chosen = (choices || []).find((choice) => choice.value === value);
+  return chosen && chosen.restart ? what : "";
 }
 
 function renderWorkflow(workflow) {
@@ -731,9 +747,14 @@ function renderWorkflow(workflow) {
     let previous = workflow.mode;
     modeSelect.onchange = async () => {
       const chosen = modeSelect.value;
-      const ok = await saveWorkflow("workflow.mode", chosen, () => {
-        modeSelect.value = previous;
-      });
+      const ok = await saveWorkflow(
+        "workflow.mode",
+        chosen,
+        () => {
+          modeSelect.value = previous;
+        },
+        restartNoteFor(workflow.modes, chosen, "the new mode"),
+      );
       if (ok) {
         previous = chosen;
         renderVoiceEditing(chosen);
@@ -744,12 +765,14 @@ function renderWorkflow(workflow) {
   if (streaming) {
     streaming.checked = !!workflow.streamingEnabled;
     streaming.onchange = async () => {
+      // The streamer is built at startup, so the switch applies at restart.
       await saveWorkflow(
         "workflow.streaming.enabled",
         streaming.checked,
         () => {
           streaming.checked = !streaming.checked;
         },
+        "live transcription",
       );
     };
   }
@@ -758,6 +781,7 @@ function renderWorkflow(workflow) {
     interval,
     workflow.streamingInterval,
     "workflow.streaming.interval",
+    "the new interval",
   );
   bindTextSetting(device, workflow.inputDevice, "workflow.input.device");
   bindTextSetting(chord, workflow.inputChord, "workflow.input.chord");
@@ -771,9 +795,18 @@ function renderWorkflow(workflow) {
     let previous = workflow.deliveryBackend;
     deliverySelect.onchange = async () => {
       const chosen = deliverySelect.value;
-      const ok = await saveWorkflow("workflow.delivery.backend", chosen, () => {
-        deliverySelect.value = previous;
-      });
+      const ok = await saveWorkflow(
+        "workflow.delivery.backend",
+        chosen,
+        () => {
+          deliverySelect.value = previous;
+        },
+        restartNoteFor(
+          workflow.deliveryBackends,
+          chosen,
+          "the new delivery method",
+        ),
+      );
       if (ok) previous = chosen;
     };
   }
@@ -782,22 +815,28 @@ function renderWorkflow(workflow) {
     let previous = workflow.inputBackend;
     inputSelect.onchange = async () => {
       const chosen = inputSelect.value;
-      const ok = await saveWorkflow("workflow.input.backend", chosen, () => {
-        inputSelect.value = previous;
-      });
+      const ok = await saveWorkflow(
+        "workflow.input.backend",
+        chosen,
+        () => {
+          inputSelect.value = previous;
+        },
+        restartNoteFor(
+          workflow.inputBackends,
+          chosen,
+          "the new input source",
+        ),
+      );
       if (!ok) return;
       previous = chosen;
       showEvdevRows(chosen);
-      showWorkflowStatus(
-        "Saved. Restart Sussurro for the new input source to take effect",
-        false,
-      );
     };
   }
 }
 
 // Binds a text field that saves on blur or Enter, reverting a rejected value.
-function bindTextSetting(field, initial, key) {
+// restartFor, when given, is passed through to saveWorkflow's restart notice.
+function bindTextSetting(field, initial, key, restartFor) {
   if (!field) return;
   field.value = initial || "";
 
@@ -805,9 +844,14 @@ function bindTextSetting(field, initial, key) {
   const commit = async () => {
     if (field.value === previous) return;
     const chosen = field.value;
-    const ok = await saveWorkflow(key, chosen, () => {
-      field.value = previous;
-    });
+    const ok = await saveWorkflow(
+      key,
+      chosen,
+      () => {
+        field.value = previous;
+      },
+      restartFor,
+    );
     if (ok) previous = chosen;
   };
 

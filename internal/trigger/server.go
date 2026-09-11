@@ -34,6 +34,9 @@ type Server struct {
 
 	// notify sends a desktop notification. Replaced in tests.
 	notify func(summary, body string)
+	// readTimeout bounds waiting for a client's command line. Zero means
+	// defaultReadTimeout; tests shorten it.
+	readTimeout time.Duration
 }
 
 // NewServer creates a new trigger server.
@@ -158,13 +161,30 @@ func (s *Server) listen() {
 	}
 }
 
+// defaultReadTimeout bounds how long a connection may take to send its
+// command line. A client that writes "press" without a trailing newline and
+// then waits for the reply would otherwise block forever, since ReadString
+// only returns on the newline or on close.
+const defaultReadTimeout = 2 * time.Second
+
 func (s *Server) handleConnection(conn net.Conn) {
 	defer conn.Close()
 
+	timeout := s.readTimeout
+	if timeout <= 0 {
+		timeout = defaultReadTimeout
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+		s.log.Debug("Failed to set trigger read deadline", "error", err)
+	}
 	line, err := bufio.NewReader(conn).ReadString('\n')
 	if err != nil && line == "" {
+		// Nothing arrived at all, from a closed or silent client. There is
+		// no command to answer; an empty line would toggle recording.
 		return
 	}
+	// Whatever was buffered when the client closed or the deadline passed
+	// is the command, so a newline-less client still gets an answer.
 
 	reply := s.Execute(line)
 	if _, err := conn.Write([]byte(reply + "\n")); err != nil {
