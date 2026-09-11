@@ -83,6 +83,20 @@ If you prefer not to use the script:
 5. In the **"Action"** tab, enter: `sussurro-trigger`
 6. Click **"Apply"**
 
+### Opening Settings without a tray
+
+The capsule hides when idle while a tray widget is showing the icon, and
+Wayland cannot grab a global hotkey, so if you don't keep a tray on your
+panel bind a second shortcut to open Settings the same way:
+
+```
+sussurro --settings
+```
+
+It reaches the running instance over the trigger socket on any compositor
+(`sussurro-trigger settings` is equivalent). With no tray widget on any
+panel the capsule stays visible and its right-click menu also works.
+
 ### Sway (i3-like Wayland compositor)
 
 Add to your `~/.config/sway/config`:

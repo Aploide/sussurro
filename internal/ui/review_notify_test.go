@@ -171,6 +171,33 @@ func TestHostedTrayReleasesTheOverlay(t *testing.T) {
 		"overlay still shown after a hosted tray registered")
 }
 
+// A tray widget can be removed while the app runs (on KDE the watcher
+// service keeps running regardless), so losing the host must bring the
+// overlay back as the route to Settings and Quit.
+func TestTrayHostGoingAwayBringsTheOverlayBack(t *testing.T) {
+	overlay := &visibilityOverlay{}
+	manager := &Manager{overlay: overlay, hideLingerOverride: testLinger, stateChangeCh: make(chan ViewModel, 4)}
+
+	manager.render(CompactModel(session.StateIdle))
+	manager.onTrayHosted(true)
+	waitFor(t, func() bool { return !overlay.shown() }, "overlay still shown with a hosted tray")
+
+	manager.onTrayHosted(false)
+	if manager.trayReady.Load() {
+		t.Error("trayReady = true after the host unregistered")
+	}
+	// The re-render is queued for the update loop; run it by hand here.
+	select {
+	case model := <-manager.stateChangeCh:
+		manager.render(model)
+	default:
+		t.Fatal("losing the tray host queued no re-render")
+	}
+	if !overlay.shown() {
+		t.Error("overlay hidden after the tray host went away")
+	}
+}
+
 // TestStaleLingerDoesNotHideANewerModel covers the linger race: Stop() cannot
 // cancel a callback that has already started and is waiting on hideMu, so a
 // linger that finds a different timer installed must not hide what the newer

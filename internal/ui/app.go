@@ -71,9 +71,10 @@ type Manager struct {
 	// where taking that lock is what stalled capture in sussurro-xvj.36.
 	fillSource func() (float64, bool)
 
-	// trayReady reports whether the system tray has appeared. Some desktops
-	// never host an SNI item, and there the overlay's right-click menu is the
-	// only route to Settings and Quit, so it is shown when no tray registers
+	// trayReady reports whether a system tray is currently showing the icon.
+	// Some desktops never host an SNI item, and a tray widget can be removed
+	// while the app runs; there the overlay's right-click menu is the only
+	// route to Settings and Quit, so it is shown when no tray registers
 	// within trayGracePeriod and stays visible even when idle.
 	trayReady atomic.Bool
 

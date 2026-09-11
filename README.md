@@ -150,8 +150,10 @@ When Sussurro runs (Linux, macOS, or Windows), a sleek pill-shaped capsule appea
 
 | Method | How |
 |--------|-----|
-| System tray | Click the Sussurro icon → **Open Settings** |
-| Right-click overlay | Right-click the capsule → **Open Settings** (the capsule is hidden when idle; it stays visible if no tray is available) |
+| Command line | `sussurro --settings` opens Settings in the running instance, on any display server. Bind it to a shortcut or a launcher entry if you don't use a tray. |
+| System tray | Click the Sussurro icon → **Open Settings** (on KDE, new icons may sit behind the **^** "Show hidden icons" chevron) |
+| Right-click overlay | Right-click the capsule → **Open Settings**. The capsule hides when idle while a tray widget is showing the icon; with no tray widget on any panel it stays visible. |
+| Trigger socket | `scripts/trigger.sh settings` — the same thing `--settings` does, for shortcut tools that already use the script |
 
 The settings window lets you switch Whisper models, download models with a live progress bar, select the transcription language, change the global hotkey, and choose the hotkey mode. All changes take effect immediately — no restart required.
 

@@ -35,6 +35,15 @@ config:
   unavailable there.
 
 ### Added
+- **`sussurro --settings`** opens the Settings window of the running instance
+  over the trigger socket, on every display server and without `nc` or
+  `socat`; the route to Settings no longer depends on a tray widget being
+  somewhere the user looks.
+- **The overlay follows the tray widget, not the tray service**: on KDE the
+  StatusNotifier watcher runs whether or not any panel has a tray, so its
+  presence alone hid the capsule for users with no tray at all. The capsule
+  now hides only while a tray host is registered, and comes back when the
+  tray widget is removed.
 - **Trigger socket on every display server**: the local command socket used to
   run only under Wayland, as an alternative to the global hotkey grab. They are
   not alternatives — one is a key listener, the other a control channel — and

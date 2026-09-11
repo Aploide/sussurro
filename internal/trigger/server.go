@@ -8,7 +8,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -41,13 +40,7 @@ type Server struct {
 
 // NewServer creates a new trigger server.
 func NewServer(log *slog.Logger) (*Server, error) {
-	// Create socket in user's runtime directory
-	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
-	if runtimeDir == "" {
-		runtimeDir = "/tmp"
-	}
-
-	socketPath := filepath.Join(runtimeDir, "sussurro.sock")
+	socketPath := SocketPath()
 
 	// A leftover socket from a crashed run must be cleared, but a socket a
 	// live instance is listening on must not: removing it would silently

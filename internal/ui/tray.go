@@ -5,6 +5,8 @@ import (
 	"runtime"
 
 	"fyne.io/systray"
+
+	"github.com/aploide/sussurro/internal/session"
 )
 
 // trayIcon / trayIconRec are embedded per-platform in tray_icons_unix.go
@@ -49,18 +51,22 @@ func (m *Manager) onTrayReady() {
 	}()
 }
 
-// onTrayHosted records the outcome of the tray host probe. A hosted tray
-// releases the overlay to hide when idle; without a host the overlay stays up,
-// because its right-click menu is then the only route to Settings and Quit.
+// onTrayHosted records the outcome of the tray host probe, and is called
+// again whenever a host appears or goes away. A hosted tray releases the
+// overlay to hide when idle; without a host the overlay stays up, because its
+// right-click menu is then the only route to Settings and Quit — and it comes
+// back up when the user removes their tray widget.
 func (m *Manager) onTrayHosted(hosted bool) {
-	if !hosted {
+	if hosted {
+		m.markTrayReady()
+		return
+	}
+	if m.trayReady.Swap(false) {
+		slog.Info("System tray host went away; the overlay stays visible as the route to Settings and Quit")
+	} else {
 		slog.Info("No system tray host found; the overlay stays visible as the route to Settings and Quit")
-		return
 	}
-	if m.trayReady.Load() {
-		return
-	}
-	m.markTrayReady()
+	m.publish(CompactModel(session.StateIdle))
 }
 
 // onTrayExit is called by the systray library when it exits (e.g. the OS

@@ -21,6 +21,7 @@ import (
 	"github.com/aploide/sussurro/internal/pipeline"
 	"github.com/aploide/sussurro/internal/session"
 	"github.com/aploide/sussurro/internal/setup"
+	"github.com/aploide/sussurro/internal/trigger"
 	"github.com/aploide/sussurro/internal/ui"
 	"github.com/aploide/sussurro/internal/version"
 
@@ -58,7 +59,26 @@ func run() {
 	noUIFlag := flag.Bool("no-ui", false, "Run in headless CLI mode (no overlay or tray)")
 	whisperFlag := flag.Bool("whisper", false, "Switch Whisper ASR model")
 	wspFlag := flag.Bool("wsp", false, "Switch Whisper ASR model (alias for --whisper)")
+	settingsFlag := flag.Bool("settings", false, "Open the Settings window of the running instance and exit")
 	flag.Parse()
+
+	// The overlay hides when idle wherever a system tray shows the icon, and
+	// not every desktop that hosts a tray puts it somewhere the user looks —
+	// so a route to Settings that needs neither is required. This works on
+	// every display server, without nc or socat, and is what to bind to a
+	// shortcut or a launcher entry.
+	if *settingsFlag {
+		reply, err := trigger.Send(trigger.CommandSettings)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if reply != "SETTINGS" {
+			fmt.Fprintf(os.Stderr, "Sussurro refused to open Settings: %s (is it running with --no-ui?)\n", reply)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 
 	// Ensure Setup (First Run Experience)
 	if err := setup.EnsureSetup(*configPath); err != nil {
