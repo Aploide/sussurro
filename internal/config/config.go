@@ -416,9 +416,40 @@ func LoadConfig(path string) (*Config, error) {
 // name is the YAML key under hotkey: "push_to_talk", "toggle", or "edit". An
 // empty trigger clears the binding, which is valid because every binding is
 // optional.
+//
+// The first edit of a config still carrying the legacy trigger:/mode: pair
+// also commits Normalize's migration to disk. Otherwise clearing the binding
+// trigger was folded into would only last until the next start, when
+// Normalize would see the binding unset and fill it from trigger again.
 func SaveHotkeyBinding(cfg *Config, name, trigger string) error {
 	if err := SaveWorkflowValue(cfg, "hotkey."+name, YAMLString(trigger)); err != nil {
 		return fmt.Errorf("save hotkey binding: %w", err)
 	}
+	if cfg == nil || cfg.Hotkey.Trigger == "" {
+		return nil
+	}
+
+	// Persist the binding trigger was folded into before dropping trigger,
+	// unless it is the one just written, so the migrated value is not lost
+	// with its source. cfg still holds the pre-edit binding at this point.
+	migrated, value := "push_to_talk", cfg.Hotkey.PushToTalk
+	if cfg.Hotkey.Mode == "toggle" {
+		migrated, value = "toggle", cfg.Hotkey.Toggle
+	}
+	if migrated != name {
+		if err := SaveWorkflowValue(cfg, "hotkey."+migrated, YAMLString(value)); err != nil {
+			return fmt.Errorf("commit legacy hotkey migration: %w", err)
+		}
+	}
+	// Drop the superseded keys rather than blanking them: a blanked trigger
+	// is inert but stays in the file forever, and mode has a viper default,
+	// so blanking it would add a key to files that never had one.
+	for _, key := range []string{"hotkey.trigger", "hotkey.mode"} {
+		if err := RemoveWorkflowValue(cfg, key); err != nil {
+			return fmt.Errorf("commit legacy hotkey migration: %w", err)
+		}
+	}
+	cfg.Hotkey.Trigger = ""
+	cfg.Hotkey.Mode = ""
 	return nil
 }

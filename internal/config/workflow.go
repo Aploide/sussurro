@@ -127,7 +127,7 @@ type InputConfig struct {
 	// Empty picks the first stable keyboard. Ignored by other backends.
 	Device string `mapstructure:"device"`
 	// Chord is the key combination that drives recording, in the same
-	// notation as hotkey.trigger. Empty follows hotkey.trigger.
+	// notation as hotkey.push_to_talk. Empty follows hotkey.push_to_talk.
 	Chord string `mapstructure:"chord"`
 	// CancelChord abandons the session in review mode. Empty disables it.
 	CancelChord string `mapstructure:"cancel_chord"`
@@ -250,15 +250,16 @@ func enumError[T ~string](key, value string, allowed []T) error {
 // variable. Explicit binding is required because viper's AutomaticEnv does not
 // expose keys to Unmarshal unless they exist in the config file.
 var workflowEnvKeys = map[string]string{
-	"workflow.mode":                    "SUSSURRO_WORKFLOW_MODE",
-	"workflow.streaming.enabled":       "SUSSURRO_WORKFLOW_STREAMING_ENABLED",
-	"workflow.streaming.interval":      "SUSSURRO_WORKFLOW_STREAMING_INTERVAL",
-	"workflow.input.backend":           "SUSSURRO_WORKFLOW_INPUT_BACKEND",
-	"workflow.input.device":            "SUSSURRO_WORKFLOW_INPUT_DEVICE",
-	"workflow.input.chord":             "SUSSURRO_WORKFLOW_INPUT_CHORD",
-	"workflow.input.cancel_chord":      "SUSSURRO_WORKFLOW_INPUT_CANCEL_CHORD",
-	"workflow.delivery.backend":        "SUSSURRO_WORKFLOW_DELIVERY_BACKEND",
-	"workflow.delivery.clipboard_only": "SUSSURRO_WORKFLOW_DELIVERY_CLIPBOARD_ONLY",
+	"workflow.mode":                                "SUSSURRO_WORKFLOW_MODE",
+	"workflow.streaming.enabled":                   "SUSSURRO_WORKFLOW_STREAMING_ENABLED",
+	"workflow.streaming.interval":                  "SUSSURRO_WORKFLOW_STREAMING_INTERVAL",
+	"workflow.streaming.revision_window_sentences": "SUSSURRO_WORKFLOW_STREAMING_REVISION_WINDOW_SENTENCES",
+	"workflow.input.backend":                       "SUSSURRO_WORKFLOW_INPUT_BACKEND",
+	"workflow.input.device":                        "SUSSURRO_WORKFLOW_INPUT_DEVICE",
+	"workflow.input.chord":                         "SUSSURRO_WORKFLOW_INPUT_CHORD",
+	"workflow.input.cancel_chord":                  "SUSSURRO_WORKFLOW_INPUT_CANCEL_CHORD",
+	"workflow.delivery.backend":                    "SUSSURRO_WORKFLOW_DELIVERY_BACKEND",
+	"workflow.delivery.clipboard_only":             "SUSSURRO_WORKFLOW_DELIVERY_CLIPBOARD_ONLY",
 }
 
 // setWorkflowDefaults registers the backward-compatible workflow defaults.
@@ -266,6 +267,7 @@ func setWorkflowDefaults(v *viper.Viper) {
 	v.SetDefault("workflow.mode", string(DefaultInteractionMode))
 	v.SetDefault("workflow.streaming.enabled", DefaultStreamingEnabled)
 	v.SetDefault("workflow.streaming.interval", DefaultStreamingInterval)
+	v.SetDefault("workflow.streaming.revision_window_sentences", DefaultRevisionWindowSentences)
 	v.SetDefault("workflow.input.backend", string(DefaultInputBackend))
 	v.SetDefault("workflow.delivery.backend", string(DefaultDeliveryBackend))
 	v.SetDefault("workflow.delivery.clipboard_only", DefaultClipboardOnly)
@@ -284,7 +286,7 @@ func bindWorkflowEnv(v *viper.Viper) error {
 // validateChordSpec checks a chord string is syntactically usable. The key
 // names themselves are resolved by the input backend, which owns the keymap;
 // this catches the malformed shapes early, at load time. An empty value is
-// valid and means "follow hotkey.trigger".
+// valid and means "follow hotkey.push_to_talk".
 func validateChordSpec(key, spec string) error {
 	if strings.TrimSpace(spec) == "" {
 		return nil

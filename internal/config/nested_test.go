@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -363,5 +365,121 @@ func TestSetNestedValueEditsTheShippedDefaults(t *testing.T) {
 	}
 	if cfg.Models.LLM.ContextSize != 4096 {
 		t.Errorf("Models.LLM.ContextSize = %d, want it preserved", cfg.Models.LLM.ContextSize)
+	}
+}
+
+func TestSaveWorkflowValueRejectsFlowStyleWithoutCorruptingConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	// A flow-style section defeats the line-based editor: the new key lands
+	// inside the braces and the file no longer parses.
+	body := legacyConfig + "workflow: {mode: immediate}\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := loadAppearanceConfigPath(t, path)
+
+	err := SaveWorkflowValue(cfg, "workflow.input.backend", `"native"`)
+	if err == nil || !strings.Contains(err.Error(), "YAML structure") {
+		t.Fatalf("SaveWorkflowValue() error = %v, want unsupported structure error", err)
+	}
+	written, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(written) != body {
+		t.Errorf("failed SaveWorkflowValue() corrupted config:\n%s", written)
+	}
+}
+
+func TestSaveWorkflowValueKeepsLoadedConfigSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.yaml")
+	link := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(target, []byte(legacyConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	cfg := loadAppearanceConfigPath(t, link)
+
+	if err := SaveWorkflowValue(cfg, "workflow.mode", `"review"`); err != nil {
+		t.Fatalf("SaveWorkflowValue() error = %v", err)
+	}
+	// The atomic rename must update the link's target, not replace the link.
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("SaveWorkflowValue() replaced the config symlink")
+	}
+	written, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(written), `mode: "review"`) {
+		t.Errorf("symlink target has no review mode:\n%s", written)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.Contains(entry.Name(), ".tmp-") {
+			t.Errorf("temporary file %s left behind", entry.Name())
+		}
+	}
+}
+
+func TestSaveWorkflowValuePreservesPermissions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(legacyConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := loadAppearanceConfigPath(t, path)
+
+	if err := SaveWorkflowValue(cfg, "workflow.mode", `"review"`); err != nil {
+		t.Fatalf("SaveWorkflowValue() error = %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("mode = %o after save, want the original 0600 kept", info.Mode().Perm())
+	}
+}
+
+func TestRemoveNestedValue(t *testing.T) {
+	const doc = `hotkey:
+  trigger: "ctrl+shift+space" # legacy
+  mode: "push-to-talk"
+  push_to_talk: "super+1"
+workflow:
+  input:
+    backend: evdev
+`
+	tests := []struct {
+		key  string
+		want string
+	}{
+		{"hotkey.trigger", "hotkey:\n  mode: \"push-to-talk\"\n  push_to_talk: \"super+1\"\nworkflow:\n  input:\n    backend: evdev\n"},
+		// Removing a key that introduces a block takes the block with it.
+		{"workflow.input", "hotkey:\n  trigger: \"ctrl+shift+space\" # legacy\n  mode: \"push-to-talk\"\n  push_to_talk: \"super+1\"\nworkflow:\n"},
+		// Absent keys leave the document untouched.
+		{"hotkey.edit", doc},
+		{"missing.entirely", doc},
+	}
+	for _, tt := range tests {
+		t.Run(tt.key, func(t *testing.T) {
+			got, err := RemoveNestedValue(doc, tt.key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.want {
+				t.Errorf("RemoveNestedValue(%q) =\n%s\nwant\n%s", tt.key, got, tt.want)
+			}
+		})
 	}
 }

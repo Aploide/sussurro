@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"go.yaml.in/yaml/v3"
 )
 
 // SetNestedValue writes a dotted key such as "workflow.input.backend" into a
@@ -29,7 +31,56 @@ func SetNestedValue(content, dottedKey, value string) (string, error) {
 	return strings.Join(updated, "\n"), nil
 }
 
+// RemoveNestedValue deletes a dotted key, and any block it introduces, from a
+// YAML document. A key that is absent leaves the document unchanged, so a
+// superseded setting can be dropped without first checking for it.
+func RemoveNestedValue(content, dottedKey string) (string, error) {
+	path := strings.Split(dottedKey, ".")
+	if len(path) == 0 || dottedKey == "" {
+		return "", fmt.Errorf("empty key")
+	}
+	lines := strings.Split(content, "\n")
+	return strings.Join(removeInLines(lines, path), "\n"), nil
+}
+
+// RemoveWorkflowValue deletes one setting from the file that supplied cfg,
+// with the same validation and atomic write as SaveWorkflowValue.
+func RemoveWorkflowValue(cfg *Config, dottedKey string) error {
+	configSaveMu.Lock()
+	defer configSaveMu.Unlock()
+	configFile, err := configPath(cfg)
+	if err != nil {
+		return err
+	}
+
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		return fmt.Errorf("cannot read config file: %w", err)
+	}
+
+	updated, err := RemoveNestedValue(string(data), dottedKey)
+	if err != nil {
+		return err
+	}
+	if updated == string(data) {
+		return nil
+	}
+	var document map[string]any
+	if err := yaml.Unmarshal([]byte(updated), &document); err != nil {
+		return fmt.Errorf("%s cannot be removed without changing this config's YAML structure: %w", dottedKey, err)
+	}
+	if err := writeConfigAtomically(configFile, []byte(updated)); err != nil {
+		return fmt.Errorf("write config atomically: %w", err)
+	}
+	return nil
+}
+
 // SaveWorkflowValue persists one setting to the file that supplied cfg.
+//
+// The line-based edit is checked to still parse as a YAML mapping before it
+// is written, and the write replaces the file atomically, so a malformed
+// edit or an interrupted write never leaves the user with a config that no
+// longer loads. This mirrors SaveTheme.
 func SaveWorkflowValue(cfg *Config, dottedKey, value string) error {
 	configSaveMu.Lock()
 	defer configSaveMu.Unlock()
@@ -47,7 +98,14 @@ func SaveWorkflowValue(cfg *Config, dottedKey, value string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(configFile, []byte(updated), 0644)
+	var document map[string]any
+	if err := yaml.Unmarshal([]byte(updated), &document); err != nil {
+		return fmt.Errorf("%s cannot be saved without changing this config's YAML structure: %w", dottedKey, err)
+	}
+	if err := writeConfigAtomically(configFile, []byte(updated)); err != nil {
+		return fmt.Errorf("write config atomically: %w", err)
+	}
+	return nil
 }
 
 func userConfigPath() (string, error) {
@@ -85,6 +143,32 @@ func setInLines(lines []string, path []string, value string) ([]string, error) {
 	}
 
 	return lines, nil
+}
+
+// removeInLines drops path from lines, together with any nested block the key
+// introduces, returning the document unchanged when the key is absent.
+func removeInLines(lines []string, path []string) []string {
+	start, end, indent := 0, len(lines), 0
+
+	for depth, key := range path {
+		index := findKeyLine(lines, key, start, end, indent)
+		if index == -1 {
+			return lines
+		}
+		if depth == len(path)-1 {
+			last := blockEnd(lines, index+1, indent)
+			// blockEnd skips blank lines; leave them, so the spacing between
+			// sections (and the file's trailing newline) survives.
+			for last > index+1 && strings.TrimSpace(lines[last-1]) == "" {
+				last--
+			}
+			return append(append([]string{}, lines[:index]...), lines[last:]...)
+		}
+		start = index + 1
+		end = blockEnd(lines, start, indent)
+		indent = childIndent(lines, start, end, indent)
+	}
+	return lines
 }
 
 // findKeyLine returns the index of key at exactly the given indentation within

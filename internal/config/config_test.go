@@ -238,6 +238,7 @@ func TestEnvironmentOverridesWorkflowSettings(t *testing.T) {
 	t.Setenv("SUSSURRO_WORKFLOW_MODE", "review")
 	t.Setenv("SUSSURRO_WORKFLOW_STREAMING_ENABLED", "true")
 	t.Setenv("SUSSURRO_WORKFLOW_STREAMING_INTERVAL", "300ms")
+	t.Setenv("SUSSURRO_WORKFLOW_STREAMING_REVISION_WINDOW_SENTENCES", "7")
 	t.Setenv("SUSSURRO_WORKFLOW_INPUT_BACKEND", "trigger")
 	t.Setenv("SUSSURRO_WORKFLOW_DELIVERY_BACKEND", "ydotool")
 
@@ -254,6 +255,9 @@ func TestEnvironmentOverridesWorkflowSettings(t *testing.T) {
 	}
 	if got := cfg.Workflow.StreamingInterval().String(); got != "300ms" {
 		t.Errorf("StreamingInterval() = %s, want 300ms from environment", got)
+	}
+	if cfg.Workflow.Streaming.RevisionWindowSentences != 7 {
+		t.Errorf("RevisionWindowSentences = %d, want 7 from environment", cfg.Workflow.Streaming.RevisionWindowSentences)
 	}
 	if cfg.Workflow.Input.Backend != InputTrigger {
 		t.Errorf("Input.Backend = %q, want %q from environment", cfg.Workflow.Input.Backend, InputTrigger)
@@ -541,8 +545,146 @@ func TestHotkeyPersistenceUsesLoadedConfigPathAndMigratesLegacyForm(t *testing.T
 	if reloaded.Hotkey.Edit != "super+9" {
 		t.Errorf("Edit = %q, want super+9", reloaded.Hotkey.Edit)
 	}
-	if reloaded.Hotkey.Trigger != "ctrl+shift+space" {
-		t.Errorf("legacy Trigger = %q, want preserved", reloaded.Hotkey.Trigger)
+	// The first save commits the migration, so the legacy key can no longer
+	// resurrect a binding that is later cleared.
+	if reloaded.Hotkey.Trigger != "" {
+		t.Errorf("legacy Trigger = %q, want cleared once a binding was saved", reloaded.Hotkey.Trigger)
+	}
+}
+
+func TestSavingABindingCommitsTheLegacyMigration(t *testing.T) {
+	// The bug: a config with only trigger: loads with push_to_talk filled
+	// from it. Clearing push_to_talk in Settings wrote push_to_talk: '' but
+	// left trigger:, so the next start folded trigger back in and the
+	// cleared binding came back.
+	tests := []struct {
+		name     string
+		body     string
+		edit     string // the binding the user changes
+		value    string
+		wantPTT  string
+		wantTog  string
+		wantEdit string
+	}{
+		{
+			name:    "clearing the binding trigger was folded into",
+			body:    legacyConfig,
+			edit:    "push_to_talk",
+			value:   "",
+			wantPTT: "",
+		},
+		{
+			name:     "editing an unrelated binding persists the folded one",
+			body:     legacyConfig,
+			edit:     "edit",
+			value:    "super+9",
+			wantPTT:  "ctrl+shift+space",
+			wantEdit: "super+9",
+		},
+		{
+			name:     "toggle mode folds into toggle",
+			body:     legacyConfig + "  mode: \"toggle\"\n",
+			edit:     "edit",
+			value:    "super+9",
+			wantTog:  "ctrl+shift+space",
+			wantEdit: "super+9",
+		},
+		{
+			name:    "clearing a toggle-mode binding",
+			body:    legacyConfig + "  mode: \"toggle\"\n",
+			edit:    "toggle",
+			value:   "",
+			wantTog: "",
+		},
+		{
+			name:     "explicit binding is kept over the legacy trigger",
+			body:     legacyConfig + "  push_to_talk: \"super+1\"\n",
+			edit:     "edit",
+			value:    "super+9",
+			wantPTT:  "super+1",
+			wantEdit: "super+9",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			viper.Reset()
+			t.Cleanup(viper.Reset)
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tt.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := LoadConfig(path)
+			if err != nil {
+				t.Fatalf("LoadConfig() error = %v", err)
+			}
+			if cfg.Hotkey.Trigger == "" {
+				t.Fatal("test config did not load the legacy trigger")
+			}
+
+			if err := SaveHotkeyBinding(cfg, tt.edit, tt.value); err != nil {
+				t.Fatalf("SaveHotkeyBinding(%s) error = %v", tt.edit, err)
+			}
+			if cfg.Hotkey.Trigger != "" || cfg.Hotkey.Mode != "" {
+				t.Errorf("in-memory trigger/mode = %q/%q after save, want cleared", cfg.Hotkey.Trigger, cfg.Hotkey.Mode)
+			}
+
+			viper.Reset()
+			reloaded, err := LoadConfig(path)
+			if err != nil {
+				t.Fatalf("reloading: %v", err)
+			}
+			if reloaded.Hotkey.Trigger != "" {
+				t.Errorf("trigger = %q on disk, want cleared", reloaded.Hotkey.Trigger)
+			}
+			// The legacy lines are removed, not blanked, and a mode: line is
+			// never added to a file that had none.
+			onDisk, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range []string{"trigger:", "mode:"} {
+				if strings.Contains(string(onDisk), key) {
+					t.Errorf("legacy %q still in the file after save:\n%s", key, onDisk)
+				}
+			}
+			if reloaded.Hotkey.PushToTalk != tt.wantPTT {
+				t.Errorf("PushToTalk = %q, want %q", reloaded.Hotkey.PushToTalk, tt.wantPTT)
+			}
+			if reloaded.Hotkey.Toggle != tt.wantTog {
+				t.Errorf("Toggle = %q, want %q", reloaded.Hotkey.Toggle, tt.wantTog)
+			}
+			if reloaded.Hotkey.Edit != tt.wantEdit {
+				t.Errorf("Edit = %q, want %q", reloaded.Hotkey.Edit, tt.wantEdit)
+			}
+		})
+	}
+}
+
+func TestSavingABindingWithoutLegacyKeysAddsNone(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	body := minimalModels + "hotkey:\n  push_to_talk: \"super+1\"\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if err := SaveHotkeyBinding(cfg, "edit", "super+9"); err != nil {
+		t.Fatalf("SaveHotkeyBinding() error = %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A migrated or never-legacy config must not grow empty legacy keys.
+	for _, key := range []string{"trigger:", "mode:"} {
+		if strings.Contains(string(data), key) {
+			t.Errorf("config gained a %s line:\n%s", key, data)
+		}
 	}
 }
 
