@@ -89,10 +89,11 @@ try {
     if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
     Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
 
-    # Zip layout: sussurro-windows-amd64/{sussurro.exe,config.example.yaml,INSTALL.txt}
+    # Zip layout includes the app and its sibling LLM helper.
     $payload = Join-Path $extractDir "sussurro-windows-amd64"
-    if (-not (Test-Path (Join-Path $payload "sussurro.exe"))) {
-        throw "sussurro.exe not found in the archive. Expected sussurro-windows-amd64\sussurro.exe"
+    if (-not (Test-Path (Join-Path $payload "sussurro.exe")) -or
+        -not (Test-Path (Join-Path $payload "sussurro-llm-helper.exe"))) {
+        throw "Required binaries not found in sussurro-windows-amd64"
     }
     Copy-Item "$payload\*" $installDir -Recurse -Force
 

@@ -78,15 +78,17 @@ try {
     if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
     Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
 
-    # Zip layout: sussurro-transcribe-windows-amd64/{sussurro-transcribe.exe,...}
+    # Zip layout includes the CLI and its sibling LLM helper.
     $payload = Join-Path $extractDir "sussurro-transcribe-windows-amd64"
     $exe = Join-Path $payload "sussurro-transcribe.exe"
-    if (-not (Test-Path $exe)) {
-        throw "sussurro-transcribe.exe not found in the archive. Expected sussurro-transcribe-windows-amd64\sussurro-transcribe.exe"
+    $helper = Join-Path $payload "sussurro-llm-helper.exe"
+    if (-not (Test-Path $exe) -or -not (Test-Path $helper)) {
+        throw "Required binaries not found in sussurro-transcribe-windows-amd64"
     }
-    # Copy only the binary: the archive's config.example.yaml and INSTALL.txt
-    # would otherwise overwrite the main app's copies in the shared directory.
+    # Copy only executables: config.example.yaml and INSTALL.txt must not
+    # overwrite the main app's copies in the shared directory.
     Copy-Item $exe $installDir -Force
+    Copy-Item $helper $installDir -Force
 
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
     if ([string]::IsNullOrEmpty($userPath)) {
