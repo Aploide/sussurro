@@ -173,6 +173,34 @@ verify_checksum() {
     success "Checksum verified"
 }
 
+# ── Linux: check the shared libraries the binary needs at load time ─────────
+# The release binary is dynamically linked against GTK 3 and WebKitGTK. When
+# one of them is missing the dynamic loader aborts with an opaque
+# "error while loading shared libraries: libX.so: cannot open shared object
+# file" before the program can print anything, so surface it here with the
+# distro's package names instead. gtk-layer-shell is *not* on this list: it is
+# loaded with dlopen() at runtime and the overlay falls back to a floating
+# window without it.
+check_linux_runtime_libs() {
+    local binary="$1" missing
+    command -v ldd &>/dev/null || return 0
+
+    missing=$(ldd "$binary" 2>/dev/null | awk '/not found/ {print $1}')
+    [ -n "$missing" ] || return 0
+
+    warn "These shared libraries are missing, sussurro will not start until they are installed:"
+    local lib
+    for lib in $missing; do
+        printf "      %s\n" "$lib"
+    done
+    printf "    Install the runtime packages for your distro:\n"
+    printf "      Arch/Manjaro:   sudo pacman -S gtk3 webkit2gtk-4.1\n"
+    printf "      Ubuntu/Debian:  sudo apt install libgtk-3-0 libwebkit2gtk-4.1-0\n"
+    printf "      Fedora:         sudo dnf install gtk3 webkit2gtk4.1\n"
+    printf "      openSUSE:       sudo zypper install libgtk-3-0 libwebkit2gtk-4_1-0\n"
+    printf "    Full list: https://github.com/${REPO}/blob/master/docs/dependencies.md\n"
+}
+
 # ── main ──────────────────────────────────────────────────────────────────────
 main() {
     header "Sussurro installer"
@@ -244,6 +272,12 @@ main() {
         ${use_sudo} install -m 755 "${extracted_dir}/trigger.sh" "$trigger_dest"
     fi
 
+    # 7c. Linux: warn about missing runtime libraries before the user hits the
+    #     loader error on first run.
+    if [[ "$platform" == linux-* ]]; then
+        check_linux_runtime_libs "$dest"
+    fi
+
     # 8. macOS: strip quarantine attribute so Gatekeeper doesn't block the binary
     if [[ "$platform" == macos-* ]]; then
         info "Removing macOS quarantine flag..."
@@ -272,6 +306,8 @@ main() {
     if [[ "$platform" == linux-* ]] && [ -n "$trigger_dest" ]; then
         printf "${YELLOW}Wayland users:${RESET} bind Ctrl+Shift+Space in your desktop\n"
         printf "  environment to: ${CYAN}%s${RESET}\n" "$trigger_dest"
+        printf "  For a true always-on-top overlay install the optional gtk-layer-shell\n"
+        printf "  package (Arch: gtk-layer-shell, Debian/Ubuntu: libgtk-layer-shell0).\n"
         printf "  Full guide: https://github.com/${REPO}/blob/master/docs/wayland.md\n\n"
     fi
 }

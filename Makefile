@@ -187,19 +187,13 @@ endif
 # fine. The variables below expand to empty elsewhere, which is what the
 # darwin and Windows recipes already assume.
 ifeq ($(UNAME_S),Linux)
-# The pkg-config module is gtk-layer-shell-0; "gtk-layer-shell" is the *package*
-# name on most distros and never resolves, so probe both (older 0.6 releases
-# shipped only the unsuffixed .pc).
-LAYER_SHELL_PC     := $(shell pkg-config --exists gtk-layer-shell-0 2>/dev/null && echo gtk-layer-shell-0 || (pkg-config --exists gtk-layer-shell 2>/dev/null && echo gtk-layer-shell))
-HAS_LAYER_SHELL    := $(if $(LAYER_SHELL_PC),yes,no)
-
+# gtk-layer-shell is deliberately NOT a build dependency: the overlay
+# dlopen()s libgtk-layer-shell.so.0 at runtime (internal/ui/layer_shell_linux.c)
+# so one prebuilt binary works whether or not the optional package is
+# installed. Linking it made the release abort at load time on machines
+# without it.
 LAYER_CFLAGS  := $(shell pkg-config --cflags gtk+-3.0 2>/dev/null)
 LAYER_LDFLAGS := $(shell pkg-config --libs   gtk+-3.0 2>/dev/null)
-
-ifeq ($(HAS_LAYER_SHELL),yes)
-LAYER_CFLAGS  += $(shell pkg-config --cflags $(LAYER_SHELL_PC) 2>/dev/null) -DHAVE_GTK_LAYER_SHELL
-LAYER_LDFLAGS += $(shell pkg-config --libs   $(LAYER_SHELL_PC) 2>/dev/null)
-endif
 
 WV_CFLAGS  := $(shell pkg-config --cflags webkit2gtk-4.1 2>/dev/null || pkg-config --cflags webkit2gtk-4.0 2>/dev/null)
 WV_LDFLAGS := $(shell pkg-config --libs   webkit2gtk-4.1 2>/dev/null || pkg-config --libs   webkit2gtk-4.0 2>/dev/null)
@@ -426,7 +420,7 @@ else ifeq ($(UNAME_S),Darwin)
 	CGO_LDFLAGS="$(WHISPER_LDFLAGS) $(DARWIN_UI_LDFLAGS)" \
 	$(NICE) go build $(GO_LDFLAGS) -o $(BUILD_DIR)/$(APP_NAME) ./$(CMD_DIR)
 else
-	@echo "  Layer shell  : $(HAS_LAYER_SHELL)$(if $(LAYER_SHELL_PC), ($(LAYER_SHELL_PC)))"
+	@echo "  Layer shell  : runtime dlopen (libgtk-layer-shell.so.0, optional)"
 	@echo "  Vulkan       : whisper $(HAS_VULKAN), llm helper $(HAS_LLAMA_VULKAN)"
 	@echo "  Build jobs   : $(NPROCS) of $(NCORES) cores ($(NICE))"
 	@echo "  Build tags   : $(UI_TAGS)"
