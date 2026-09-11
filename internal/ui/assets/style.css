@@ -757,6 +757,15 @@ kbd {
   outline-offset: -3px;
 }
 
+/* A panel lays its sections out the way .content did before the tabs:
+   without this the cards inside a tab sit flush against each other, since
+   .content's gap only separates the panels themselves. */
+.tab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
 /* Only the selected panel occupies the scroll area. */
 .tab-panel[hidden] {
   display: none !important;
