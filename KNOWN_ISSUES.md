@@ -23,19 +23,24 @@ Vulkan-accelerated Whisper). Remaining caveats:
   Vulkan-enabled ggml copy would collide at link time).
 - **`sussurro-transcribe` needs ffmpeg** on PATH (`winget install Gyan.FFmpeg`).
 
+### Linux release binaries are CPU-only
+The published Linux artifacts are built on a runner without the Vulkan SDK, so
+neither whisper nor the LLM helper uses the GPU and `models.llm.gpu_layers`
+has no effect. Vulkan is a build-time option of a source build: `make build`
+enables it when the SDK (`vulkan` pkg-config module and `glslc`) is present,
+and the LLM helper additionally needs the `spirv-headers` package — without it
+the helper is built for CPU and `make` prints a note saying so.
+
 ## Review Workflow
 
 The review workflow is opt-in and off by default; immediate dictation is
 unaffected by everything here.
 
-- **No expanded transcript card yet**: review state is published to the overlay
-  as a view model, but the native overlays still render only the existing
-  capsule. Partial and reviewed text is visible in the logs (`app.debug: true`)
-  rather than on screen. The Linux overlay is a fixed-size Cairo pill with no
-  arbitrary-text drawing API; the expanded card is tracked separately.
-- **Review mode is unverified on macOS and Windows**: the workflow itself is
-  platform-neutral and covered by tests, but the gestures and delivery paths
-  have only been exercised on Linux X11.
+- **Review mode is Linux-only for now**: the Linux overlay renders partial and
+  reviewed text, but the Windows and macOS overlays still draw only the
+  capsule, and `cancel` reaches the controller only through the Unix trigger
+  socket. Settings lists the mode as unavailable there, and the streamer is
+  left off so no partials are computed that cannot be shown.
 - **evdev requires the `input` group**: `workflow.input.backend: evdev` reads
   Linux input devices directly and fails with an explanatory error without
   membership. `auto` never opens `/dev/input`, so this affects only hosts that

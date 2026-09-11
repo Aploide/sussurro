@@ -46,7 +46,7 @@ On first run Sussurro will guide you through downloading the AI models.
 - **Flexible ASR**: Whisper Small (fast) or Large v3 Turbo (accurate), switchable from the UI
 - **Live Hotkey Config**: Change the global hotkey from Settings — takes effect instantly, no restart
 - **Hotkey Mode**: Switch between *Push to Talk* (hold to record, release to transcribe) and *Toggle* (press once to start, press again to transcribe) directly from Settings *(X11, macOS & Windows — not Wayland)*
-- **GPU Acceleration**: Metal on macOS; Vulkan Whisper on Linux and Windows, plus Vulkan cleanup on Linux
+- **GPU Acceleration**: Metal on macOS; Vulkan Whisper on Windows. On Linux, Vulkan (Whisper, and the LLM helper too) is a build-time option when [building from source](#building-from-source) — the release binaries are CPU-only
 - **Transcription Language**: Choose the language Whisper listens for (or use Auto Detect) directly from Settings
 - **Headless Mode**: `--no-ui` flag for CLI/scripting use on any platform
 - **Review Mode** *(opt-in)*: Hold the transcription before it is delivered — read it, dictate a correction, or discard it, then insert it when you are ready. Off by default; see [Review workflow](#review-workflow)
@@ -132,7 +132,7 @@ cd sussurro
 make build        # → bin/sussurro  (overlay + settings + tray)
 ```
 
-Requires GTK3 and WebKit2GTK dev headers on Linux. On Windows, build under MSYS2 MINGW64 with the Vulkan SDK packages. See [Compilation](docs/compilation.md) for full instructions and per-platform dependency lists.
+Requires GTK3 and WebKit2GTK dev headers on Linux. A source build on Linux picks up Vulkan GPU acceleration automatically when the Vulkan SDK (`vulkan` pkg-config module, `glslc`) is installed, plus the `spirv-headers` package for the LLM helper; otherwise it builds for CPU, and `WHISPER_VULKAN=0` forces that. On Windows, build under MSYS2 MINGW64 with the Vulkan SDK packages. See [Compilation](docs/compilation.md) for full instructions and per-platform dependency lists.
 
 ---
 

@@ -131,7 +131,7 @@ models:
     path: ~/.sussurro/models/whisper-large-v3-turbo.bin
     vad_path: ~/.sussurro/models/ggml-silero-v6.2.0.bin
     vad_threshold: 0.01
-    threads: 4
+    threads: 0            # 0 = all cores; set a number to cap CPU use
     language: auto          # overridden by -lang flag
   llm:
     path: ~/.sussurro/models/qwen3-sussurro.gguf

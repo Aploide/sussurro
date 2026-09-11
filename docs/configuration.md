@@ -108,7 +108,7 @@ models:
     vad_path: "/home/you/.sussurro/models/ggml-silero-v6.2.0.bin"
     vad_threshold: 0.01 # Increase toward 1.0 if non-speech passes the VAD
     type: "whisper"
-    threads: 4
+    threads: 0       # 0 = all cores; set e.g. 4 to cap CPU use during recognition
     language: "en"   # BCP-47 code passed to Whisper; "auto" for auto-detection
   llm:
     path: "/home/you/.sussurro/models/qwen3-sussurro-q4_k_m.gguf" # Path to Qwen 3 model
@@ -195,6 +195,8 @@ shortcuts are configured in the desktop environment.
 
 The superseded `trigger` and `mode` keys are still read for existing configs.
 `trigger` fills the binding named by `mode` only when that binding is unset.
+The first binding saved from Settings writes that migration to the file and
+clears `trigger` and `mode`, so a binding cleared later stays cleared.
 
 The trigger string is `+`-separated: modifiers first, then the key. Modifier aliases:
 
@@ -231,6 +233,7 @@ workflow:
   streaming:
     enabled: true         # live partial transcription
     interval: "750ms"     # 100ms-10s
+    revision_window_sentences: 4  # 1-20
   input:
     backend: "auto"       # auto, native, trigger, evdev
     device: ""            # evdev only
@@ -262,16 +265,24 @@ less often.
 **`interval`** is the minimum gap between partial passes, as a Go duration
 string (`750ms`, `1s`). Values outside 100ms–10s are rejected.
 
+**`revision_window_sentences`** is how many of the most recently spoken
+sentences stay open to revision (1–20, default 4). They are decoded again on
+every partial pass, so later audio can still correct them; older text is
+frozen and only conditions the decoder. Windowing begins only once this many
+sentences have been finished, so a short dictation is decoded whole. Raise it
+to keep more text correctable at the price of slower passes on long
+dictations.
+
 #### `input`
 
 **`backend`** selects where recording gestures come from:
 
 | Value | Behaviour |
 | ------- | ----------- |
-| `auto` | Native hotkeys on X11, macOS, and Windows; the trigger socket on Wayland. Never opens `/dev/input`. The default. |
-| `native` | The in-process global hotkey listener. |
-| `trigger` | The Unix socket only — for compositors that own their own key bindings. See [wayland.md](wayland.md). |
-| `evdev` | Reads Linux input devices directly. Optional; see below. |
+| `auto` | Native hotkeys on X11, macOS, and Windows, plus the trigger socket; on Wayland the socket is the only route. Never opens `/dev/input`. The default. |
+| `native` | The in-process global hotkey listener only. The trigger socket is not started, so `scripts/trigger.sh` — including `deliver` and `cancel` — is unavailable. On Wayland, where no key can be grabbed, the socket stays up as the only input route and this behaves like `auto`. |
+| `trigger` | The Unix socket only; no global hotkey is grabbed. For compositors that own their own key bindings. See [wayland.md](wayland.md). |
+| `evdev` | Reads Linux input devices directly, with the trigger socket alongside; the native grab is off so a key is not seen twice. Optional; see below. |
 
 The `evdev` backend gives true press and release gestures on compositors that
 cannot deliver them, at the cost of requiring membership of the `input` group:
@@ -281,12 +292,18 @@ sudo usermod -aG input $USER   # then log out and back in
 ```
 
 **`device`** selects the keyboard by name substring or exact path. Empty picks
-the first stable `/dev/input/by-id` keyboard. A name matching several devices
-is an error rather than a silent choice of the wrong keyboard.
+the first stable `/dev/input/by-id` keyboard, or the first `/dev/input/by-path`
+one when there is none (a laptop's built-in keyboard has no by-id entry).
+Bare `event*` nodes are considered last, and only when their capabilities
+look like a keyboard. A name matching several devices is an error rather than
+a silent choice of the wrong keyboard.
 
 **`chord`** is the recording combination in the same notation as
-`hotkey.trigger`. Empty follows `hotkey.trigger`. Either side of a modifier
-satisfies it, and the parts may be pressed in any order.
+`hotkey.push_to_talk`. Empty follows `hotkey.push_to_talk`; with neither set
+the backend does not start and the native grab stays in charge (a toggle key
+is never adopted, because evdev only reports press and release and would turn
+it into hold-to-record). Either side of a modifier satisfies it, and the parts
+may be pressed in any order.
 
 **`cancel_chord`** abandons a review session and discards the held text. Empty
 disables it.
@@ -342,6 +359,7 @@ The review workflow keys follow the same rule:
 | `SUSSURRO_WORKFLOW_MODE` | `workflow.mode` |
 | `SUSSURRO_WORKFLOW_STREAMING_ENABLED` | `workflow.streaming.enabled` |
 | `SUSSURRO_WORKFLOW_STREAMING_INTERVAL` | `workflow.streaming.interval` |
+| `SUSSURRO_WORKFLOW_STREAMING_REVISION_WINDOW_SENTENCES` | `workflow.streaming.revision_window_sentences` |
 | `SUSSURRO_WORKFLOW_INPUT_BACKEND` | `workflow.input.backend` |
 | `SUSSURRO_WORKFLOW_INPUT_DEVICE` | `workflow.input.device` |
 | `SUSSURRO_WORKFLOW_INPUT_CHORD` | `workflow.input.chord` |

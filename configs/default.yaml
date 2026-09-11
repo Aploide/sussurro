@@ -36,7 +36,7 @@ models:
     vad_path: "models/ggml-silero-v6.2.0.bin"
     vad_threshold: 0.01
     type: "whisper"
-    threads: 4
+    threads: 0 # 0 = all cores; set a number to cap CPU use
     language: "en"
   llm:
     path: "models/qwen3-sussurro-q4_k_m.gguf"
@@ -96,9 +96,11 @@ workflow:
     # auto never opens /dev/input: it uses native hotkeys where they work.
     backend: "auto"
     # evdev only. Device name substring or exact path; empty picks the first
-    # stable /dev/input/by-id keyboard. An ambiguous name is an error.
+    # stable /dev/input/by-id keyboard, or by-path when there is none (a
+    # laptop's built-in keyboard). An ambiguous name is an error.
     device: ""
-    # evdev only. Recording chord; empty follows hotkey.trigger above.
+    # evdev only. Recording chord; empty follows hotkey.push_to_talk above.
+    # With neither set, evdev does not start and native hotkeys stay in charge.
     chord: ""
     # evdev only. Chord that abandons a review session; empty disables it.
     cancel_chord: ""

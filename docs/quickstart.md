@@ -233,6 +233,6 @@ echo toggle | nc -U /run/user/$(id -u)/sussurro.sock
 
 To stop manually: right-click the capsule → **Quit**, or click Quit in the tray menu.
 
-**Review mode (any platform):** dictate as usual, then deliver, revise by
+**Review mode (Linux):** dictate as usual, then deliver, revise by
 voice, or cancel. On Wayland the review actions are also available from the
 trigger socket — see [wayland.md](wayland.md).
