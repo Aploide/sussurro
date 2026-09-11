@@ -37,3 +37,4 @@ models/
 .build-compat/
 
 commit.txt
+.spettro/

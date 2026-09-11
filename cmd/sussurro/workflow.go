@@ -1,0 +1,184 @@
+package main
+
+import (
+	"log/slog"
+	"os"
+
+	"github.com/aploide/sussurro/internal/clipboard"
+	"github.com/aploide/sussurro/internal/config"
+	"github.com/aploide/sussurro/internal/delivery"
+	"github.com/aploide/sussurro/internal/llm"
+	"github.com/aploide/sussurro/internal/pipeline"
+	"github.com/aploide/sussurro/internal/review"
+	"github.com/aploide/sussurro/internal/session"
+	"github.com/aploide/sussurro/internal/trigger"
+	"github.com/aploide/sussurro/internal/ui"
+)
+
+// workflow is the wiring the running application needs, whichever interaction
+// mode is configured. Immediate mode leaves controller nil.
+type workflow struct {
+	// dispatch receives recording gestures from every input source.
+	dispatch session.InputDispatcher
+	// controller is the review state machine, or nil in immediate mode.
+	controller *session.Controller
+	// partial receives partial transcriptions, or nil when they are only logged.
+	partial func(generation uint64, text string)
+}
+
+// buildWorkflow wires the configured interaction mode onto the pipeline.
+//
+// Immediate mode installs the compatibility delivery consumer and the plain
+// recorder dispatcher, exactly as before. Review mode installs the session
+// controller as both the result consumer and the input dispatcher, so hotkeys,
+// the trigger socket, and evdev all drive the same state machine.
+func buildWorkflow(
+	cfg *config.Config,
+	pipe *pipeline.Pipeline,
+	llmEngine *llm.Engine,
+	injector delivery.Injector,
+	present func(model ui.ViewModel),
+	log *slog.Logger,
+) workflow {
+	if !cfg.Workflow.ReviewEnabled() {
+		// Clipboard-only means the paste keystroke is skipped; the text is
+		// still staged and echoed exactly as before.
+		if cfg.Workflow.ClipboardOnlyDelivery() {
+			injector = nil
+			log.Info("Delivery is clipboard-only; text will not be pasted automatically")
+		}
+		installImmediateDelivery(pipe, injector, log)
+		return workflow{dispatch: session.NewImmediateDispatcher(pipe)}
+	}
+
+	backend, err := selectDeliveryBackend(cfg, injector, log)
+	if err != nil {
+		// Losing delivery entirely would make review mode a dead end, so fall
+		// back to dictation that still works.
+		log.Error("Review mode unavailable, falling back to immediate", "error", err)
+		installImmediateDelivery(pipe, injector, log)
+		return workflow{dispatch: session.NewImmediateDispatcher(pipe)}
+	}
+
+	// The controller is referenced by the adapters it owns, so it is declared
+	// before them and captured by the closures below.
+	var controller *session.Controller
+
+	recognizer := pipeline.NewSessionRecognizer(pipe, func(id session.SessionID, text string) {
+		controller.OnResult(id, text)
+	}, log)
+
+	editor := review.NewEditor(llmEngine, func(id session.SessionID, text string) {
+		controller.OnEdited(id, text)
+	}, log)
+
+	presenter := ui.NewReviewPresenter(present)
+
+	controller = session.NewController(
+		recognizer,
+		editor,
+		delivery.NewDeliverer(backend, nil),
+		presenter,
+		log,
+	)
+
+	pipe.SetResultConsumer(recognizer)
+	log.Info("Review mode enabled", "delivery", backend.Name())
+
+	return workflow{
+		dispatch:   controller,
+		controller: controller,
+		partial: func(_ uint64, text string) {
+			// The streamer's generation counts its own starts and stops and
+			// does not line up with controller sessions; the recognizer knows
+			// which session the recording belongs to.
+			if id, ok := recognizer.Active(); ok {
+				controller.OnPartial(id, text)
+			}
+		},
+	}
+}
+
+// installImmediateDelivery wires upstream's deliver-on-completion behaviour.
+func installImmediateDelivery(pipe *pipeline.Pipeline, injector delivery.Injector, log *slog.Logger) {
+	immediate := delivery.NewImmediate(clipboard.Write, injector, os.Stdout, log)
+	pipe.SetResultConsumer(pipeline.ResultConsumerFunc(func(result pipeline.Result) {
+		if result.Empty() {
+			return
+		}
+		if err := immediate.Deliver(result.Text); err != nil {
+			log.Error("Immediate delivery failed", "error", err)
+		}
+	}))
+}
+
+// selectDeliveryBackend resolves the configured delivery backend, using
+// clipboard paste as the portable fallback.
+func selectDeliveryBackend(cfg *config.Config, injector delivery.Injector, log *slog.Logger) (delivery.Backend, error) {
+	var clipboardBackend delivery.Backend
+	if injector != nil {
+		clipboardBackend = delivery.NewClipboardBackend(clipboard.Write, injector, nil)
+	}
+
+	backend, err := delivery.SelectBackend(
+		delivery.BackendName(cfg.Workflow.Delivery.Backend),
+		delivery.Capabilities{
+			Clipboard:      clipboardBackend,
+			ClipboardWrite: clipboard.Write,
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if cfg.Workflow.ClipboardOnlyDelivery() {
+		log.Info("Delivery is clipboard-only; text will not be pasted automatically")
+	}
+	return backend, nil
+}
+
+// startTriggerServer starts the trigger socket, returning a stop function, or
+// nil if it could not start.
+//
+// The socket used to run only under Wayland, as the else-arm of a platform
+// choice against the global hotkey grab. That treated the two as alternative
+// input backends when they are not: the grab is a key listener, the socket is
+// a control channel, and nothing about a Unix socket is Wayland-specific.
+//
+// The consequence was that Deliver and Cancel, which exist only as socket
+// commands, were unreachable on X11 and macOS, so a review session could
+// reach ReviewReady with no way out.
+//
+// Failure to start is not fatal. On Wayland it is the only input route, but
+// elsewhere the hotkeys still work, so a taken socket degrades rather than
+// preventing dictation entirely. The native input backend is the one setting
+// that leaves the socket off altogether (see useTriggerSocket).
+//
+// uiMgr is the running interface, or nil in headless mode, and gates the
+// settings command. It is taken as the concrete type rather than trigger.UI so
+// that a nil Manager stays a nil interface: passing a typed nil pointer into an
+// interface parameter would leave the server's nil check false and panic on the
+// first settings command.
+func startTriggerServer(flow workflow, input session.InputDispatcher, uiMgr *ui.Manager, log *slog.Logger) func() {
+	server, err := trigger.NewServer(log)
+	if err != nil {
+		log.Error("Trigger socket unavailable", "error", err)
+		return nil
+	}
+
+	if flow.controller != nil {
+		server.SetHandler(flow.controller)
+	}
+
+	if uiMgr != nil {
+		server.SetUI(uiMgr)
+	}
+
+	if err := server.Start(input); err != nil {
+		log.Error("Failed to start trigger server", "error", err)
+		return nil
+	}
+
+	log.Debug("Trigger socket listening", "path", server.GetSocketPath())
+	return server.Stop
+}

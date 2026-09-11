@@ -6,10 +6,53 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
-	"github.com/cesp99/sussurro/internal/logger"
+	"github.com/aploide/sussurro/internal/config"
+	"github.com/aploide/sussurro/internal/logger"
 	"github.com/ggerganov/whisper.cpp/bindings/go/pkg/whisper"
 )
+
+// Segment is a span of recognised speech with the times it covers, measured
+// from the start of the audio handed to the recogniser.
+//
+// The timestamps are what allow a streaming caller to tell which words belong
+// to audio that has scrolled out of a window and can therefore be treated as
+// settled. Joining segments into a plain string discards that, which is why
+// windowing could not be implemented correctly against Transcribe alone
+// (sussurro-xvj.60).
+type Segment struct {
+	Text  string
+	Start time.Duration
+	End   time.Duration
+	// Words carries the segment's tokens with their own timings. Whisper
+	// reports segments that can each run for tens of seconds, which is too
+	// coarse to place a window boundary: a single long segment holding the
+	// whole word budget leaves the window unable to shrink at all.
+	Words []Word
+}
+
+// Word is a token with its own timing, used to place a window boundary
+// between words rather than only between segments.
+type Word struct {
+	Text  string
+	Start time.Duration
+	End   time.Duration
+}
+
+// JoinSegments renders segments as a single transcription.
+//
+// Each segment's text is already trimmed, so a single space between them keeps
+// words apart without introducing doubled spacing.
+func JoinSegments(segments []Segment) string {
+	parts := make([]string, 0, len(segments))
+	for _, seg := range segments {
+		if seg.Text != "" {
+			parts = append(parts, seg.Text)
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, " "))
+}
 
 // Engine handles the Whisper model and transcription
 type Engine struct {
@@ -17,6 +60,15 @@ type Engine struct {
 	context whisper.Context
 	mutex   sync.Mutex
 	debug   bool
+
+	// dictionary is retained rather than only pushed into the context, so a
+	// per-call prompt can be composed from it plus preceding transcript text.
+	dictionary []string
+	// prompt is the initial prompt currently set on the context. The binding
+	// copies every prompt into a C string it never frees, so a streaming pass
+	// that re-set an identical prompt leaked one allocation per pass; setting
+	// only on change bounds that to one per distinct prompt. Guarded by mutex.
+	prompt string
 }
 
 // NewEngine initializes the Whisper model from a file path
@@ -40,6 +92,22 @@ func NewEngine(modelPath string, threads int, language string, debug bool) (*Eng
 		return nil, fmt.Errorf("failed to create whisper context: %w", err)
 	}
 
+	// The threads setting was accepted and then never applied, so every
+	// transcription ran on the binding's default regardless of configuration.
+	// Zero keeps that default, which is every core (runtime.NumCPU in
+	// NewContext); a positive value is an explicit cap.
+	if threads > 0 {
+		ctx.SetThreads(uint(threads))
+	}
+
+	// Per-token timings are what place a window boundary between words. Without
+	// this whisper leaves every token's timestamp at its uninitialised -10ms,
+	// which is not a corrupt value to be validated around but simply the answer
+	// to a question never asked: the streamer then saw a window that never
+	// advanced and re-settled the whole transcript on every pass
+	// (sussurro-fkd).
+	ctx.SetTokenTimestamps(true)
+
 	if language != "" {
 		if err := ctx.SetLanguage(language); err != nil {
 			// Log warning but don't fail — e.g. english-only model ignores language
@@ -54,13 +122,168 @@ func NewEngine(modelPath string, threads int, language string, debug bool) (*Eng
 	}, nil
 }
 
+// EnableVAD configures whisper.cpp to recognise only audio that its Silero
+// voice-activity model identifies as speech. This prevents trailing silence,
+// ambient noise, and key-release transients from being decoded as stock phrases
+// without filtering any particular words from the transcript.
+func (e *Engine) EnableVAD(modelPath string, thresholds ...float32) error {
+	info, err := os.Stat(modelPath)
+	if err != nil {
+		return fmt.Errorf("VAD model file not found at %s: %w (download it from %s)", modelPath, err, config.DefaultVADModelURL)
+	}
+	if info.Size() < config.MinimumVADModelSize {
+		return fmt.Errorf("VAD model file at %s is incomplete (%d bytes); download it again from %s", modelPath, info.Size(), config.DefaultVADModelURL)
+	}
+
+	threshold := float32(0.01)
+	if len(thresholds) > 0 && thresholds[0] > 0 && thresholds[0] <= 1 {
+		threshold = thresholds[0]
+	}
+
+	e.mutex.Lock()
+	defer e.mutex.Unlock()
+	e.context.SetVAD(true)
+	e.context.SetVADModelPath(modelPath)
+	// The default retained speech attenuated to 0.1% of its original amplitude
+	// in verification while still rejecting silence and pink noise. It remains
+	// configurable for noisier recording environments.
+	e.context.SetVADThreshold(threshold)
+	e.context.SetVADMinSilenceMs(500)
+	e.context.SetVADSpeechPadMs(100)
+	// whisper.cpp loads the VAD model lazily. A short silent pass forces that
+	// initialization now, so a corrupt or incompatible model fails at startup
+	// rather than after the user finishes dictating. It is a real decode, so
+	// it prints the same per-run diagnostics segmentsLocked silences.
+	if !e.debug {
+		cleanup := logger.SuppressStderr()
+		defer cleanup()
+	}
+	if err := e.context.Process(make([]float32, 2*16000), nil, nil, nil); err != nil {
+		return fmt.Errorf("failed to initialize VAD model at %s: %w", modelPath, err)
+	}
+	return nil
+}
+
+// SetDictionary primes the decoder with the user's vocabulary. Initial prompts
+// can dominate non-speech audio, but the common case is a correctly selected
+// microphone carrying real speech, where the vocabulary improves recognition
+// of names, technical terms, and their word boundaries.
+//
+// Safe to call while the engine is running; takes effect on the next
+// transcription.
+func (e *Engine) SetDictionary(terms []string) {
+	e.mutex.Lock()
+	defer e.mutex.Unlock()
+
+	e.dictionary = append([]string(nil), terms...)
+	e.setPromptLocked(strings.Join(e.dictionary, ", "))
+}
+
+// setPromptLocked sets the context's initial prompt if it differs from the
+// one already set. Callers must hold e.mutex.
+func (e *Engine) setPromptLocked(prompt string) {
+	if prompt == e.prompt {
+		return
+	}
+	e.prompt = prompt
+	e.context.SetInitialPrompt(prompt)
+}
+
+// TranscribeWithContext transcribes samples while conditioning the decoder on
+// text that came before them.
+//
+// The context is passed as whisper's initial prompt, which biases decoding
+// without being decoded itself. That is what lets a streaming pass transcribe
+// only a recent window of audio and still produce text consistent with
+// everything said earlier: the earlier words inform the decoder, but cost no
+// inference and cannot be revised (sussurro-xvj.60).
+//
+// The prompt is advisory. whisper may still decode against it, and it keeps
+// only the last n_text_ctx/2 (224) tokens of the prompt, so a long preceding
+// transcript is cut from the front by the model. Dictionary terms trail so
+// they survive that truncation.
+func (e *Engine) TranscribeWithContext(samples []float32, preceding string) (string, error) {
+	// The prompt is set on the shared whisper context, so it must not be
+	// changed by another caller between being set and being used. The lock is
+	// therefore held across the whole operation, exactly as Transcribe does.
+	e.mutex.Lock()
+	defer e.mutex.Unlock()
+
+	if prompt := composePrompt(e.dictionary, preceding); prompt != "" {
+		e.setPromptLocked(prompt)
+		defer e.resetPromptLocked()
+	}
+
+	return e.transcribeLocked(samples)
+}
+
+// SegmentsWithContext transcribes samples and returns the recognised segments
+// with their timestamps, conditioning the decoder on preceding text.
+//
+// This is the form a streaming caller needs: the timestamps say which words
+// belong to which audio, so text whose audio has left the window can be settled
+// exactly, with neither a gap nor a duplicated overlap.
+func (e *Engine) SegmentsWithContext(samples []float32, preceding string) ([]Segment, error) {
+	e.mutex.Lock()
+	defer e.mutex.Unlock()
+
+	if prompt := composePrompt(e.dictionary, preceding); prompt != "" {
+		e.setPromptLocked(prompt)
+		defer e.resetPromptLocked()
+	}
+
+	return e.segmentsLocked(samples)
+}
+
+// resetPromptLocked returns the context to its standing dictionary prompt.
+// The empty case is not a no-op: leaving a per-call preceding-text prompt set
+// leaks it into the final pass and can duplicate the streaming transcript
+// (sussurro-fkd).
+func (e *Engine) resetPromptLocked() {
+	e.setPromptLocked(strings.Join(e.dictionary, ", "))
+}
+
+// composePrompt combines the transcript preceding a streaming window with the
+// standing vocabulary. Dictionary terms go last: whisper.cpp keeps the tail of
+// an over-long prompt (carry_initial_prompt is off, so only the final
+// n_text_ctx/2 tokens survive), and putting the terms first meant they were
+// the first thing dropped once the settled transcript grew past ~220 tokens.
+func composePrompt(dictionary []string, preceding string) string {
+	terms := strings.Join(dictionary, ", ")
+	preceding = strings.TrimSpace(preceding)
+
+	switch {
+	case terms != "" && preceding != "":
+		return preceding + " " + terms
+	case terms != "":
+		return terms
+	default:
+		return preceding
+	}
+}
+
 // Transcribe processes the audio samples and returns the text
 func (e *Engine) Transcribe(samples []float32) (string, error) {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
+	return e.transcribeLocked(samples)
+}
+
+// transcribeLocked is the body of Transcribe. Callers must hold e.mutex.
+func (e *Engine) transcribeLocked(samples []float32) (string, error) {
+	segments, err := e.segmentsLocked(samples)
+	if err != nil {
+		return "", err
+	}
+	return JoinSegments(segments), nil
+}
+
+// segmentsLocked runs recognition and returns its segments. Callers must hold
+// e.mutex.
+func (e *Engine) segmentsLocked(samples []float32) ([]Segment, error) {
 	if len(samples) == 0 {
-		return "", nil
+		return nil, nil
 	}
 
 	if !e.debug {
@@ -69,24 +292,48 @@ func (e *Engine) Transcribe(samples []float32) (string, error) {
 	}
 
 	if err := e.context.Process(samples, nil, nil, nil); err != nil {
-		return "", fmt.Errorf("transcription failed: %w", err)
+		return nil, fmt.Errorf("transcription failed: %w", err)
 	}
 
-	// Iterate through segments to build the full text.
-	// Each segment is trimmed before joining with a space to prevent words
-	// from merging at segment boundaries (e.g. "wentto" instead of "went to").
-	var parts []string
+	var segments []Segment
 	for {
 		segment, err := e.context.NextSegment()
 		if err != nil {
 			break // End of segments
 		}
-		if t := strings.TrimSpace(segment.Text); t != "" {
-			parts = append(parts, t)
+		// Trimmed here so joining cannot merge words across a boundary
+		// (e.g. "wentto" instead of "went to").
+		text := strings.TrimSpace(segment.Text)
+		if text == "" {
+			continue
 		}
+		var words []Word
+		for _, tok := range segment.Tokens {
+			// Whisper mixes special tokens (timestamps, control markers) in
+			// with real text; they carry no speech, so they must not count
+			// toward a word budget or reach the transcript.
+			if strings.TrimSpace(tok.Text) == "" || strings.HasPrefix(tok.Text, "[_") {
+				continue
+			}
+			// Text is kept verbatim, spaces included. These are BPE pieces
+			// rather than words, and their leading spaces are what separate
+			// words: trimming them and rejoining would run words together.
+			words = append(words, Word{
+				Text:  tok.Text,
+				Start: tok.Start,
+				End:   tok.End,
+			})
+		}
+
+		segments = append(segments, Segment{
+			Text:  text,
+			Start: segment.Start,
+			End:   segment.End,
+			Words: words,
+		})
 	}
 
-	return strings.TrimSpace(strings.Join(parts, " ")), nil
+	return segments, nil
 }
 
 // Close releases resources

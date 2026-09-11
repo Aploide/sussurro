@@ -1,25 +1,36 @@
 package ui
 
 import (
-	_ "embed"
+	"log/slog"
+	"runtime"
 
-	"github.com/getlantern/systray"
+	"fyne.io/systray"
+
+	"github.com/aploide/sussurro/internal/session"
 )
 
-//go:embed assets/tray.png
-var trayIcon []byte
-
-//go:embed assets/tray_rec.png
-var trayIconRec []byte
+// trayIcon / trayIconRec are embedded per-platform in tray_icons_unix.go
+// (PNG) and tray_icons_windows.go (ICO — LoadImageW on Windows only accepts
+// real ICO content).
 
 // runTray starts the system tray in the calling goroutine (blocks).
 // It must be started with go m.runTray() so it doesn't block the UI thread.
 func (m *Manager) runTray() {
+	// Windows message queues are per-thread: systray creates its hidden window
+	// and pumps GetMessage from this goroutine, so it must stay on one OS
+	// thread. Harmless on the DBus (Linux) and Cocoa (macOS) backends.
+	runtime.LockOSThread()
 	systray.Run(m.onTrayReady, m.onTrayExit)
 }
 
 func (m *Manager) onTrayReady() {
-	systray.SetIcon(trayIcon)
+	// systray fires onReady before it has registered with any host, so on
+	// Linux this runs even where no desktop will ever show the icon. Only a
+	// tray that is actually hosted is a working route to Settings and Quit,
+	// and only then may the overlay stop standing in as the fallback.
+	watchTrayHost(m.onTrayHosted)
+
+	setTrayIcon(trayIcon, true)
 	systray.SetTooltip("Sussurro")
 
 	mSettings := systray.AddMenuItem("Open Settings", "Open the settings window")
@@ -30,7 +41,7 @@ func (m *Manager) onTrayReady() {
 		for {
 			select {
 			case <-mSettings.ClickedCh:
-				m.settings.Show()
+				m.showSettings()
 
 			case <-mQuit.ClickedCh:
 				m.Quit()
@@ -38,6 +49,24 @@ func (m *Manager) onTrayReady() {
 			}
 		}
 	}()
+}
+
+// onTrayHosted records the outcome of the tray host probe, and is called
+// again whenever a host appears or goes away. A hosted tray releases the
+// overlay to hide when idle; without a host the overlay stays up, because its
+// right-click menu is then the only route to Settings and Quit — and it comes
+// back up when the user removes their tray widget.
+func (m *Manager) onTrayHosted(hosted bool) {
+	if hosted {
+		m.markTrayReady()
+		return
+	}
+	if m.trayReady.Swap(false) {
+		slog.Info("System tray host went away; the overlay stays visible as the route to Settings and Quit")
+	} else {
+		slog.Info("No system tray host found; the overlay stays visible as the route to Settings and Quit")
+	}
+	m.publish(CompactModel(session.StateIdle))
 }
 
 // onTrayExit is called by the systray library when it exits (e.g. the OS
@@ -48,10 +77,34 @@ func (m *Manager) onTrayExit() {
 }
 
 // updateTrayIcon swaps the tray icon based on recording state.
+//
+// Only a genuine change is pushed. Every published view model reaches this,
+// including one per partial transcription — several a second while streaming —
+// and each SetIcon re-decodes the image. On macOS it also hops to the main
+// thread and waits for it, so re-setting the icon it already has would stall
+// the update goroutine behind AppKit for no visible result.
 func (m *Manager) updateTrayIcon(state AppState) {
-	if state == StateRecording {
-		systray.SetIcon(trayIconRec)
-	} else {
-		systray.SetIcon(trayIcon)
+	recording := state == StateRecording
+	if !m.trayIconChanged(recording) {
+		return
 	}
+	if recording {
+		setTrayIcon(trayIconRec, false)
+		return
+	}
+	setTrayIcon(trayIcon, true)
+}
+
+// trayIconChanged reports whether the icon on screen differs from the one this
+// state calls for, and records the new one. The first call always reports a
+// change, so the icon is pushed once even when the initial state matches the
+// default.
+//
+// Both swaps run unconditionally: short-circuiting the second would leave the
+// "already pushed" flag unset on a first call that did change the icon, and
+// the next matching state would then push a redundant update.
+func (m *Manager) trayIconChanged(recording bool) bool {
+	pushed := m.trayIconSet.Swap(true)
+	unchanged := m.trayIconRecording.Swap(recording) == recording
+	return !(unchanged && pushed)
 }

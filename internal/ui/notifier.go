@@ -1,16 +1,13 @@
 package ui
 
-// AppState represents the current state of the application overlay.
-type AppState int
+import "github.com/aploide/sussurro/internal/session"
+
+// AppState aliases the platform-neutral session state for overlay APIs.
+type AppState = session.State
 
 const (
-	StateIdle         AppState = iota // 7 animated dots
-	StateRecording                    // waveform bars
-	StateTranscribing                 // shimmer text
+	StateIdle         = session.StateIdle         // 7 animated dots
+	StateRecording    = session.StateRecording    // waveform bars
+	StateTranscribing = session.StateTranscribing // shimmer text
+	StateCleaningUp   = session.StateCleaningUp   // shimmer text, post-ASR
 )
-
-// StateNotifier is the interface called by the pipeline to update UI state.
-type StateNotifier interface {
-	OnStateChange(state AppState)
-	OnRMSData(rms float32)
-}

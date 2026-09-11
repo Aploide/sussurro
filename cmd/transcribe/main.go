@@ -8,10 +8,12 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/cesp99/sussurro/internal/asr"
-	"github.com/cesp99/sussurro/internal/config"
-	"github.com/cesp99/sussurro/internal/llm"
-	"github.com/cesp99/sussurro/internal/logger"
+	"github.com/aploide/sussurro/internal/asr"
+	"github.com/aploide/sussurro/internal/config"
+	"github.com/aploide/sussurro/internal/llm"
+	"github.com/aploide/sussurro/internal/logger"
+	"github.com/aploide/sussurro/internal/setup"
+	"github.com/aploide/sussurro/internal/version"
 )
 
 func main() {
@@ -21,7 +23,13 @@ func main() {
 	clean := flag.Bool("clean", false, "Run LLM cleanup on transcription")
 	language := flag.String("lang", "", "Override ASR language (e.g. en, auto)")
 	debug := flag.Bool("debug", false, "Enable debug output")
+	showVersion := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("sussurro-transcribe %s\n", version.Version)
+		return
+	}
 
 	if *inputFile == "" {
 		fmt.Fprintln(os.Stderr, "Usage: sussurro-transcribe -i <audio-file> [-o output.txt] [-clean] [-lang en] [-config path]")
@@ -44,6 +52,12 @@ func main() {
 		logger.Init("debug")
 	} else {
 		logger.Init(cfg.App.LogLevel)
+	}
+
+	vadPath := cfg.Models.ASR.ResolvedVADPath()
+	if err := setup.EnsureVADModel(vadPath, os.Stderr); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to provision voice activity model: %v\n", err)
+		os.Exit(1)
 	}
 
 	// Convert audio to 16kHz mono f32le PCM via ffmpeg
@@ -71,9 +85,13 @@ func main() {
 		os.Exit(1)
 	}
 	defer asrEngine.Close()
+	if err := asrEngine.EnableVAD(vadPath, cfg.Models.ASR.VADThreshold); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to initialize voice activity detection: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Transcribe
-	text, err := asrEngine.Transcribe(samples)
+	text, err := transcribeWithDictionary(asrEngine, cfg.App.Dictionary, samples)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: transcription failed: %v\n", err)
 		os.Exit(1)
@@ -87,6 +105,8 @@ func main() {
 			os.Exit(1)
 		}
 		defer llmEngine.Close()
+		llmEngine.SetDictionary(cfg.App.Dictionary)
+		llmEngine.SetExtendedPrompt(cfg.Models.LLM.ExtendedPrompt)
 
 		cleaned, err := llmEngine.CleanupText(text)
 		if err != nil {
@@ -109,6 +129,16 @@ func main() {
 }
 
 // audioToSamples converts any audio file to 16kHz mono float32 samples using ffmpeg.
+type dictionaryTranscriber interface {
+	SetDictionary([]string)
+	Transcribe([]float32) (string, error)
+}
+
+func transcribeWithDictionary(engine dictionaryTranscriber, dictionary []string, samples []float32) (string, error) {
+	engine.SetDictionary(dictionary)
+	return engine.Transcribe(samples)
+}
+
 func audioToSamples(path string) ([]float32, error) {
 	cmd := exec.Command("ffmpeg",
 		"-i", path,

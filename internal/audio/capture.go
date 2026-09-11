@@ -32,6 +32,7 @@ type CaptureEngine struct {
 	mutex        sync.Mutex
 	dataCallback func([]byte)
 	rmsCB        atomic.Pointer[func(float32)] // RMS callback; atomic for lock-free hot-path reads
+	dropCB       atomic.Pointer[func()]        // Called when a frame is discarded; atomic for the same reason
 }
 
 // SetRMSCallback installs a callback that receives the RMS level of each
@@ -43,6 +44,17 @@ func (e *CaptureEngine) SetRMSCallback(cb func(float32)) {
 		return
 	}
 	e.rmsCB.Store(&cb)
+}
+
+// SetDropCallback registers a function called whenever a captured frame is
+// discarded because the consumer could not keep up. Passing nil clears it.
+// The callback runs on the realtime audio thread and must not block.
+func (e *CaptureEngine) SetDropCallback(cb func()) {
+	if cb == nil {
+		e.dropCB.Store(nil)
+		return
+	}
+	e.dropCB.Store(&cb)
 }
 
 // computeRMS returns the root-mean-square of a float32 sample slice.
@@ -104,7 +116,12 @@ func (e *CaptureEngine) StartRecording(dataChan chan<- []float32) error {
 		select {
 		case dataChan <- floats:
 		default:
-			// Drop frame if buffer is full
+			// Dropping is preferable to blocking the realtime audio thread,
+			// but it silently loses speech, so report it rather than
+			// discarding without trace.
+			if dropPtr := e.dropCB.Load(); dropPtr != nil {
+				(*dropPtr)()
+			}
 		}
 	}
 

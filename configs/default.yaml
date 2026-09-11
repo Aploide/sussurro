@@ -3,30 +3,109 @@ app:
   debug: false
   log_level: "info" # debug, info, warn, error
   lowercase_output: false
-  skip_llm_cleanup: false
+  # Synchronous LLM correction adds several seconds after key release.
+  # Opt in by setting this to false when correction quality matters more than latency.
+  skip_llm_cleanup: true
+  # Personal dictionary: names and terms Whisper should prefer while decoding,
+  # then normalize to this exact spelling, including on the raw-output path.
+  # dictionary:
+  #   - "Sussurro"
+  #   - "whisper.cpp"
+  dictionary: []
 
 audio:
   sample_rate: 16000
   channels: 1
   bit_depth: 16
   buffer_size: 1024
-  max_duration: "60s"
+  # Safety cap that bounds memory, not an expected limit. At 16 kHz mono
+  # float32 this is roughly 7.7 MB. Reaching it stops the recording mid
+  # sentence, so it remains above normal dictation length; the overlay shows
+  # the buffer filling as it approaches.
+  max_duration: "2m"
+  # Shortest recording sent to recognition. Below this whisper reports stock
+  # phrases invented from near-silence rather than saying it heard nothing, so
+  # the floor exists to catch an accidental keypress — not to judge whether a
+  # dictation was worth making. A discarded recording is reported in the
+  # overlay rather than dropped silently.
+  min_duration: "300ms"
 
 models:
   asr:
     path: "models/ggml-base.bin"
+    vad_path: "models/ggml-silero-v6.2.0.bin"
+    vad_threshold: 0.01
     type: "whisper"
-    threads: 4
+    threads: 0 # 0 = all cores; set a number to cap CPU use
     language: "en"
   llm:
     path: "models/qwen3-sussurro-q4_k_m.gguf"
-    context_size: 32768
-    gpu_layers: 0
+    context_size: 4096
+    gpu_layers: 99
     threads: 4
+    # Strict correction-only instructions. Leave false for the bundled
+    # qwen3-sussurro model; set true when using a general instruct model.
+    extended_prompt: false
 
 hotkey:
-  trigger: "ctrl+shift+space"
-  mode: "push-to-talk" # push-to-talk or toggle
+  # Independent bindings; each may be left empty.
+  # push_to_talk records while held and transcribes on release.
+  # toggle starts recording on one press and stops on the next.
+  # edit records a spoken revision only while reviewed text is ready.
+  push_to_talk: "ctrl+shift+space"
+  toggle: ""
+  edit: ""
 
 injection:
   method: "keyboard"
+
+appearance:
+  # system follows the desktop preference; light and dark are explicit overrides.
+  theme: "system"
+
+# Streaming review workflow. Every value below reproduces the original
+# immediate-dictation behavior, so omitting this whole section changes nothing.
+workflow:
+  # immediate: deliver each transcription as soon as it completes.
+  # review:    hold the text for inspection, editing, and explicit delivery.
+  mode: "immediate"
+  streaming:
+    # Show partial transcriptions on the overlay while you speak. Each pass
+    # decodes only the most recent words, so cost stays flat however long the
+    # dictation runs. Needs GPU acceleration to keep up; set false on
+    # CPU-only hosts.
+    enabled: true
+    # Minimum gap between partial transcription passes (100ms-10s).
+    interval: "750ms"
+    # How many of the most recently spoken sentences stay open to revision
+    # (1-20). They are decoded again on every pass, so later audio can still
+    # correct them; older text is frozen and only conditions the decoder.
+    #
+    # The window is cut at a sentence boundary rather than after a fixed number
+    # of words, because whisper handed audio that starts mid-phrase produces a
+    # plausible continuation rather than what was actually said.
+    #
+    # Windowing begins only once this many sentences have been finished, so a
+    # short dictation is decoded whole every pass and nothing is ever frozen.
+    # Raise it to keep more text correctable, at the price of a larger window
+    # and slower passes on long dictations.
+    revision_window_sentences: 4
+  input:
+    # auto, native (in-process hotkey), trigger (compositor socket),
+    # or evdev (Linux input devices; needs input group membership).
+    # auto never opens /dev/input: it uses native hotkeys where they work.
+    backend: "auto"
+    # evdev only. Device name substring or exact path; empty picks the first
+    # stable /dev/input/by-id keyboard, or by-path when there is none (a
+    # laptop's built-in keyboard). An ambiguous name is an error.
+    device: ""
+    # evdev only. Recording chord; empty follows hotkey.push_to_talk above.
+    # With neither set, evdev does not start and native hotkeys stay in charge.
+    chord: ""
+    # evdev only. Chord that abandons a review session; empty disables it.
+    cancel_chord: ""
+  delivery:
+    # auto, clipboard-paste, wtype (Wayland), ydotool (uinput daemon), or
+    # clipboard-only to copy the text without pasting it, leaving you to
+    # place it yourself.
+    backend: "auto"

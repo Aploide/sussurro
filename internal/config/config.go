@@ -10,11 +10,19 @@ import (
 )
 
 type Config struct {
-	App       AppConfig       `mapstructure:"app"`
-	Audio     AudioConfig     `mapstructure:"audio"`
-	Models    ModelsConfig    `mapstructure:"models"`
-	Hotkey    HotkeyConfig    `mapstructure:"hotkey"`
-	Injection InjectionConfig `mapstructure:"injection"`
+	App        AppConfig        `mapstructure:"app"`
+	Audio      AudioConfig      `mapstructure:"audio"`
+	Models     ModelsConfig     `mapstructure:"models"`
+	Hotkey     HotkeyConfig     `mapstructure:"hotkey"`
+	Injection  InjectionConfig  `mapstructure:"injection"`
+	Appearance AppearanceConfig `mapstructure:"appearance"`
+	// Workflow holds the opt-in streaming review settings. Absent from
+	// pre-review configs, where Normalize supplies immediate-mode defaults.
+	Workflow WorkflowConfig `mapstructure:"workflow"`
+
+	// sourcePath is the file LoadConfig selected. Settings writes must update
+	// this file, including when the process was started with --config.
+	sourcePath string
 }
 
 type AppConfig struct {
@@ -23,6 +31,9 @@ type AppConfig struct {
 	LogLevel        string `mapstructure:"log_level"`
 	LowercaseOutput bool   `mapstructure:"lowercase_output"`
 	SkipLLMCleanup  bool   `mapstructure:"skip_llm_cleanup"`
+	// Dictionary lists names and terms the cleanup stage must spell exactly
+	// as written (personal vocabulary the ASR tends to mishear).
+	Dictionary []string `mapstructure:"dictionary"`
 }
 
 type AudioConfig struct {
@@ -31,6 +42,11 @@ type AudioConfig struct {
 	BitDepth    int    `mapstructure:"bit_depth"`
 	BufferSize  int    `mapstructure:"buffer_size"`
 	MaxDuration string `mapstructure:"max_duration"`
+
+	// MinDuration is the shortest recording sent to recognition. It guards
+	// against Whisper inventing stock phrases from near-silence, so it should
+	// stay above an accidental keypress and below a real one-word dictation.
+	MinDuration string `mapstructure:"min_duration"`
 }
 
 type ModelsConfig struct {
@@ -38,11 +54,42 @@ type ModelsConfig struct {
 	LLM LLMConfig `mapstructure:"llm"`
 }
 
+const (
+	DefaultVADModelFilename = "ggml-silero-v6.2.0.bin"
+	DefaultVADModelURL      = "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin"
+	MinimumVADModelSize     = 100 * 1024
+)
+
 type ASRConfig struct {
-	Path     string `mapstructure:"path"`
-	Type     string `mapstructure:"type"`
-	Threads  int    `mapstructure:"threads"`
-	Language string `mapstructure:"language"`
+	Path         string  `mapstructure:"path"`
+	VADPath      string  `mapstructure:"vad_path"`
+	VADThreshold float32 `mapstructure:"vad_threshold"`
+	Type         string  `mapstructure:"type"`
+	Threads      int     `mapstructure:"threads"`
+	Language     string  `mapstructure:"language"`
+}
+
+// ResolvedVADPath returns the explicit VAD model path, or the setup-managed
+// default for existing configurations that predate vad_path.
+func (c ASRConfig) ResolvedVADPath() string {
+	if c.VADPath != "" {
+		return c.VADPath
+	}
+	if path := defaultVADModelPath(); path != "" {
+		return path
+	}
+	if c.Path == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(c.Path), DefaultVADModelFilename)
+}
+
+func defaultVADModelPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".sussurro", "models", DefaultVADModelFilename)
 }
 
 type LLMConfig struct {
@@ -50,98 +97,74 @@ type LLMConfig struct {
 	ContextSize int    `mapstructure:"context_size"`
 	GpuLayers   int    `mapstructure:"gpu_layers"`
 	Threads     int    `mapstructure:"threads"`
+	// ExtendedPrompt enables strict correction-only instructions. Leave false
+	// for the bundled qwen3-sussurro model, which needs its trained cleanup
+	// prompt plus correction examples; set true for a general instruct model.
+	ExtendedPrompt bool `mapstructure:"extended_prompt"`
 }
 
+// HotkeyConfig holds the keyboard bindings that start and stop recording.
+//
+// PushToTalk, Toggle, and Edit are independent and each optional. The previous design
+// had one trigger with a mode applied to it, which made the behaviour a
+// property of the binding and so allowed only one at a time; a user wanting a
+// held key and a tapped key could not have both.
 type HotkeyConfig struct {
+	// PushToTalk records while held and transcribes on release.
+	PushToTalk string `mapstructure:"push_to_talk"`
+	// Toggle starts recording on one press and stops on the next.
+	Toggle string `mapstructure:"toggle"`
+	// Edit records a spoken revision only while reviewed text is ready.
+	Edit string `mapstructure:"edit"`
+
+	// Trigger and Mode are the superseded single-binding form. Still read so
+	// existing configs keep their hotkey; Normalize folds them into whichever
+	// binding the mode named.
 	Trigger string `mapstructure:"trigger"`
 	Mode    string `mapstructure:"mode"` // "push-to-talk" or "toggle"
+}
+
+// Normalize folds a legacy trigger/mode pair into the binding its mode
+// described, but only into a binding that is not already set.
+//
+// The per-binding check matters for a half-migrated config: someone adding
+// toggle: to a file that still has trigger:/mode: would otherwise lose the
+// trigger entirely, because a whole-config check would see "some new binding
+// exists" and skip the migration.
+func (h *HotkeyConfig) Normalize() {
+	if h.Trigger == "" {
+		return
+	}
+	if h.Mode == "toggle" {
+		if h.Toggle == "" {
+			h.Toggle = h.Trigger
+		}
+		return
+	}
+	if h.PushToTalk == "" {
+		h.PushToTalk = h.Trigger
+	}
+}
+
+// Configured reports whether any keyboard binding is set. None is valid: on
+// Wayland the trigger socket is used instead.
+func (h HotkeyConfig) Configured() bool {
+	return h.PushToTalk != "" || h.Toggle != "" || h.Edit != ""
 }
 
 type InjectionConfig struct {
 	Method string `mapstructure:"method"`
 }
 
-// SaveHotkey rewrites only the hotkey.trigger field in the YAML config file.
-func SaveHotkey(cfg *Config, trigger string) error {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("cannot find home directory: %w", err)
-	}
-	configFile := filepath.Join(homeDir, ".sussurro", "config.yaml")
-
-	data, err := os.ReadFile(configFile)
-	if err != nil {
-		return fmt.Errorf("cannot read config file: %w", err)
-	}
-
-	// Simple line-by-line replacement of the trigger value.
-	lines := strings.Split(string(data), "\n")
-	replaced := false
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "trigger:") {
-			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
-			lines[i] = indent + "trigger: \"" + trigger + "\""
-			replaced = true
-			break
-		}
-	}
-	if !replaced {
-		return fmt.Errorf("trigger key not found in config file")
-	}
-
-	return os.WriteFile(configFile, []byte(strings.Join(lines, "\n")), 0644)
-}
-
-// SaveHotkeyMode rewrites only the hotkey.mode field in the YAML config file.
-// If the key does not exist (old config), it inserts it after the trigger: line.
-func SaveHotkeyMode(cfg *Config, mode string) error {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("cannot find home directory: %w", err)
-	}
-	configFile := filepath.Join(homeDir, ".sussurro", "config.yaml")
-
-	data, err := os.ReadFile(configFile)
-	if err != nil {
-		return fmt.Errorf("cannot read config file: %w", err)
-	}
-
-	lines := strings.Split(string(data), "\n")
-
-	// First pass: replace existing mode: key.
-	for i, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), "mode:") {
-			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
-			lines[i] = indent + `mode: "` + mode + `"`
-			return os.WriteFile(configFile, []byte(strings.Join(lines, "\n")), 0644)
-		}
-	}
-
-	// Key missing: insert after trigger: line.
-	for i, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), "trigger:") {
-			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
-			newLine := indent + `mode: "` + mode + `"`
-			newLines := make([]string, 0, len(lines)+1)
-			newLines = append(newLines, lines[:i+1]...)
-			newLines = append(newLines, newLine)
-			newLines = append(newLines, lines[i+1:]...)
-			return os.WriteFile(configFile, []byte(strings.Join(newLines, "\n")), 0644)
-		}
-	}
-
-	return fmt.Errorf("trigger key not found in config file; cannot insert mode")
-}
-
 // SaveLanguage rewrites only the models.asr.language field in the YAML config file.
 // If the key does not exist (old config), it inserts it after the threads: line in the asr: section.
 func SaveLanguage(cfg *Config, language string) error {
-	homeDir, err := os.UserHomeDir()
+	configSaveMu.Lock()
+	defer configSaveMu.Unlock()
+	configFile, err := configPath(cfg)
 	if err != nil {
-		return fmt.Errorf("cannot find home directory: %w", err)
+		return fmt.Errorf("resolve user config path: %w", err)
 	}
-	configFile := filepath.Join(homeDir, ".sussurro", "config.yaml")
 
 	data, err := os.ReadFile(configFile)
 	if err != nil {
@@ -200,11 +223,12 @@ func SaveLanguage(cfg *Config, language string) error {
 // SaveLowercaseOutput rewrites only the app.lowercase_output field in the YAML config file.
 // If the key does not exist (old config), it inserts it after the log_level: line in the app: section.
 func SaveLowercaseOutput(cfg *Config, enabled bool) error {
-	homeDir, err := os.UserHomeDir()
+	configSaveMu.Lock()
+	defer configSaveMu.Unlock()
+	configFile, err := configPath(cfg)
 	if err != nil {
-		return fmt.Errorf("cannot find home directory: %w", err)
+		return fmt.Errorf("resolve user config path: %w", err)
 	}
-	configFile := filepath.Join(homeDir, ".sussurro", "config.yaml")
 
 	data, err := os.ReadFile(configFile)
 	if err != nil {
@@ -247,11 +271,12 @@ func SaveLowercaseOutput(cfg *Config, enabled bool) error {
 // If the key does not exist (old config), it inserts it after lowercase_output:
 // (or after log_level: if lowercase_output: is also missing).
 func SaveSkipLLMCleanup(cfg *Config, enabled bool) error {
-	homeDir, err := os.UserHomeDir()
+	configSaveMu.Lock()
+	defer configSaveMu.Unlock()
+	configFile, err := configPath(cfg)
 	if err != nil {
-		return fmt.Errorf("cannot find home directory: %w", err)
+		return fmt.Errorf("resolve user config path: %w", err)
 	}
-	configFile := filepath.Join(homeDir, ".sussurro", "config.yaml")
 
 	data, err := os.ReadFile(configFile)
 	if err != nil {
@@ -312,35 +337,119 @@ func LoadConfig(path string) (*Config, error) {
 		viper.SetConfigName("config") // Look for config.yaml (or .json, .toml)
 		viper.SetConfigType("yaml")
 		viper.AddConfigPath(".")
-		viper.AddConfigPath("$HOME/.sussurro")
+		// Use the resolved home directory rather than a "$HOME" literal:
+		// viper does not expand it, and the variable does not exist on Windows.
+		if home, err := os.UserHomeDir(); err == nil {
+			viper.AddConfigPath(filepath.Join(home, ".sussurro"))
+		}
 		viper.AddConfigPath("./configs")
 	}
 
+	viper.SetDefault("audio.sample_rate", 16000)
+	viper.SetDefault("audio.channels", 1)
 	viper.SetDefault("models.asr.language", "en")
+	viper.SetDefault("models.asr.vad_path", defaultVADModelPath())
+	viper.SetDefault("models.asr.vad_threshold", float32(0.01))
 	viper.SetDefault("hotkey.mode", "push-to-talk")
 	viper.SetDefault("app.lowercase_output", false)
-	viper.SetDefault("app.skip_llm_cleanup", false)
+	// Keep the interactive release-to-clipboard path fast unless a user
+	// explicitly opts into synchronous model inference.
+	viper.SetDefault("app.skip_llm_cleanup", true)
+	viper.SetDefault("appearance.theme", string(ThemeSystem))
+	setWorkflowDefaults(viper.GetViper())
 
 	viper.SetEnvPrefix("SUSSURRO")
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	viper.AutomaticEnv()
+	// AutomaticEnv alone does not surface keys that Unmarshal has to discover,
+	// so bind the workflow keys explicitly.
+	if err := bindWorkflowEnv(viper.GetViper()); err != nil {
+		return nil, fmt.Errorf("bind workflow environment: %w", err)
+	}
 
 	if err := viper.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
 			// Try fallback to "default" (old behavior)
 			viper.SetConfigName("default")
 			if err := viper.ReadInConfig(); err != nil {
-				return nil, err
+				return nil, fmt.Errorf("read fallback configuration: %w", err)
 			}
 		} else {
-			return nil, err
+			// Configs written on Windows before the path quoting fix are not
+			// valid YAML at all (see yamlpath.go), so the app could never start
+			// to correct them. viper records the file it chose even when the
+			// parse fails, so repair it in place and retry once.
+			repaired, rerr := repairConfigPaths(viper.ConfigFileUsed())
+			if rerr != nil || !repaired {
+				return nil, fmt.Errorf("read configuration: %w", err)
+			}
+			if err := viper.ReadInConfig(); err != nil {
+				return nil, fmt.Errorf("read repaired configuration: %w", err)
+			}
 		}
 	}
 
 	var cfg Config
 	if err := viper.Unmarshal(&cfg); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decode configuration: %w", err)
 	}
 
+	if cfg.Models.ASR.VADThreshold <= 0 || cfg.Models.ASR.VADThreshold > 1 {
+		return nil, fmt.Errorf("invalid configuration: models.asr.vad_threshold must be greater than 0 and at most 1")
+	}
+
+	cfg.Hotkey.Normalize()
+	cfg.Appearance.Normalize()
+	cfg.Workflow.Normalize()
+	if err := cfg.Appearance.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+	if err := cfg.Workflow.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+
+	cfg.sourcePath = viper.ConfigFileUsed()
 	return &cfg, nil
+}
+
+// SaveHotkeyBinding writes one hotkey binding to cfg's loaded config file.
+// name is the YAML key under hotkey: "push_to_talk", "toggle", or "edit". An
+// empty trigger clears the binding, which is valid because every binding is
+// optional.
+//
+// The first edit of a config still carrying the legacy trigger:/mode: pair
+// also commits Normalize's migration to disk. Otherwise clearing the binding
+// trigger was folded into would only last until the next start, when
+// Normalize would see the binding unset and fill it from trigger again.
+func SaveHotkeyBinding(cfg *Config, name, trigger string) error {
+	if err := SaveWorkflowValue(cfg, "hotkey."+name, YAMLString(trigger)); err != nil {
+		return fmt.Errorf("save hotkey binding: %w", err)
+	}
+	if cfg == nil || cfg.Hotkey.Trigger == "" {
+		return nil
+	}
+
+	// Persist the binding trigger was folded into before dropping trigger,
+	// unless it is the one just written, so the migrated value is not lost
+	// with its source. cfg still holds the pre-edit binding at this point.
+	migrated, value := "push_to_talk", cfg.Hotkey.PushToTalk
+	if cfg.Hotkey.Mode == "toggle" {
+		migrated, value = "toggle", cfg.Hotkey.Toggle
+	}
+	if migrated != name {
+		if err := SaveWorkflowValue(cfg, "hotkey."+migrated, YAMLString(value)); err != nil {
+			return fmt.Errorf("commit legacy hotkey migration: %w", err)
+		}
+	}
+	// Drop the superseded keys rather than blanking them: a blanked trigger
+	// is inert but stays in the file forever, and mode has a viper default,
+	// so blanking it would add a key to files that never had one.
+	for _, key := range []string{"hotkey.trigger", "hotkey.mode"} {
+		if err := RemoveWorkflowValue(cfg, key); err != nil {
+			return fmt.Errorf("commit legacy hotkey migration: %w", err)
+		}
+	}
+	cfg.Hotkey.Trigger = ""
+	cfg.Hotkey.Mode = ""
+	return nil
 }

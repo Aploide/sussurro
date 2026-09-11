@@ -1,0 +1,4 @@
+# Shell scripts must keep LF endings — they are executed by bash (including
+# under MSYS2 on Windows, where CRLF breaks them).
+*.sh text eol=lf
+Makefile text eol=lf

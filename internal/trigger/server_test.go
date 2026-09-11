@@ -1,0 +1,648 @@
+package trigger
+
+import (
+	"bufio"
+	"errors"
+	"io"
+	"log/slog"
+	"net"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/aploide/sussurro/internal/session"
+)
+
+// fakeDispatcher records gestures and reports a scripted outcome.
+type fakeDispatcher struct {
+	mu      sync.Mutex
+	events  []session.InputEvent
+	stopped bool
+	ignored bool
+}
+
+func (d *fakeDispatcher) Dispatch(event session.InputEvent) session.InputOutcome {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.events = append(d.events, event)
+	if d.ignored {
+		return session.InputIgnored
+	}
+	if d.stopped {
+		return session.InputStopped
+	}
+	if event == session.InputRelease || event == session.InputEditRelease {
+		return session.InputIgnored
+	}
+	return session.InputStarted
+}
+
+func (d *fakeDispatcher) recorded() []session.InputEvent {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]session.InputEvent(nil), d.events...)
+}
+
+// fakeUI records settings toggle requests.
+type fakeUI struct {
+	mu    sync.Mutex
+	shown int
+}
+
+func (u *fakeUI) ToggleSettings() {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.shown++
+}
+
+func (u *fakeUI) shows() int {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.shown
+}
+
+// fakeHandler records review actions.
+type fakeHandler struct {
+	mu       sync.Mutex
+	cancels  int
+	delivers []bool
+	err      error
+}
+
+func (h *fakeHandler) Cancel() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.cancels++
+}
+
+func (h *fakeHandler) Deliver(submit bool) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.delivers = append(h.delivers, submit)
+	return h.err
+}
+
+// nothingReady reports the controller's no-op result, as when deliver arrives
+// with no reviewed text waiting.
+func nothingReady() error { return session.ErrNothingToDeliver }
+
+func (h *fakeHandler) stats() (cancels int, delivers []bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.cancels, append([]bool(nil), h.delivers...)
+}
+
+// newTestServer builds a server with no socket, for protocol tests.
+func newTestServer(dispatch session.InputDispatcher, handler Handler) *Server {
+	return &Server{
+		log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		done:     make(chan struct{}),
+		dispatch: dispatch,
+		handler:  handler,
+		notify:   func(string, string) {},
+	}
+}
+
+func TestParseCommandAcceptsEveryCommand(t *testing.T) {
+	for _, command := range commands {
+		t.Run(string(command), func(t *testing.T) {
+			got, err := ParseCommand(string(command))
+			if err != nil {
+				t.Fatalf("ParseCommand(%q) error = %v", command, err)
+			}
+			if got != command {
+				t.Errorf("ParseCommand(%q) = %q, want %q", command, got, command)
+			}
+		})
+	}
+}
+
+func TestParseCommandToleratesShellFormatting(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want Command
+	}{
+		{name: "trailing newline", raw: "toggle\n", want: CommandToggle},
+		{name: "carriage return", raw: "deliver\r\n", want: CommandDeliver},
+		{name: "surrounding spaces", raw: "  cancel  ", want: CommandCancel},
+		{name: "uppercase", raw: "SUBMIT", want: CommandSubmit},
+		{name: "mixed case", raw: "Press", want: CommandPress},
+		{name: "extra lines", raw: "release\nignored", want: CommandRelease},
+		{name: "edit start", raw: "EDIT-START\n", want: CommandEditStart},
+		{name: "edit stop", raw: " edit-stop ", want: CommandEditStop},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseCommand(tt.raw)
+			if err != nil {
+				t.Fatalf("ParseCommand(%q) error = %v", tt.raw, err)
+			}
+			if got != tt.want {
+				t.Errorf("ParseCommand(%q) = %q, want %q", tt.raw, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseCommandTreatsEmptyInputAsToggle(t *testing.T) {
+	// The original protocol carried no command at all; those bindings must
+	// keep working.
+	for _, raw := range []string{"", "   ", "\n"} {
+		got, err := ParseCommand(raw)
+		if err != nil {
+			t.Fatalf("ParseCommand(%q) error = %v", raw, err)
+		}
+		if got != CommandToggle {
+			t.Errorf("ParseCommand(%q) = %q, want toggle", raw, got)
+		}
+	}
+}
+
+func TestParseCommandRejectsUnknownInput(t *testing.T) {
+	for _, raw := range []string{"explode", "deliverr", "press release", "0x00"} {
+		t.Run(raw, func(t *testing.T) {
+			_, err := ParseCommand(raw)
+			if err == nil {
+				t.Fatalf("ParseCommand(%q) error = nil, want a rejection", raw)
+			}
+			// The error must tell the user what is accepted.
+			if !strings.Contains(err.Error(), "toggle") {
+				t.Errorf("error %q does not list the accepted commands", err)
+			}
+		})
+	}
+}
+
+func TestToggleRemainsBackwardCompatible(t *testing.T) {
+	dispatch := &fakeDispatcher{}
+	server := newTestServer(dispatch, nil)
+
+	// The shipped script sends "toggle" with a trailing newline.
+	if reply := server.Execute("toggle\n"); reply != "RECORDING" {
+		t.Errorf("reply = %q, want RECORDING", reply)
+	}
+
+	dispatch.mu.Lock()
+	dispatch.stopped = true
+	dispatch.mu.Unlock()
+
+	if reply := server.Execute("toggle\n"); reply != "STOPPED" {
+		t.Errorf("reply = %q, want STOPPED", reply)
+	}
+
+	events := dispatch.recorded()
+	if len(events) != 2 || events[0] != session.InputToggle || events[1] != session.InputToggle {
+		t.Errorf("events = %v, want two toggles", events)
+	}
+}
+
+type controllerRecognizer struct{}
+
+func (controllerRecognizer) StartCapture(session.SessionID) bool { return true }
+func (controllerRecognizer) StopCapture(session.SessionID)       {}
+func (controllerRecognizer) CancelCapture(session.SessionID)     {}
+
+type controllerEditor struct{}
+
+func (controllerEditor) ApplyEdit(session.SessionID, string, string) {}
+
+type controllerDeliverer struct{}
+
+func (controllerDeliverer) Deliver(string, bool) error { return nil }
+
+func TestEditRepliesReflectRealControllerOutcome(t *testing.T) {
+	controller := session.NewController(controllerRecognizer{}, controllerEditor{},
+		controllerDeliverer{}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server := newTestServer(controller, controller)
+
+	if reply := server.Execute("edit-start"); reply != "IDLE" {
+		t.Fatalf("idle edit-start reply = %q, want IDLE", reply)
+	}
+	if reply := server.Execute("press"); reply != "RECORDING" {
+		t.Fatalf("press reply = %q, want RECORDING", reply)
+	}
+	if reply := server.Execute("edit-stop"); reply != "IDLE" {
+		t.Fatalf("cross-release reply = %q, want IDLE", reply)
+	}
+	if reply := server.Execute("release"); reply != "STOPPED" {
+		t.Fatalf("release reply = %q, want STOPPED", reply)
+	}
+	controller.OnResult(controller.SessionID(), "review me")
+	if reply := server.Execute("edit-start"); reply != "RECORDING" {
+		t.Fatalf("ready edit-start reply = %q, want RECORDING", reply)
+	}
+	if reply := server.Execute("release"); reply != "IDLE" {
+		t.Fatalf("legacy cross-release reply = %q, want IDLE", reply)
+	}
+	if reply := server.Execute("edit-stop"); reply != "STOPPED" {
+		t.Fatalf("edit-stop reply = %q, want STOPPED", reply)
+	}
+}
+
+func TestGestureCommandsMapToInputEvents(t *testing.T) {
+	tests := []struct {
+		command Command
+		want    session.InputEvent
+	}{
+		{command: CommandToggle, want: session.InputToggle},
+		{command: CommandPress, want: session.InputPress},
+		{command: CommandRelease, want: session.InputRelease},
+		{command: CommandEditStart, want: session.InputEditPress},
+		{command: CommandEditStop, want: session.InputEditRelease},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.command), func(t *testing.T) {
+			dispatch := &fakeDispatcher{}
+			server := newTestServer(dispatch, nil)
+
+			server.Execute(string(tt.command))
+
+			events := dispatch.recorded()
+			if len(events) != 1 || events[0] != tt.want {
+				t.Errorf("events = %v, want [%v]", events, tt.want)
+			}
+		})
+	}
+}
+
+func TestNonGestureCommandsAreNotGestures(t *testing.T) {
+	for _, command := range []Command{CommandCancel, CommandDeliver, CommandSubmit} {
+		if _, isGesture := command.InputEvent(); isGesture {
+			t.Errorf("%s reported as a gesture, want a workflow action", command)
+		}
+	}
+}
+
+func TestReviewCommandsReachTheHandler(t *testing.T) {
+	dispatch := &fakeDispatcher{}
+	handler := &fakeHandler{}
+	server := newTestServer(dispatch, handler)
+
+	if reply := server.Execute("cancel"); reply != "CANCELLED" {
+		t.Errorf("cancel reply = %q, want CANCELLED", reply)
+	}
+	if reply := server.Execute("deliver"); reply != "DELIVERED" {
+		t.Errorf("deliver reply = %q, want DELIVERED", reply)
+	}
+	if reply := server.Execute("submit"); reply != "DELIVERED" {
+		t.Errorf("submit reply = %q, want DELIVERED", reply)
+	}
+
+	cancels, delivers := handler.stats()
+	if cancels != 1 {
+		t.Errorf("cancels = %d, want 1", cancels)
+	}
+	if len(delivers) != 2 || delivers[0] || !delivers[1] {
+		t.Errorf("delivers = %v, want [false true]", delivers)
+	}
+	// Workflow actions must not be dispatched as recording gestures.
+	if events := dispatch.recorded(); len(events) != 0 {
+		t.Errorf("dispatched %v for workflow commands, want none", events)
+	}
+}
+
+func TestReviewCommandsRefusedInImmediateMode(t *testing.T) {
+	for _, command := range []string{"cancel", "deliver", "submit"} {
+		t.Run(command, func(t *testing.T) {
+			dispatch := &fakeDispatcher{}
+			// No handler: immediate mode has no review workflow to drive.
+			server := newTestServer(dispatch, nil)
+
+			reply := server.Execute(command)
+			if !strings.HasPrefix(reply, "ERROR") {
+				t.Errorf("reply = %q, want an error", reply)
+			}
+			if !strings.Contains(reply, "review mode") {
+				t.Errorf("reply = %q, want it to explain review mode is required", reply)
+			}
+			if events := dispatch.recorded(); len(events) != 0 {
+				t.Errorf("dispatched %v, want no state change", events)
+			}
+		})
+	}
+}
+
+func TestUnknownCommandChangesNothing(t *testing.T) {
+	dispatch := &fakeDispatcher{}
+	handler := &fakeHandler{}
+	server := newTestServer(dispatch, handler)
+
+	reply := server.Execute("self-destruct")
+	if !strings.HasPrefix(reply, "ERROR") {
+		t.Errorf("reply = %q, want an error", reply)
+	}
+	if events := dispatch.recorded(); len(events) != 0 {
+		t.Errorf("dispatched %v for an unknown command, want none", events)
+	}
+	if cancels, delivers := handler.stats(); cancels != 0 || len(delivers) != 0 {
+		t.Errorf("handler touched (%d cancels, %v delivers), want nothing", cancels, delivers)
+	}
+}
+
+func TestDeliveryFailureReportedToClient(t *testing.T) {
+	handler := &fakeHandler{err: errors.New("no window focused")}
+	server := newTestServer(&fakeDispatcher{}, handler)
+
+	reply := server.Execute("deliver")
+	if !strings.HasPrefix(reply, "ERROR") {
+		t.Errorf("reply = %q, want an error", reply)
+	}
+	if !strings.Contains(reply, "no window focused") {
+		t.Errorf("reply = %q, want the backend failure surfaced", reply)
+	}
+}
+
+func TestReleaseWithNothingRecordingIsIdle(t *testing.T) {
+	dispatch := &fakeDispatcher{}
+	server := newTestServer(dispatch, nil)
+
+	// A stray release must not read as the start of a recording.
+	for _, command := range []string{"release", "edit-stop"} {
+		if reply := server.Execute(command); reply != "IDLE" {
+			t.Errorf("%s reply = %q, want IDLE", command, reply)
+		}
+	}
+}
+
+func TestStartRequiresADispatcher(t *testing.T) {
+	server := newTestServer(nil, nil)
+	server.socket = filepath.Join(socketDir(t), "sussurro.sock")
+
+	if err := server.Start(nil); err == nil {
+		t.Fatal("Start(nil) error = nil, want a refusal")
+	}
+}
+
+func TestServerRespondsOverTheSocket(t *testing.T) {
+	dispatch := &fakeDispatcher{}
+	server := newTestServer(dispatch, &fakeHandler{})
+	server.socket = filepath.Join(socketDir(t), "sussurro.sock")
+
+	if err := server.Start(dispatch); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(server.Stop)
+
+	reply := sendCommand(t, server.socket, "press\n")
+	if reply != "RECORDING" {
+		t.Errorf("reply = %q, want RECORDING", reply)
+	}
+	if events := dispatch.recorded(); len(events) != 1 || events[0] != session.InputPress {
+		t.Errorf("events = %v, want one press", events)
+	}
+}
+
+func TestClientWithoutTrailingNewlineIsAnswered(t *testing.T) {
+	// A shell one-liner such as printf press | socat may well omit the
+	// newline and keep the connection open for the reply.
+	dispatch := &fakeDispatcher{}
+	server := newTestServer(dispatch, &fakeHandler{})
+	server.socket = filepath.Join(socketDir(t), "sussurro.sock")
+	server.readTimeout = 100 * time.Millisecond
+	if err := server.Start(dispatch); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(server.Stop)
+
+	reply := sendCommand(t, server.socket, "press")
+	if reply != "RECORDING" {
+		t.Errorf("reply = %q, want RECORDING", reply)
+	}
+	if events := dispatch.recorded(); len(events) != 1 || events[0] != session.InputPress {
+		t.Errorf("events = %v, want one press", events)
+	}
+}
+
+func TestSilentClientIsNotTreatedAsAToggle(t *testing.T) {
+	dispatch := &fakeDispatcher{}
+	server := newTestServer(dispatch, &fakeHandler{})
+	server.socket = filepath.Join(socketDir(t), "sussurro.sock")
+	server.readTimeout = 50 * time.Millisecond
+	if err := server.Start(dispatch); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(server.Stop)
+
+	conn, err := net.DialTimeout("unix", server.socket, 2*time.Second)
+	if err != nil {
+		t.Fatalf("dialing: %v", err)
+	}
+	defer conn.Close()
+
+	// The server must close the connection after the deadline with no reply
+	// and, above all, no gesture: an empty command line means toggle.
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	reply, err := bufio.NewReader(conn).ReadString('\n')
+	if err == nil || reply != "" {
+		t.Errorf("reply = %q, err = %v, want the connection closed without a reply", reply, err)
+	}
+	if events := dispatch.recorded(); len(events) != 0 {
+		t.Errorf("events = %v, want none for a client that sent nothing", events)
+	}
+}
+
+func TestSettingsTogglesTheWindow(t *testing.T) {
+	dispatch := &fakeDispatcher{}
+	server := newTestServer(dispatch, &fakeHandler{})
+	ui := &fakeUI{}
+	server.SetUI(ui)
+
+	if reply := server.Execute("settings\n"); reply != "SETTINGS" {
+		t.Errorf("reply = %q, want SETTINGS", reply)
+	}
+	if ui.shows() != 1 {
+		t.Errorf("ToggleSettings called %d times, want 1", ui.shows())
+	}
+	// Raising a window must not touch the recording state machine.
+	if events := dispatch.recorded(); len(events) != 0 {
+		t.Errorf("events = %v, want none", events)
+	}
+}
+
+// A second command must reach the UI too. The server deliberately holds no
+// visibility state of its own -- the window is the only authority on whether
+// it is open -- so a repeat must not be swallowed here as a duplicate.
+func TestRepeatedSettingsCommandsEachReachTheUI(t *testing.T) {
+	server := newTestServer(&fakeDispatcher{}, &fakeHandler{})
+	ui := &fakeUI{}
+	server.SetUI(ui)
+
+	for i := range 3 {
+		if reply := server.Execute("settings\n"); reply != "SETTINGS" {
+			t.Errorf("call %d: reply = %q, want SETTINGS", i+1, reply)
+		}
+	}
+	if ui.shows() != 3 {
+		t.Errorf("ToggleSettings called %d times, want 3", ui.shows())
+	}
+}
+
+// Settings is a UI action, not a review action, so it must work in immediate
+// mode where no controller exists. This is why UI is a separate interface from
+// Handler rather than another method on it.
+func TestSettingsWorksInImmediateMode(t *testing.T) {
+	server := newTestServer(&fakeDispatcher{}, nil)
+	ui := &fakeUI{}
+	server.SetUI(ui)
+
+	if reply := server.Execute("settings\n"); reply != "SETTINGS" {
+		t.Errorf("reply = %q, want SETTINGS", reply)
+	}
+	if ui.shows() != 1 {
+		t.Errorf("ToggleSettings called %d times, want 1", ui.shows())
+	}
+}
+
+// Under --no-ui there is no window to raise, so the command is refused rather
+// than silently accepted.
+func TestSettingsRefusedWithoutUI(t *testing.T) {
+	server := newTestServer(&fakeDispatcher{}, &fakeHandler{})
+
+	if reply := server.Execute("settings\n"); !strings.HasPrefix(reply, "ERROR") {
+		t.Errorf("reply = %q, want an error", reply)
+	}
+}
+
+func TestServerRejectsUnknownCommandOverTheSocket(t *testing.T) {
+	dispatch := &fakeDispatcher{}
+	server := newTestServer(dispatch, nil)
+	server.socket = filepath.Join(socketDir(t), "sussurro.sock")
+
+	if err := server.Start(dispatch); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(server.Stop)
+
+	if reply := sendCommand(t, server.socket, "bogus\n"); !strings.HasPrefix(reply, "ERROR") {
+		t.Errorf("reply = %q, want an error", reply)
+	}
+	if events := dispatch.recorded(); len(events) != 0 {
+		t.Errorf("dispatched %v, want no state change", events)
+	}
+}
+
+func TestStopIsIdempotent(t *testing.T) {
+	dispatch := &fakeDispatcher{}
+	server := newTestServer(dispatch, nil)
+	server.socket = filepath.Join(socketDir(t), "sussurro.sock")
+
+	if err := server.Start(dispatch); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	server.Stop()
+	// A second Stop must not close the done channel twice.
+	server.Stop()
+}
+
+func TestConcurrentCommandsAreSafe(t *testing.T) {
+	dispatch := &fakeDispatcher{}
+	handler := &fakeHandler{}
+	server := newTestServer(dispatch, handler)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(3)
+		go func() { defer wg.Done(); server.Execute("toggle") }()
+		go func() { defer wg.Done(); server.Execute("deliver") }()
+		go func() { defer wg.Done(); server.Execute("cancel") }()
+	}
+	wg.Wait()
+}
+
+// sendCommand writes one command to the socket and returns the reply line.
+func sendCommand(t *testing.T, socket, command string) string {
+	t.Helper()
+
+	conn, err := net.DialTimeout("unix", socket, 2*time.Second)
+	if err != nil {
+		t.Fatalf("dialing %s: %v", socket, err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.Write([]byte(command)); err != nil {
+		t.Fatalf("writing command: %v", err)
+	}
+
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	reply, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil && reply == "" {
+		t.Fatalf("reading reply: %v", err)
+	}
+	return strings.TrimSpace(reply)
+}
+
+func TestDeliverWithNothingReadyReportsIdle(t *testing.T) {
+	for _, command := range []string{"deliver", "submit"} {
+		t.Run(command, func(t *testing.T) {
+			handler := &fakeHandler{err: nothingReady()}
+			server := newTestServer(&fakeDispatcher{}, handler)
+
+			// Reporting DELIVERED here would tell a script the text went out
+			// when nothing was ready.
+			if reply := server.Execute(command); reply != "IDLE" {
+				t.Errorf("reply = %q, want IDLE", reply)
+			}
+		})
+	}
+}
+
+func TestDeliverWithNothingReadyIsNotAnError(t *testing.T) {
+	handler := &fakeHandler{err: nothingReady()}
+	server := newTestServer(&fakeDispatcher{}, handler)
+
+	// A script binding deliver to a key must not see a failure just because
+	// there was nothing to send.
+	if reply := server.Execute("deliver"); strings.HasPrefix(reply, "ERROR") {
+		t.Errorf("reply = %q, want a non-error status", reply)
+	}
+}
+
+// TestNewServerRefusesALiveSocket covers acceptance criterion 4 of
+// sussurro-xvj.39: with the socket no longer gated behind Wayland, every
+// instance starts one, so a second instance must not silently take over the
+// first one's socket. Both would then appear to work while only one received
+// commands.
+func TestNewServerRefusesALiveSocket(t *testing.T) {
+	dir := socketDir(t)
+	t.Setenv("XDG_RUNTIME_DIR", dir)
+
+	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	first, err := NewServer(quiet)
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	if err := first.Start(&fakeDispatcher{}); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	defer first.Stop()
+
+	if _, err := NewServer(quiet); err == nil {
+		t.Error("NewServer() succeeded while another instance was listening, want an error")
+	}
+}
+
+// TestNewServerReplacesAStaleSocket keeps the crash-recovery path working: a
+// socket file left by a dead process must not block startup forever.
+func TestNewServerReplacesAStaleSocket(t *testing.T) {
+	dir := socketDir(t)
+	t.Setenv("XDG_RUNTIME_DIR", dir)
+
+	// A socket file nobody is accepting on, as a crashed run would leave.
+	stale := filepath.Join(dir, "sussurro.sock")
+	listener, err := net.Listen("unix", stale)
+	if err != nil {
+		t.Fatalf("creating stale socket: %v", err)
+	}
+	listener.Close()
+
+	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if _, err := NewServer(quiet); err != nil {
+		t.Errorf("NewServer() error = %v, want the stale socket replaced", err)
+	}
+}

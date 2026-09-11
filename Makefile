@@ -2,6 +2,13 @@ APP_NAME := sussurro
 BUILD_DIR := bin
 CMD_DIR := cmd/sussurro
 
+# Version stamped into the binaries. Release builds pass VERSION=<git tag>
+# (see .github/workflows/release.yml); local builds leave it empty and the
+# binary reports the "dev" default from internal/version.
+VERSION ?=
+VERSION_PKG := github.com/aploide/sussurro/internal/version
+GO_LDFLAGS = $(VERSION:%=-ldflags "-X $(VERSION_PKG).Version=%")
+
 # Whisper.cpp configuration
 WHISPER_DIR := third_party/whisper.cpp
 WHISPER_INCLUDE := $(abspath $(WHISPER_DIR)/include)
@@ -12,18 +19,154 @@ LIBRARY_PATH := $(abspath $(WHISPER_DIR))
 # go-llama.cpp configuration
 LLAMA_DIR := third_party/go-llama.cpp
 
+# Pinned dependency revisions for reproducible builds.
+# WHISPER_COMMIT matches the whisper.cpp bindings pseudo-version in go.mod;
+# GO_LLAMA_COMMIT is the fork's main HEAD (llama.cpp submodule recent enough for Qwen3).
+WHISPER_COMMIT ?= 764482c3175d9c3bc6089c1ec84df7d1b9537d83
+GO_LLAMA_COMMIT ?= b2c101738f26f466f1a30317d50a88ce7c0ada12
+WHISPER_BACKEND := cpu
+LLAMA_BACKEND := cpu
+WHISPER_CMAKE_EXTRA := -DWSP_GGML_VULKAN=OFF
+LLAMA_CMAKE_ARGS := -DGGML_VULKAN=OFF
+EXE :=
+WIN_LDFLAGS :=
+GGML_VULKAN_PATH :=
+VULKAN_LDFLAGS :=
+LLAMA_VULKAN_LDFLAGS :=
+
+# Stamp files marking a completed native build, so `deps` is a no-op once the
+# libraries exist. Each stamp includes the commit and native backend, so a pin
+# or backend change invalidates it and forces the required reconfiguration.
+#
+# Without these, every `make build` and `make test` reconfigured whisper.cpp and
+# ran `make clean` on go-llama.cpp before recompiling it from scratch, which
+# cost about four and a half minutes per invocation even when nothing had
+# changed at all.
+WHISPER_STAMP = $(WHISPER_DIR)/.stamp-$(WHISPER_COMMIT)-$(WHISPER_BACKEND)
+LLAMA_STAMP   = $(LLAMA_DIR)/.stamp-$(GO_LLAMA_COMMIT)-$(LLAMA_BACKEND)
+
 # Detect number of CPU cores for parallel builds
-NPROCS := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)
+# Build parallelism. Defaults to 50% of the cores so a rebuild leaves the
+# machine usable — these builds are long, and saturating every core makes the
+# desktop unresponsive for their duration. This is a default, not a cap:
+# override with e.g. BUILD_JOBS=24 to use everything. CI runners have no
+# desktop to keep responsive, and halving their few cores (macos-14 has 3)
+# doubled the release build time, so CI=<anything> uses every core.
+NCORES    := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)
+# The ternary is parenthesised because BSD awk (macOS) parses `print a ? b : c`
+# as `(print a) ? b : c` and dies with a syntax error. It printed that error on
+# every single make invocation — $(shell) passes stderr through — while the
+# empty result left NPROCS unset, so every `-j $(NPROCS)` below became a bare
+# `-j` and the native builds forked without any limit at all.
+BUILD_JOBS ?= $(if $(CI),$(NCORES),$(shell awk 'BEGIN { n = int($(NCORES) / 2); print (n < 1 ? 1 : n) }'))
+# Last line of defence: an unusable awk must not turn into an unbounded -j.
+NPROCS    := $(or $(strip $(BUILD_JOBS)),1)
+
+# Run compilers at low CPU and IO priority, so an interactive desktop keeps
+# its responsiveness even while a long build saturates its share of cores.
+# Both tools are optional; the build works without them.
+NICE := $(shell command -v nice >/dev/null 2>&1 && echo "nice -n 19")
+NICE += $(shell command -v ionice >/dev/null 2>&1 && echo "ionice -c 3")
 
 # Detect OS and architecture for platform-specific builds
 UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
+# Generic ShellCheck integrations otherwise parse GNU Make conditionals as
+# shell function declarations and stop before checking any recipe bodies.
+# shellcheck disable=SC1073,SC1065,SC1064,SC1072
 ifeq ($(UNAME_S),Darwin)
 	BUILD_TYPE := metal
+	WHISPER_BACKEND := metal
+	WHISPER_CMAKE_EXTRA := -DWSP_GGML_METAL=ON -DWSP_GGML_VULKAN=OFF
+	LLAMA_CMAKE_ARGS := -DLLAMA_METAL=ON -DGGML_VULKAN=OFF
+	LLAMA_BACKEND := metal
 	GGML_METAL_PATH := -L$(WHISPER_DIR)/build/ggml/src/ggml-metal
 else
 	BUILD_TYPE :=
 	GGML_METAL_PATH :=
+endif
+
+# Windows (MSYS2 MINGW64): Vulkan-accelerated whisper.cpp, CPU go-llama.cpp.
+# go-llama.cpp has no Vulkan BUILD_TYPE in its upstream cross-build Makefile.
+ifeq ($(OS),Windows_NT)
+	EXE := .exe
+	WHISPER_BACKEND := vulkan
+	# patch-whisper.sh renames the GGML_ CMake options too, hence WSP_GGML_VULKAN.
+	WHISPER_CMAKE_EXTRA := -G Ninja -DWSP_GGML_VULKAN=ON
+	GGML_VULKAN_PATH := -L$(WHISPER_DIR)/build/ggml/src/ggml-vulkan
+	# go-llama.cpp: skip llama.cpp's cli/server tools, and give the vendored
+	# cpp-httplib a Windows 10 baseline (MinGW's default _WIN32_WINNT is older).
+	LLAMA_CMAKE_ARGS := -DGGML_VULKAN=OFF -DLLAMA_BUILD_TOOLS=OFF -DLLAMA_BUILD_APP=OFF -DLLAMA_BUILD_SERVER=OFF \
+		-DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0A00
+	# --start-group makes ld re-scan the static archives regardless of ordering;
+	# trailing libs cover the Vulkan loader, libstdc++ for ggml-vulkan, and the
+	# OpenMP runtime go-llama.cpp builds against (its -fopenmp LDFLAG is
+	# linux-tagged, so it must be supplied here). -static keeps every -l
+	# (including the bindings' own -lstdc++) on the static archives — mixing
+	# libstdc++.a with libstdc++.dll.a causes duplicate-symbol errors — and
+	# yields an exe with no MinGW runtime DLL dependencies.
+	# vulkan-1 must stay dynamic: there is no static Vulkan loader (the DLL is
+	# shipped by Windows / the GPU driver), so toggle -Bdynamic just for it.
+	WIN_LDFLAGS := -Wl,--start-group -lwhisper -lggml -lggml-base -lggml-cpu -lggml-vulkan -Wl,--end-group \
+		-Wl,-Bdynamic -lvulkan-1 -Wl,-Bstatic -lstdc++ -fopenmp -static
+	# MinGW gcc expects ';'-separated C_INCLUDE_PATH/LIBRARY_PATH; the patched
+	# bindings carry their own -I/-L flags, so the env vars are not needed.
+	C_INCLUDE_PATH :=
+	LIBRARY_PATH :=
+else ifeq ($(UNAME_S),Linux)
+	# Linux uses Vulkan for both engines, but each executable links only one
+	# vendored GGML runtime. The process boundary prevents their incompatible
+	# native globals and Vulkan symbols from colliding.
+	#
+	# Opt out with WHISPER_VULKAN=0 for a pure CPU build. LLAMA_VULKAN can be
+	# overridden separately when diagnosing one backend.
+	WHISPER_VULKAN ?= auto
+	LLAMA_VULKAN ?= $(WHISPER_VULKAN)
+	HAS_VULKAN_SDK := $(shell pkg-config --exists vulkan 2>/dev/null && command -v glslc >/dev/null 2>&1 && echo yes || echo no)
+	# go-llama.cpp's ggml-vulkan additionally does find_package(SPIRV-Headers
+	# CONFIG REQUIRED), which the loader and glslc packages do not provide
+	# (Arch: spirv-headers, Debian/Ubuntu: spirv-headers, Fedora:
+	# spirv-headers-devel). Probe it the way its CMake does, honouring a
+	# VULKAN_SDK prefix, so a missing package falls back to CPU with a note
+	# instead of failing the configure step.
+	ifeq ($(HAS_VULKAN_SDK),yes)
+		# The probe runs in a scratch directory: cmake --find-package writes a
+		# CMakeFiles/ tree into its working directory, which would otherwise
+		# litter the repository root on every make invocation.
+		HAS_SPIRV_HEADERS := $(shell d=$$(mktemp -d) && cd "$$d" && cmake --find-package -DNAME=SPIRV-Headers -DCOMPILER_ID=GNU -DLANGUAGE=CXX -DMODE=EXIST $(if $(VULKAN_SDK),-DCMAKE_PREFIX_PATH=$(VULKAN_SDK)) >/dev/null 2>&1; r=$$?; rm -rf "$$d"; [ $$r -eq 0 ] && echo yes || echo no)
+	else
+		HAS_SPIRV_HEADERS := no
+	endif
+	ifeq ($(WHISPER_VULKAN),auto)
+		HAS_VULKAN := $(HAS_VULKAN_SDK)
+	else ifeq ($(WHISPER_VULKAN),0)
+		HAS_VULKAN := no
+	else
+		HAS_VULKAN := yes
+	endif
+	ifeq ($(LLAMA_VULKAN),auto)
+		ifeq ($(HAS_VULKAN_SDK)/$(HAS_SPIRV_HEADERS),yes/no)
+# Not indented: a tab here would make this line a recipe.
+$(info go-llama.cpp: Vulkan SDK found but the SPIRV-Headers CMake package is missing; building the LLM helper for CPU (install spirv-headers, or force with LLAMA_VULKAN=1))
+		endif
+		HAS_LLAMA_VULKAN := $(if $(filter yes/yes,$(HAS_VULKAN_SDK)/$(HAS_SPIRV_HEADERS)),yes,no)
+	else ifeq ($(LLAMA_VULKAN),0)
+		HAS_LLAMA_VULKAN := no
+	else
+		HAS_LLAMA_VULKAN := yes
+	endif
+	ifeq ($(HAS_VULKAN),yes)
+		WHISPER_BACKEND := vulkan
+		# patch-whisper.sh renames the GGML_ CMake options too, hence WSP_ here.
+		WHISPER_CMAKE_EXTRA := -DWSP_GGML_VULKAN=ON
+		GGML_VULKAN_PATH := -L$(WHISPER_DIR)/build/ggml/src/ggml-vulkan
+		VULKAN_LDFLAGS := -lggml-vulkan -lvulkan
+	endif
+	ifeq ($(HAS_LLAMA_VULKAN),yes)
+		LLAMA_BACKEND := vulkan
+		LLAMA_CMAKE_ARGS := -DGGML_VULKAN=ON
+		LLAMA_VULKAN_LDFLAGS := -lvulkan
+	endif
 endif
 
 # Conservative CPU target for Apple Silicon.
@@ -38,16 +181,24 @@ endif
 endif
 
 # ---- UI / overlay dependencies (Linux only) ----
-HAS_LAYER_SHELL    := $(shell pkg-config --exists gtk-layer-shell          2>/dev/null && echo yes || echo no)
-HAS_AYATANA        := $(shell pkg-config --exists ayatana-appindicator3-0.1 2>/dev/null && echo yes || echo no)
-HAS_APPINDICATOR   := $(shell pkg-config --exists appindicator3-0.1         2>/dev/null && echo yes || echo no)
+# Guarded on Linux, not merely "not Windows": GTK and WebKitGTK exist on
+# neither macOS nor Windows, and probing for them on macOS printed "UI build
+# will fail" on every single make invocation while the Cocoa build was in fact
+# fine. The variables below expand to empty elsewhere, which is what the
+# darwin and Windows recipes already assume.
+ifeq ($(UNAME_S),Linux)
+# The pkg-config module is gtk-layer-shell-0; "gtk-layer-shell" is the *package*
+# name on most distros and never resolves, so probe both (older 0.6 releases
+# shipped only the unsuffixed .pc).
+LAYER_SHELL_PC     := $(shell pkg-config --exists gtk-layer-shell-0 2>/dev/null && echo gtk-layer-shell-0 || (pkg-config --exists gtk-layer-shell 2>/dev/null && echo gtk-layer-shell))
+HAS_LAYER_SHELL    := $(if $(LAYER_SHELL_PC),yes,no)
 
 LAYER_CFLAGS  := $(shell pkg-config --cflags gtk+-3.0 2>/dev/null)
 LAYER_LDFLAGS := $(shell pkg-config --libs   gtk+-3.0 2>/dev/null)
 
 ifeq ($(HAS_LAYER_SHELL),yes)
-LAYER_CFLAGS  += $(shell pkg-config --cflags gtk-layer-shell 2>/dev/null) -DHAVE_GTK_LAYER_SHELL
-LAYER_LDFLAGS += $(shell pkg-config --libs   gtk-layer-shell 2>/dev/null)
+LAYER_CFLAGS  += $(shell pkg-config --cflags $(LAYER_SHELL_PC) 2>/dev/null) -DHAVE_GTK_LAYER_SHELL
+LAYER_LDFLAGS += $(shell pkg-config --libs   $(LAYER_SHELL_PC) 2>/dev/null)
 endif
 
 WV_CFLAGS  := $(shell pkg-config --cflags webkit2gtk-4.1 2>/dev/null || pkg-config --cflags webkit2gtk-4.0 2>/dev/null)
@@ -72,53 +223,185 @@ COMPAT_PC_DIR :=
 PKG_CONFIG_PATH_UI := $(PKG_CONFIG_PATH)
 endif
 
-# Build tags: use legacy_appindicator when ayatana is not available but appindicator3 is
+# The tray uses fyne.io/systray, whose Linux backend is pure Go over the DBus
+# StatusNotifierItem protocol. No libappindicator / libayatana-appindicator is
+# linked, so there is no backend to select at build time.
 UI_TAGS :=
-ifeq ($(UNAME_S),Linux)
-ifeq ($(HAS_AYATANA),no)
-ifeq ($(HAS_APPINDICATOR),yes)
-UI_TAGS := -tags legacy_appindicator
-endif
-endif
-endif
+endif  # Linux
 
-# Base CGO link flags (whisper + llama)
+# Whisper CGO link flags
+VULKAN_LDFLAGS ?=
 BASE_LDFLAGS := -L$(WHISPER_DIR)/build/src -L$(WHISPER_DIR)/build/ggml/src \
 	-L$(WHISPER_DIR)/build/ggml/src/ggml-cpu $(GGML_METAL_PATH) \
 	-L$(WHISPER_DIR)/build/ggml/src/ggml-blas -lwhisper
+
+# Every Go binary that imports Whisper must link the backend compiled into its
+# static ggml archive. Keep this platform-aware set shared so auxiliary tools
+# cannot silently drift from the main application.
+ifeq ($(OS),Windows_NT)
+WHISPER_LDFLAGS := $(BASE_LDFLAGS) $(GGML_VULKAN_PATH) $(WIN_LDFLAGS)
+else
+WHISPER_LDFLAGS := $(BASE_LDFLAGS) $(GGML_VULKAN_PATH) $(VULKAN_LDFLAGS)
+endif
+ifeq ($(OS),Windows_NT)
+LLAMA_LDFLAGS := -lstdc++ -fopenmp -static
+else
+LLAMA_LDFLAGS := $(LLAMA_VULKAN_LDFLAGS)
+endif
+
+# The Cocoa frameworks the overlay, tray, and settings window link against.
+# The cgo directives in the darwin sources name them too, so this is belt and
+# braces — but `build` passes them explicitly and `test` compiles the same
+# packages, so leaving them out here is a difference waiting to bite.
+ifeq ($(UNAME_S),Darwin)
+DARWIN_UI_LDFLAGS := -framework Cocoa -framework QuartzCore -framework CoreVideo -framework Foundation
+else
+DARWIN_UI_LDFLAGS :=
+endif
+
+TEST_LDFLAGS := $(WHISPER_LDFLAGS) $(LLAMA_LDFLAGS) $(DARWIN_UI_LDFLAGS)
 
 # Export environment variables for CGO
 export C_INCLUDE_PATH
 export LIBRARY_PATH
 
-.PHONY: all build compat-pc run clean deps
+# The stamp targets are deliberately absent: they are real files, and marking
+# them phony would defeat the guard entirely.
+.PHONY: all build build-helper build-transcribe compat-pc run clean clean-deps deps whisper-deps llama-deps test test-settings-geometry
+
+# Packages that link whisper need the same CGO_LDFLAGS as the binary: with
+# Vulkan enabled, a plain "go test ./..." cannot resolve the backend symbols.
+# Use this target rather than calling go test directly.
+#
+# GOTESTFLAGS and PKGS narrow a run without a full-suite round trip, e.g.
+#   make test PKGS=./internal/pipeline/ GOTESTFLAGS="-count=1 -run TestWindow"
+# Unrecognised variables are silently ignored by make, so a typo here reads as
+# a passing full run; check the echoed command line when narrowing.
+PKGS ?= ./internal/... ./cmd/...
+
+test: deps compat-pc
+	PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_UI)" \
+	CGO_CFLAGS="$(LAYER_CFLAGS) $(WV_CFLAGS)" \
+	CGO_LDFLAGS="$(TEST_LDFLAGS) $(LAYER_LDFLAGS) $(WV_LDFLAGS)" \
+	$(NICE) go test $(UI_TAGS) $(if $(RACE),-race) $(GOTESTFLAGS) $(PKGS)
+
+test-settings-geometry: deps compat-pc
+ifeq ($(UNAME_S),Linux)
+	@test -n "$$DISPLAY" || { echo "test-settings-geometry requires an X display (for CI, run under Xvfb)"; exit 1; }
+	# WebKit aborts if it is destroyed and recreated in one Go test process.
+	PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_UI)" \
+	CGO_CFLAGS="$(LAYER_CFLAGS) $(WV_CFLAGS)" \
+	CGO_LDFLAGS="$(WHISPER_LDFLAGS) $(LAYER_LDFLAGS) $(WV_LDFLAGS)" \
+	$(NICE) go test -tags settings_geometry -count=1 -timeout 25s -run '^TestRenderedSettingsGeometryReportsEveryTab$$' ./internal/ui
+	PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_UI)" \
+	CGO_CFLAGS="$(LAYER_CFLAGS) $(WV_CFLAGS)" \
+	CGO_LDFLAGS="$(WHISPER_LDFLAGS) $(LAYER_LDFLAGS) $(WV_LDFLAGS)" \
+	$(NICE) go test -tags settings_geometry -count=1 -timeout 25s -run '^TestRenderedSettingsUsesDarkMutedStyle$$' ./internal/ui
+	PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_UI)" \
+	CGO_CFLAGS="$(LAYER_CFLAGS) $(WV_CFLAGS)" \
+	CGO_LDFLAGS="$(WHISPER_LDFLAGS) $(LAYER_LDFLAGS) $(WV_LDFLAGS)" \
+	$(NICE) go test -tags settings_geometry -count=1 -timeout 25s -run '^TestRenderedModelSelectionFlow$$' ./internal/ui
+else
+	@echo "test-settings-geometry is currently supported only on Linux/WebKit"; exit 1
+endif
 
 all: build build-transcribe
 
-deps:
+# Keep dependency edges split so the two production processes never need the
+# other process's native library. The combined deps target remains for tests.
+whisper-deps: $(WHISPER_STAMP)
+llama-deps: $(LLAMA_STAMP)
+
+# deps is satisfied by the two stamps; when both exist and their pins are
+# unchanged, it does nothing at all.
+#
+# A stamp on its own would still be trusted if the library it vouches for had
+# been deleted, and the failure would surface as a confusing link error rather
+# than a rebuild. Checking for the artefacts drops the stale stamps first, so
+# the rules below fire again.
+deps: $(WHISPER_STAMP) $(LLAMA_STAMP)
+
+# The check runs at parse time, via $(wildcard), rather than as a rule: make
+# stats a target (and caches its mtime) when it first considers it, before any
+# prerequisite — order-only or not — has run, so a rule that deleted the stale
+# stamp would go unnoticed until the next invocation, and under `make -j` a
+# sibling prerequisite of deps could run after the stamp was already trusted.
+ifneq ($(wildcard $(WHISPER_STAMP)),)
+ifeq ($(wildcard $(WHISPER_DIR)/build/src/libwhisper.a),)
+$(info whisper.cpp library missing; rebuilding)
+$(shell rm -f $(WHISPER_STAMP))
+endif
+endif
+ifneq ($(wildcard $(LLAMA_STAMP)),)
+ifeq ($(wildcard $(LLAMA_DIR)/libbinding.a),)
+$(info go-llama.cpp library missing; rebuilding)
+$(shell rm -f $(LLAMA_STAMP))
+endif
+endif
+
+$(WHISPER_STAMP): scripts/patch-whisper.sh
 	@mkdir -p third_party
 	@if [ ! -d "$(WHISPER_DIR)" ]; then \
 		echo "Cloning whisper.cpp..."; \
 		git clone https://github.com/ggerganov/whisper.cpp.git $(WHISPER_DIR); \
-		echo "Patching whisper.cpp symbols..."; \
-		chmod +x scripts/patch-whisper.sh; \
-		./scripts/patch-whisper.sh; \
+		git -C $(WHISPER_DIR) checkout --quiet $(WHISPER_COMMIT); \
 	fi
+	@echo "Patching whisper.cpp..."
+	@chmod +x scripts/patch-whisper.sh
+	@./scripts/patch-whisper.sh
 	@echo "Building whisper.cpp library..."
 	@cmake -S $(WHISPER_DIR) -B $(WHISPER_DIR)/build \
 		-DGGML_NATIVE=OFF \
 		-DBUILD_SHARED_LIBS=OFF \
 		-DWHISPER_BUILD_TESTS=OFF \
 		-DWHISPER_BUILD_EXAMPLES=OFF \
+		$(WHISPER_CMAKE_EXTRA) \
 		$(if $(ARM_COMPAT_CFLAGS),-DCMAKE_C_FLAGS="$(ARM_COMPAT_CFLAGS)" -DCMAKE_CXX_FLAGS="$(ARM_COMPAT_CFLAGS)")
-	@cmake --build $(WHISPER_DIR)/build --config Release --target whisper -j $(NPROCS)
+	@$(NICE) cmake --build $(WHISPER_DIR)/build --config Release --target whisper -j $(NPROCS)
+ifeq ($(OS),Windows_NT)
+	@# The renamed CMake targets emit ggml archives without the "lib" prefix on
+	@# Windows; provide lib-prefixed copies so -lggml/-lggml-vulkan/... resolve.
+	@for d in "$(WHISPER_DIR)/build/ggml/src" "$(WHISPER_DIR)/build/ggml/src/ggml-vulkan" "$(WHISPER_DIR)/build/ggml/src/ggml-cpu"; do \
+		for f in "$$d"/ggml*.a; do \
+			[ -f "$$f" ] || continue; \
+			base=$$(basename "$$f"); \
+			case "$$base" in lib*) continue;; esac; \
+			cp -f "$$f" "$$d/lib$$base"; \
+		done; \
+	done
+endif
+	@rm -f $(WHISPER_DIR)/.stamp-*
+	@touch $@
+
+$(LLAMA_STAMP):
+	@mkdir -p third_party
 	@if [ ! -d "$(LLAMA_DIR)" ]; then \
 		echo "Cloning go-llama.cpp..."; \
 		git clone --recursive https://github.com/AshkanYarmoradi/go-llama.cpp $(LLAMA_DIR); \
+		git -C $(LLAMA_DIR) checkout --quiet $(GO_LLAMA_COMMIT); \
+		git -C $(LLAMA_DIR) submodule update --init --recursive; \
 	fi
+	@# A backend or pin change must reconfigure CMake and rebuild the archive.
+	@# The dependency Makefile does not declare binding.cpp as an object input,
+	@# and otherwise trusts build/build_complete from the previous backend.
+	@rm -f $(LLAMA_DIR)/build/build_complete $(LLAMA_DIR)/binding.o $(LLAMA_DIR)/libbinding.a
+ifeq ($(OS),Windows_NT)
+	@echo "Patching go-llama.cpp for Windows..."
+	@chmod +x scripts/patch-llama-windows.sh
+	@./scripts/patch-llama-windows.sh
+endif
 	@echo "Building go-llama.cpp library..."
-	@$(MAKE) -C $(LLAMA_DIR) clean
-	@$(MAKE) -j $(NPROCS) -C $(LLAMA_DIR) libbinding.a BUILD_TYPE=$(BUILD_TYPE)
+	@# Do not run `make clean` here: it deletes the whole build tree and turns a
+	@# backend switch into a four-minute rebuild. Removing the three targets
+	@# above keeps the CMake object cache while forcing correct reconfiguration,
+	@# binding compilation, and archive assembly.
+ifeq ($(OS),Windows_NT)
+	@$(NICE) $(MAKE) -j $(NPROCS) -C $(LLAMA_DIR) libbinding.a BUILD_TYPE=$(BUILD_TYPE) CMAKE_ARGS="$(LLAMA_CMAKE_ARGS)"
+else
+	@$(NICE) $(MAKE) -j $(NPROCS) -C $(LLAMA_DIR) libbinding.a BUILD_TYPE=$(BUILD_TYPE) CMAKE_ARGS="$(LLAMA_CMAKE_ARGS)"
+endif
+	@rm -f $(LLAMA_DIR)/.stamp-*
+	@touch $@
 
 # Create webkit2gtk-4.0 compatibility .pc when only 4.1 is installed
 compat-pc:
@@ -132,33 +415,47 @@ ifneq ($(COMPAT_PC_DIR),)
 endif
 
 # Build with full UI (overlay + tray + settings window)
-build: deps compat-pc
+build: whisper-deps compat-pc build-helper
 	@echo "Building $(APP_NAME)..."
 	@mkdir -p $(BUILD_DIR)
-ifeq ($(UNAME_S),Darwin)
-	CGO_LDFLAGS="$(BASE_LDFLAGS) -framework Cocoa -framework QuartzCore -framework CoreVideo -framework Foundation" \
-	go build -o $(BUILD_DIR)/$(APP_NAME) ./$(CMD_DIR)
+ifeq ($(OS),Windows_NT)
+	CGO_LDFLAGS="$(WHISPER_LDFLAGS)" \
+	go build $(GO_LDFLAGS) -o $(BUILD_DIR)/$(APP_NAME)$(EXE) ./$(CMD_DIR)
+else ifeq ($(UNAME_S),Darwin)
+	@echo "  Build jobs   : $(NPROCS) of $(NCORES) cores ($(NICE))"
+	CGO_LDFLAGS="$(WHISPER_LDFLAGS) $(DARWIN_UI_LDFLAGS)" \
+	$(NICE) go build $(GO_LDFLAGS) -o $(BUILD_DIR)/$(APP_NAME) ./$(CMD_DIR)
 else
-	@echo "  Layer shell  : $(HAS_LAYER_SHELL)"
-	@echo "  Ayatana tray : $(HAS_AYATANA)"
-	@echo "  AppIndicator : $(HAS_APPINDICATOR)"
+	@echo "  Layer shell  : $(HAS_LAYER_SHELL)$(if $(LAYER_SHELL_PC), ($(LAYER_SHELL_PC)))"
+	@echo "  Vulkan       : whisper $(HAS_VULKAN), llm helper $(HAS_LLAMA_VULKAN)"
+	@echo "  Build jobs   : $(NPROCS) of $(NCORES) cores ($(NICE))"
 	@echo "  Build tags   : $(UI_TAGS)"
 	PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_UI)" \
 	CGO_CFLAGS="$(LAYER_CFLAGS) $(WV_CFLAGS)" \
-	CGO_LDFLAGS="$(BASE_LDFLAGS) $(LAYER_LDFLAGS) $(WV_LDFLAGS)" \
-	go build $(UI_TAGS) -o $(BUILD_DIR)/$(APP_NAME) ./$(CMD_DIR)
+	CGO_LDFLAGS="$(WHISPER_LDFLAGS) $(LAYER_LDFLAGS) $(WV_LDFLAGS)" \
+	$(NICE) go build $(UI_TAGS) $(GO_LDFLAGS) -o $(BUILD_DIR)/$(APP_NAME) ./$(CMD_DIR)
 endif
 
+# Build the persistent LLM process with only go-llama.cpp's native runtime.
+build-helper: llama-deps
+	@echo "Building sussurro-llm-helper..."
+	@mkdir -p $(BUILD_DIR)
+	CGO_LDFLAGS="$(LLAMA_LDFLAGS)" \
+	$(NICE) go build $(GO_LDFLAGS) -o $(BUILD_DIR)/sussurro-llm-helper$(EXE) ./cmd/sussurro-llm-helper
+
 # Build sussurro-transcribe CLI (no UI dependencies)
-build-transcribe: deps
+build-transcribe: whisper-deps build-helper
 	@echo "Building sussurro-transcribe..."
 	@mkdir -p $(BUILD_DIR)
-ifeq ($(UNAME_S),Darwin)
-	CGO_LDFLAGS="$(BASE_LDFLAGS) -framework Accelerate -framework Foundation" \
-	go build -o $(BUILD_DIR)/sussurro-transcribe ./cmd/transcribe
+ifeq ($(OS),Windows_NT)
+	CGO_LDFLAGS="$(WHISPER_LDFLAGS)" \
+	go build $(GO_LDFLAGS) -o $(BUILD_DIR)/sussurro-transcribe$(EXE) ./cmd/transcribe
+else ifeq ($(UNAME_S),Darwin)
+	CGO_LDFLAGS="$(WHISPER_LDFLAGS) -framework Accelerate -framework Foundation" \
+	go build $(GO_LDFLAGS) -o $(BUILD_DIR)/sussurro-transcribe ./cmd/transcribe
 else
-	CGO_LDFLAGS="$(BASE_LDFLAGS)" \
-	go build -o $(BUILD_DIR)/sussurro-transcribe ./cmd/transcribe
+	CGO_LDFLAGS="$(WHISPER_LDFLAGS)" \
+	go build $(GO_LDFLAGS) -o $(BUILD_DIR)/sussurro-transcribe ./cmd/transcribe
 endif
 
 run: build
@@ -170,3 +467,12 @@ clean:
 	@rm -rf $(BUILD_DIR)
 	@rm -rf third_party
 	@rm -rf .build-compat
+
+# Force the native libraries to rebuild without re-cloning them. Dropping the
+# stamps is enough: the next `make build` or `make test` rebuilds whatever is
+# missing. Use this when a native build is suspected of being wrong, rather
+# than `clean`, which discards the clones and their submodules too.
+clean-deps:
+	@echo "Dropping native build stamps..."
+	@rm -f $(WHISPER_DIR)/.stamp-* $(LLAMA_DIR)/.stamp-*
+	@if [ -d "$(LLAMA_DIR)" ]; then $(MAKE) -C $(LLAMA_DIR) clean; fi

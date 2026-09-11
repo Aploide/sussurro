@@ -6,35 +6,43 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 
-	"github.com/cesp99/sussurro/internal/config"
-	"github.com/cesp99/sussurro/internal/setup"
-	"github.com/cesp99/sussurro/internal/version"
+	"github.com/aploide/sussurro/internal/config"
+	"github.com/aploide/sussurro/internal/setup"
+	"github.com/aploide/sussurro/internal/version"
 )
 
 // modelInfo describes a model for the settings UI.
 type modelInfo struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"desc"`
-	Size        string `json:"size"`
-	Installed   bool   `json:"installed"`
-	Active      bool   `json:"active"`
-	Type        string `json:"type"` // "whisper" or "llm"
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Description  string `json:"desc"`
+	Size         string `json:"size"`
+	Installed    bool   `json:"installed"`
+	Active       bool   `json:"active"`
+	Downloadable bool   `json:"downloadable"`
+	Selectable   bool   `json:"selectable"`
+	Type         string `json:"type"` // "whisper" or "llm"
 }
 
 // initialData is returned by getInitialData().
 type initialData struct {
-	Platform        string      `json:"platform"`
-	Version         string      `json:"version"`
-	Models          []modelInfo `json:"models"`
-	Hotkey          string      `json:"hotkey"`
-	HotkeyMode      string      `json:"hotkeyMode"`
-	IsWayland       bool        `json:"isWayland"`
-	Language        string      `json:"language"`
-	LowercaseOutput bool        `json:"lowercaseOutput"`
-	SkipLLMCleanup  bool        `json:"skipLLMCleanup"`
+	Platform         string       `json:"platform"`
+	Version          string       `json:"version"`
+	Models           []modelInfo  `json:"models"`
+	PushToTalkHotkey string       `json:"pushToTalkHotkey"`
+	ToggleHotkey     string       `json:"toggleHotkey"`
+	EditHotkey       string       `json:"editHotkey"`
+	IsWayland        bool         `json:"isWayland"`
+	Language         string       `json:"language"`
+	LowercaseOutput  bool         `json:"lowercaseOutput"`
+	SkipLLMCleanup   bool         `json:"skipLLMCleanup"`
+	Dictionary       []string     `json:"dictionary"`
+	Theme            config.Theme `json:"theme"`
+	// Workflow carries the review controls and this host's capabilities.
+	Workflow workflowSettings `json:"workflow"`
 }
 
 // bindBridge attaches all Go↔JS bridge functions to the webview.
@@ -53,40 +61,46 @@ func bindBridge(sw *settingsWindow) {
 		return string(b)
 	})
 
-	sw.w.Bind("saveHotkey", func(trigger string) (result string) {
+	sw.w.Bind("resizeSettingsWindow", func(cssWidth, cssHeight int) {
+		sw.resizeToContent(cssWidth, cssHeight)
+	})
+
+	// One entry point for every workflow setting: the key names the field, so
+	// six controls need one binding rather than six near-identical ones.
+	sw.w.Bind("saveWorkflowSetting", func(key, value string) (result string) {
 		defer func() {
 			if r := recover(); r != nil {
-				slog.Error("panic in saveHotkey", "error", r)
+				slog.Error("panic in saveWorkflowSetting", "error", r)
 				result = fmt.Sprintf("error: panic: %v", r)
 			}
 		}()
-		if err := config.SaveHotkey(mgr.cfg, trigger); err != nil {
+		if err := saveWorkflowSetting(mgr.cfg, key, value); err != nil {
 			return fmt.Sprintf("error: %v", err)
 		}
-		mgr.cfg.Hotkey.Trigger = trigger
-		// Re-register the OS-level hotkey with the new trigger so it takes
-		// effect immediately without requiring a restart.
-		go mgr.reinstallHotkey(trigger)
 		return "ok"
 	})
 
-	sw.w.Bind("saveHotkeyMode", func(mode string) (result string) {
-		defer func() {
-			if r := recover(); r != nil {
-				slog.Error("panic in saveHotkeyMode", "error", r)
-				result = fmt.Sprintf("error: panic: %v", r)
+	// One binding per call, named by which it is. The previous design had a
+	// single trigger plus a mode, which made the behaviour a property of the
+	// binding and so allowed only one at a time.
+	saveBinding := func(name string) func(string) string {
+		return func(trigger string) (result string) {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("panic saving hotkey", "binding", name, "error", r)
+					result = fmt.Sprintf("error: panic: %v", r)
+				}
+			}()
+			if err := mgr.SaveHotkeyBinding(name, trigger); err != nil {
+				return fmt.Sprintf("error: %v", err)
 			}
-		}()
-		if mode != "push-to-talk" && mode != "toggle" {
-			return "error: invalid mode"
+			return "ok"
 		}
-		if err := config.SaveHotkeyMode(mgr.cfg, mode); err != nil {
-			return fmt.Sprintf("error: %v", err)
-		}
-		mgr.cfg.Hotkey.Mode = mode
-		go mgr.UpdateHotkeyMode(mode)
-		return "ok"
-	})
+	}
+
+	sw.w.Bind("savePushToTalkHotkey", saveBinding("push_to_talk"))
+	sw.w.Bind("saveToggleHotkey", saveBinding("toggle"))
+	sw.w.Bind("saveEditHotkey", saveBinding("edit"))
 
 	sw.w.Bind("saveLanguage", func(lang string) (result string) {
 		defer func() {
@@ -132,6 +146,26 @@ func bindBridge(sw *settingsWindow) {
 		return "ok"
 	})
 
+	sw.w.Bind("saveDictionary", func(encoded string) (result string) {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("panic in saveDictionary", "error", r)
+				result = fmt.Sprintf("error: panic: %v", r)
+			}
+		}()
+		return saveDictionary(mgr, encoded)
+	})
+
+	sw.w.Bind("saveTheme", func(value string) (result string) {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("panic in saveTheme", "error", r)
+				result = fmt.Sprintf("error: panic: %v", r)
+			}
+		}()
+		return saveTheme(mgr, value)
+	})
+
 	sw.w.Bind("downloadModel", func(modelID string) {
 		go func() {
 			defer func() {
@@ -143,11 +177,10 @@ func bindBridge(sw *settingsWindow) {
 			if url == "" {
 				return
 			}
-			setup.SetProgressCallback(func(_ string, pct float64, _, _ int64) {
+			progress := func(_ string, pct float64, _, _ int64) {
 				sw.pushDownloadProgress(modelID, pct)
-			})
-			defer setup.SetProgressCallback(nil)
-			if err := setup.DownloadModel(url, dest, name); err != nil {
+			}
+			if err := setup.DownloadModel(url, dest, name, progress); err != nil {
 				sw.w.Dispatch(func() {
 					sw.w.Eval(fmt.Sprintf("onDownloadError('%s', '%v')", modelID, err))
 				})
@@ -166,17 +199,8 @@ func bindBridge(sw *settingsWindow) {
 				result = fmt.Sprintf("error: panic: %v", r)
 			}
 		}()
-		if err := setup.SetActiveModel(modelID); err != nil {
+		if err := setup.ActivateModel(mgr.cfg, modelID); err != nil {
 			return fmt.Sprintf("error: %v", err)
-		}
-		// Mirror the new path into the in-memory config so that the next call to
-		// getInitialData() returns the updated Active flag and the UI stays correct.
-		modelsDir := sussurroModelsDir()
-		switch modelID {
-		case "whisper-small":
-			mgr.cfg.Models.ASR.Path = modelsDir + "/ggml-small.bin"
-		case "whisper-large-v3-turbo":
-			mgr.cfg.Models.ASR.Path = modelsDir + "/ggml-large-v3-turbo.bin"
 		}
 		// Config written — the UI shows a restart banner instead of forcing a
 		// process restart, so in-flight audio/pipeline goroutines are not disrupted.
@@ -202,6 +226,30 @@ func bindBridge(sw *settingsWindow) {
 	})
 }
 
+func saveTheme(mgr *Manager, value string) string {
+	theme := config.Theme(value)
+	if err := config.SaveTheme(mgr.cfg, theme); err != nil {
+		return fmt.Sprintf("error: %v", err)
+	}
+	mgr.cfg.Appearance.Theme = theme
+	mgr.applyTheme(theme)
+	return "ok"
+}
+
+func saveDictionary(mgr *Manager, encoded string) string {
+	var terms []string
+	if err := json.Unmarshal([]byte(encoded), &terms); err != nil {
+		return fmt.Sprintf("error: decode dictionary: %v", err)
+	}
+	normalized, err := config.SaveDictionary(mgr.cfg, terms)
+	if err != nil {
+		return fmt.Sprintf("error: %v", err)
+	}
+	mgr.cfg.App.Dictionary = append([]string(nil), normalized...)
+	mgr.applyDictionary(normalized)
+	return "ok"
+}
+
 // sussurroModelsDir returns the canonical path to the directory where Sussurro
 // stores its model files (~/.sussurro/models).
 func sussurroModelsDir() string {
@@ -211,47 +259,53 @@ func sussurroModelsDir() string {
 
 func buildInitialData(mgr *Manager) initialData {
 	modelsDir := sussurroModelsDir()
-
-	whisperSmallPath := modelsDir + "/ggml-small.bin"
-	whisperLargePath := modelsDir + "/ggml-large-v3-turbo.bin"
-	llmPath := modelsDir + "/qwen3-sussurro-q4_k_m.gguf"
-
 	currentASR := mgr.cfg.Models.ASR.Path
 	currentLLM := mgr.cfg.Models.LLM.Path
 
-	models := []modelInfo{
-		{
-			ID:          "whisper-small",
-			Name:        "Whisper Small",
-			Description: "Faster, lower memory usage",
-			Size:        "~488 MB",
-			Installed:   fileExists(whisperSmallPath),
-			Active:      currentASR == whisperSmallPath,
-			Type:        "whisper",
-		},
-		{
-			ID:          "whisper-large-v3-turbo",
-			Name:        "Whisper Large v3 Turbo",
-			Description: "Higher accuracy, more memory",
-			Size:        "~1.62 GB",
-			Installed:   fileExists(whisperLargePath),
-			Active:      currentASR == whisperLargePath,
-			Type:        "whisper",
-		},
-		{
-			ID:          "qwen3-sussurro",
-			Name:        "Qwen 3 Sussurro",
-			Description: "Fine-tuned for transcription cleanup",
-			Size:        "~1.28 GB",
-			Installed:   fileExists(llmPath),
-			Active:      currentLLM == llmPath,
-			Type:        "llm",
-		},
+	supported := setup.SupportedModels()
+	models := make([]modelInfo, 0, len(supported)+1)
+	activeSupportedLLM := false
+	for _, model := range supported {
+		path := filepath.Join(modelsDir, model.Filename)
+		installed := regularFileExists(path)
+		active := currentASR == path
+		if model.Kind == setup.ModelKindLLM {
+			active = currentLLM == path
+			activeSupportedLLM = activeSupportedLLM || active
+		}
+		models = append(models, modelInfo{
+			ID:           model.ID,
+			Name:         model.Name,
+			Description:  model.Description,
+			Size:         model.Size,
+			Installed:    installed,
+			Active:       active,
+			Downloadable: true,
+			Selectable:   installed,
+			Type:         string(model.Kind),
+		})
+	}
+
+	// Keep an externally configured LLM visible without claiming that every
+	// arbitrary GGUF in the models directory supports Sussurro's cleanup prompt.
+	if currentLLM != "" && !activeSupportedLLM {
+		models = append(models, modelInfo{
+			ID:          "configured-llm",
+			Name:        filepath.Base(currentLLM),
+			Description: "Configured externally; compatibility not verified",
+			Size:        "Custom model",
+			Installed:   regularFileExists(currentLLM),
+			Active:      true,
+			Type:        string(setup.ModelKindLLM),
+		})
 	}
 
 	platform := "LINUX"
-	if runtime.GOOS == "darwin" {
+	switch runtime.GOOS {
+	case "darwin":
 		platform = "MACOS"
+	case "windows":
+		platform = "WINDOWS"
 	}
 
 	isWayland := os.Getenv("WAYLAND_DISPLAY") != "" ||
@@ -263,40 +317,32 @@ func buildInitialData(mgr *Manager) initialData {
 	}
 
 	return initialData{
-		Platform:        platform,
-		Version:         version.Version,
-		Models:          models,
-		Hotkey:          mgr.cfg.Hotkey.Trigger,
-		HotkeyMode:      mgr.cfg.Hotkey.Mode,
-		IsWayland:       isWayland,
-		Language:        mgr.cfg.Models.ASR.Language,
-		LowercaseOutput: mgr.cfg.App.LowercaseOutput,
-		SkipLLMCleanup:  mgr.cfg.App.SkipLLMCleanup,
+		Platform:         platform,
+		Version:          version.Version,
+		Models:           models,
+		PushToTalkHotkey: mgr.cfg.Hotkey.PushToTalk,
+		ToggleHotkey:     mgr.cfg.Hotkey.Toggle,
+		EditHotkey:       mgr.cfg.Hotkey.Edit,
+		IsWayland:        isWayland,
+		Language:         mgr.cfg.Models.ASR.Language,
+		LowercaseOutput:  mgr.cfg.App.LowercaseOutput,
+		SkipLLMCleanup:   mgr.cfg.App.SkipLLMCleanup,
+		Dictionary:       append([]string(nil), mgr.cfg.App.Dictionary...),
+		Theme:            mgr.cfg.Appearance.Theme,
+		Workflow:         buildWorkflowSettings(mgr.cfg, hostCapabilities()),
 	}
 }
 
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
+func regularFileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
 }
 
-// resolveModelDownload maps a model ID to its download URL and local path.
+// resolveModelDownload maps a supported model ID to its download details.
 func resolveModelDownload(modelID string) (url, dest, name string) {
-	modelsDir := sussurroModelsDir()
-
-	switch modelID {
-	case "whisper-small":
-		return "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
-			modelsDir + "/ggml-small.bin",
-			"Whisper Small"
-	case "whisper-large-v3-turbo":
-		return "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
-			modelsDir + "/ggml-large-v3-turbo.bin",
-			"Whisper Large v3 Turbo"
-	case "qwen3-sussurro":
-		return "https://huggingface.co/cesp99/qwen3-sussurro/resolve/main/qwen3-sussurro-q4_k_m.gguf",
-			modelsDir + "/qwen3-sussurro-q4_k_m.gguf",
-			"Qwen 3 Sussurro"
+	model, ok := setup.FindModel(modelID)
+	if !ok {
+		return "", "", ""
 	}
-	return "", "", ""
+	return model.DownloadURL, filepath.Join(sussurroModelsDir(), model.Filename), model.Name
 }

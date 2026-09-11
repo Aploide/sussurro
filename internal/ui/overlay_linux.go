@@ -10,20 +10,48 @@ package ui
 
 // Forward-declare the Go-exported trampolines so C can call them.
 extern void goHotkeyDown(void);
+extern void goHotkeyToggle(void);
 extern void goHotkeyUp(void);
+extern void goHotkeyEditDown(void);
+extern void goHotkeyEditUp(void);
 extern void goOpenSettings(void);
 extern void goQuit(void);
 
 // Static helpers return function pointers for the trampolines.
 static HotkeyDownCB      hotkeyDownCB(void)      { return (HotkeyDownCB)goHotkeyDown;           }
 static HotkeyUpCB        hotkeyUpCB(void)        { return (HotkeyUpCB)goHotkeyUp;               }
+static HotkeyDownCB      hotkeyToggleCB(void)    { return (HotkeyDownCB)goHotkeyToggle;         }
+static HotkeyDownCB      hotkeyEditDownCB(void)  { return (HotkeyDownCB)goHotkeyEditDown;       }
+static HotkeyUpCB        hotkeyEditUpCB(void)    { return (HotkeyUpCB)goHotkeyEditUp;           }
 static MenuOpenSettingsCB menuOpenSettingsCB(void) { return (MenuOpenSettingsCB)goOpenSettings;   }
 static MenuQuitCB         menuQuitCB(void)         { return (MenuQuitCB)goQuit;                   }
+
+// Constructors hide header-owned ABI growth from cgo's generated Go struct.
+static OverlayPalette overlayPalette(OverlayColor background, OverlayColor border,
+                                     OverlayColor primary, OverlayColor secondary,
+                                     OverlayColor provisional, OverlayColor copied,
+                                     OverlayColor finalizing, OverlayColor track,
+                                     OverlayColor fill, OverlayColor warning,
+                                     OverlayColor shimmer_base, OverlayColor shimmer_peak) {
+    OverlayPalette palette = {
+        background, border, primary, secondary, provisional, copied,
+        finalizing, track, fill, warning, shimmer_base, shimmer_peak,
+    };
+    return palette;
+}
+
+static void overlayPresentAsync(GtkWidget *win, int state, const char *text,
+                                const char *status, int provisional, int copied,
+                                int finalizing) {
+    overlay_present_async(win, state, text, status, provisional, copied, finalizing);
+}
 */
 import "C"
 import (
 	"os"
 	"unsafe"
+
+	"github.com/aploide/sussurro/internal/config"
 )
 
 // linuxOverlay wraps the CGO GTK3 overlay window.
@@ -35,6 +63,9 @@ type linuxOverlay struct {
 var (
 	globalDownCB         func()
 	globalUpCB           func()
+	globalToggleCB       func()
+	globalEditDownCB     func()
+	globalEditUpCB       func()
 	globalOpenSettingsCB func()
 	globalQuitCB         func()
 )
@@ -46,10 +77,31 @@ func goHotkeyDown() {
 	}
 }
 
+//export goHotkeyToggle
+func goHotkeyToggle() {
+	if globalToggleCB != nil {
+		globalToggleCB()
+	}
+}
+
 //export goHotkeyUp
 func goHotkeyUp() {
 	if globalUpCB != nil {
 		globalUpCB()
+	}
+}
+
+//export goHotkeyEditDown
+func goHotkeyEditDown() {
+	if globalEditDownCB != nil {
+		globalEditDownCB()
+	}
+}
+
+//export goHotkeyEditUp
+func goHotkeyEditUp() {
+	if globalEditUpCB != nil {
+		globalEditUpCB()
 	}
 }
 
@@ -79,22 +131,77 @@ func newOverlay() Overlay {
 
 	// gtk_init(NULL, NULL) — idempotent if already initialised by webview.
 	C.gtk_init(nil, nil)
-	win := C.overlay_create()
+	dark := nativeOverlayPalette(linuxDarkOverlayPalette)
+	light := nativeOverlayPalette(lightOverlayPalette)
+	win := C.overlay_create(&dark, &light)
 	return &linuxOverlay{win: unsafe.Pointer(win)}
 }
 
-// installHotkey registers an X11 global hotkey (no-op on Wayland).
-func (o *linuxOverlay) installHotkey(trigger string, onDown, onUp func()) {
-	globalDownCB = onDown
-	globalUpCB = onUp
-	ctrig := C.CString(trigger)
-	defer C.free(unsafe.Pointer(ctrig))
+func nativeOverlayColor(color overlayColor) C.OverlayColor {
+	return C.OverlayColor{r: C.double(color.R), g: C.double(color.G), b: C.double(color.B), a: C.double(color.A)}
+}
+
+func nativeOverlayPalette(palette overlayPalette) C.OverlayPalette {
+	return C.overlayPalette(
+		nativeOverlayColor(palette.Background),
+		nativeOverlayColor(palette.Border),
+		nativeOverlayColor(palette.Primary),
+		nativeOverlayColor(palette.Secondary),
+		nativeOverlayColor(palette.Provisional),
+		nativeOverlayColor(palette.Copied),
+		nativeOverlayColor(palette.Finalizing),
+		nativeOverlayColor(palette.Track),
+		nativeOverlayColor(palette.Fill),
+		nativeOverlayColor(palette.Warning),
+		nativeOverlayColor(palette.ShimmerBase),
+		nativeOverlayColor(palette.ShimmerPeak),
+	)
+}
+
+func (o *linuxOverlay) SetTheme(theme config.Theme) {
+	dark := nativeOverlayPalette(linuxDarkOverlayPalette)
+	light := nativeOverlayPalette(lightOverlayPalette)
+	C.overlay_set_theme_async(
+		(*C.GtkWidget)(o.win), C.int(overlayThemeMode(theme)), &dark, &light,
+	)
+}
+
+// installHotkey registers the X11 global bindings (no-op on Wayland).
+func (o *linuxOverlay) installHotkey(bindings HotkeyBindings) {
+	globalDownCB = bindings.OnPress
+	globalUpCB = bindings.OnRelease
+	globalToggleCB = bindings.OnToggle
+	globalEditDownCB = bindings.OnEditPress
+	globalEditUpCB = bindings.OnEditRelease
+
+	cptt := C.CString(bindings.PushToTalk)
+	defer C.free(unsafe.Pointer(cptt))
+	ctoggle := C.CString(bindings.Toggle)
+	defer C.free(unsafe.Pointer(ctoggle))
+	cedit := C.CString(bindings.Edit)
+	defer C.free(unsafe.Pointer(cedit))
+
 	C.overlay_install_hotkey(
 		(*C.GtkWidget)(o.win),
-		ctrig,
+		cptt,
+		ctoggle,
+		cedit,
 		C.hotkeyDownCB(),
 		C.hotkeyUpCB(),
+		C.hotkeyToggleCB(),
+		C.hotkeyEditDownCB(),
+		C.hotkeyEditUpCB(),
 	)
+}
+
+func (o *linuxOverlay) replaceHotkeys(bindings HotkeyBindings) {
+	cptt := C.CString(bindings.PushToTalk)
+	defer C.free(unsafe.Pointer(cptt))
+	ctoggle := C.CString(bindings.Toggle)
+	defer C.free(unsafe.Pointer(ctoggle))
+	cedit := C.CString(bindings.Edit)
+	defer C.free(unsafe.Pointer(cedit))
+	C.overlay_replace_hotkeys_async((*C.GtkWidget)(o.win), cptt, ctoggle, cedit)
 }
 
 func (o *linuxOverlay) Show() {
@@ -106,11 +213,73 @@ func (o *linuxOverlay) Hide() {
 }
 
 func (o *linuxOverlay) SetState(state AppState) {
-	C.overlay_set_state_async((*C.GtkWidget)(o.win), C.int(state))
+	nativeState, ok := nativeOverlayState(state)
+	if !ok {
+		return
+	}
+	C.overlay_set_state_async((*C.GtkWidget)(o.win), nativeState)
+}
+
+func nativeOverlayState(state AppState) (C.int, bool) {
+	switch state {
+	case StateIdle:
+		return C.OVERLAY_STATE_IDLE, true
+	case StateRecording:
+		return C.OVERLAY_STATE_RECORDING, true
+	case StateTranscribing:
+		return C.OVERLAY_STATE_TRANSCRIBING, true
+	case StateCleaningUp:
+		// Shares the transcribing shimmer, but the native layer draws its own
+		// label, so it must receive its own state rather than being folded
+		// into transcribing.
+		return C.OVERLAY_STATE_CLEANING_UP, true
+	default:
+		return 0, false
+	}
+}
+
+// Present implements Presenter: it renders the review/streaming view model,
+// showing live transcript text in the expanded panel.
+func (o *linuxOverlay) Present(model ViewModel) {
+	nativeState, ok := nativeOverlayState(model.State)
+	if !ok {
+		return
+	}
+
+	ctext := C.CString(model.Transcript)
+	defer C.free(unsafe.Pointer(ctext))
+	cstatus := C.CString(model.Status)
+	defer C.free(unsafe.Pointer(cstatus))
+
+	provisional := C.int(0)
+	if model.Partial {
+		provisional = 1
+	}
+
+	// One call, not a SetState followed by a transcript update: separate
+	// idle callbacks let the GTK loop draw between them, which is how the
+	// transcribing capsule appeared in place of text already on screen.
+	copied := C.int(0)
+	if model.Copied {
+		copied = 1
+	}
+	finalizing := C.int(0)
+	if model.Finalizing {
+		finalizing = 1
+	}
+	C.overlayPresentAsync(
+		(*C.GtkWidget)(o.win), nativeState, ctext, cstatus,
+		provisional, copied, finalizing,
+	)
 }
 
 func (o *linuxOverlay) PushRMS(rms float32) {
 	C.overlay_push_rms_async((*C.GtkWidget)(o.win), C.float(rms))
+}
+
+// PushBufferFill implements FillIndicator.
+func (o *linuxOverlay) PushBufferFill(fill float64) {
+	C.overlay_push_fill_async((*C.GtkWidget)(o.win), C.double(fill))
 }
 
 func (o *linuxOverlay) Close() {

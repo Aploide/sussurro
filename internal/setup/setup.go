@@ -8,63 +8,81 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
+
+	"github.com/aploide/sussurro/internal/config"
+	"go.yaml.in/yaml/v3"
 )
 
 // ProgressCallback is called periodically during model downloads.
 // pct is 0–100; downloaded and total are byte counts.
 type ProgressCallback func(name string, pct float64, downloaded, total int64)
 
-var (
-	progressMu sync.Mutex
-	progressCB ProgressCallback
-)
-
-// SetProgressCallback installs a callback that receives download progress.
-// Pass nil to clear. Safe to call from any goroutine.
-func SetProgressCallback(cb ProgressCallback) {
-	progressMu.Lock()
-	progressCB = cb
-	progressMu.Unlock()
+// DownloadModel downloads a model file and reports progress only to this
+// download's callback, so concurrent downloads cannot cross-wire their UI.
+func DownloadModel(url, destPath, name string, progress ProgressCallback) error {
+	if err := downloadFileWithProgress(url, destPath, name, progress); err != nil {
+		return fmt.Errorf("download %s: %w", name, err)
+	}
+	return nil
 }
 
-// DownloadModel downloads a model file from url to destPath with the given
-// display name.  Progress is reported via the installed ProgressCallback if any.
-func DownloadModel(url, destPath, name string) error {
-	return downloadFile(url, destPath, name)
+// EnsureVADModel downloads the setup-managed voice-activity model when an
+// existing configuration predates it or contains an incomplete download.
+func EnsureVADModel(destPath string, outputs ...io.Writer) error {
+	output := io.Writer(os.Stdout)
+	if len(outputs) > 0 && outputs[0] != nil {
+		output = outputs[0]
+	}
+
+	info, err := os.Stat(destPath)
+	if err == nil && info.Size() >= config.MinimumVADModelSize {
+		return nil
+	}
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("inspect VAD model: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+		return fmt.Errorf("failed to create VAD model directory: %w", err)
+	}
+	if err := downloadFileToWriter(config.DefaultVADModelURL, destPath, "Silero voice activity model", output); err != nil {
+		return fmt.Errorf("failed to download VAD model: %w", err)
+	}
+	return nil
 }
 
-// SetActiveModel updates config.yaml to use the given model ID as the active
-// ASR model.  modelID is one of: "whisper-small", "whisper-large-v3-turbo".
-func SetActiveModel(modelID string) error {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return err
-	}
-	modelsDir := filepath.Join(homeDir, ".sussurro", "models")
-	configFile := filepath.Join(homeDir, ".sussurro", "config.yaml")
-
-	configBytes, err := os.ReadFile(configFile)
-	if err != nil {
-		return err
-	}
-
-	var newPath string
-	switch modelID {
-	case "whisper-small":
-		newPath = filepath.Join(modelsDir, fileASRSmall)
-	case "whisper-large-v3-turbo":
-		newPath = filepath.Join(modelsDir, fileASRLarge)
-	default:
+// ActivateModel persists and activates an installed model from the supported catalog.
+func ActivateModel(cfg *config.Config, modelID string) error {
+	model, ok := FindModel(modelID)
+	if !ok {
 		return fmt.Errorf("unknown model ID: %s", modelID)
 	}
 
-	// Replace either known ASR path with the new one
-	updated := string(configBytes)
-	updated = strings.ReplaceAll(updated, filepath.Join(modelsDir, fileASRSmall), newPath)
-	updated = strings.ReplaceAll(updated, filepath.Join(modelsDir, fileASRLarge), newPath)
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("resolve home directory: %w", err)
+	}
+	newPath := filepath.Join(homeDir, ".sussurro", "models", model.Filename)
+	info, err := os.Stat(newPath)
+	if err != nil {
+		return fmt.Errorf("model is not installed: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("model is not a regular file: %s", newPath)
+	}
 
-	return os.WriteFile(configFile, []byte(updated), 0644)
+	role := config.ModelRoleASR
+	if model.Kind == ModelKindLLM {
+		role = config.ModelRoleLLM
+	}
+	if err := config.SaveModelPath(cfg, role, newPath); err != nil {
+		return err
+	}
+	if model.Kind == ModelKindLLM {
+		cfg.Models.LLM.Path = newPath
+	} else {
+		cfg.Models.ASR.Path = newPath
+	}
+	return nil
 }
 
 const (
@@ -72,28 +90,34 @@ const (
   name: "Sussurro"
   debug: false
   log_level: "info" # debug, info, warn, error
+  # Personal dictionary: names and terms the cleanup stage must spell exactly
+  # as written here (fixes words the ASR tends to mishear).
+  dictionary: []
 
 audio:
   sample_rate: 16000
   channels: 1
   bit_depth: 16
   buffer_size: 1024
-  max_duration: "60s"
+  max_duration: "2m"
 
 models:
   asr:
-    path: "{{ASR_PATH}}"
+    path: {{ASR_PATH}}
+    vad_path: {{VAD_PATH}}
+    vad_threshold: 0.01
     type: "whisper"
-    threads: 4
+    threads: 0 # 0 = all cores; set a number to cap CPU use
   llm:
-    path: "{{LLM_PATH}}"
-    context_size: 32768
-    gpu_layers: 0
+    path: {{LLM_PATH}}
+    context_size: 4096
+    gpu_layers: 99
     threads: 4
 
 hotkey:
-  trigger: "ctrl+shift+space"
-  mode: "push-to-talk" # push-to-talk or toggle
+  push_to_talk: "ctrl+shift+space"
+  toggle: ""
+  edit: ""
 
 injection:
   method: "keyboard"
@@ -108,14 +132,54 @@ injection:
 	sizeASRLarge = "1.62 GB"
 	fileASRLarge = "ggml-large-v3-turbo.bin"
 
-	// Qwen 3 Sussurro GGUF
-	urlLLM  = "https://huggingface.co/cesp99/qwen3-sussurro/resolve/main/qwen3-sussurro-q4_k_m.gguf"
-	sizeLLM = "1.28 GB"
+	// Silero voice-activity model used by whisper.cpp
+	sizeVAD = "885 KB"
+	fileVAD = config.DefaultVADModelFilename
 )
 
+func configuredLLMPath(configFile, fallback string) string {
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		return fallback
+	}
+	var paths struct {
+		Models struct {
+			LLM struct {
+				Path string `yaml:"path"`
+			} `yaml:"llm"`
+		} `yaml:"models"`
+	}
+	if yaml.Unmarshal(data, &paths) != nil || paths.Models.LLM.Path == "" {
+		return fallback
+	}
+	return paths.Models.LLM.Path
+}
+
+func configuredVADPath(configFile, fallback string) string {
+	if path := os.Getenv("SUSSURRO_MODELS_ASR_VAD_PATH"); path != "" {
+		return path
+	}
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		return fallback
+	}
+	var paths struct {
+		Models struct {
+			ASR struct {
+				VADPath string `yaml:"vad_path"`
+			} `yaml:"asr"`
+		} `yaml:"models"`
+	}
+	if yaml.Unmarshal(data, &paths) != nil || paths.Models.ASR.VADPath == "" {
+		return fallback
+	}
+	return paths.Models.ASR.VADPath
+}
+
 // EnsureSetup checks for the necessary configuration and models,
-// and prompts the user to set them up if missing.
-func EnsureSetup() error {
+// and prompts the user to set them up if missing. When configPath is given,
+// model paths introduced by migrations are read from that configuration.
+func EnsureSetup(configPaths ...string) error {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("failed to get user home directory: %w", err)
@@ -124,6 +188,9 @@ func EnsureSetup() error {
 	sussurroDir := filepath.Join(homeDir, ".sussurro")
 	modelsDir := filepath.Join(sussurroDir, "models")
 	configFile := filepath.Join(sussurroDir, "config.yaml")
+	if len(configPaths) > 0 && configPaths[0] != "" {
+		configFile = configPaths[0]
+	}
 
 	// 1. Create .sussurro directory if it doesn't exist
 	if _, err := os.Stat(sussurroDir); os.IsNotExist(err) {
@@ -144,10 +211,14 @@ func EnsureSetup() error {
 		fmt.Println("Creating default configuration file...")
 
 		defaultASRPath := filepath.Join(modelsDir, fileASRSmall)
+		vadDefaultPath := filepath.Join(modelsDir, fileVAD)
 		llmDefaultPath := filepath.Join(modelsDir, "qwen3-sussurro-q4_k_m.gguf")
 
-		configContent := strings.ReplaceAll(defaultConfigTemplate, "{{ASR_PATH}}", defaultASRPath)
-		configContent = strings.ReplaceAll(configContent, "{{LLM_PATH}}", llmDefaultPath)
+		// The placeholders stand where a quoted scalar goes, so the paths are
+		// substituted already quoted (a bare Windows path breaks YAML).
+		configContent := strings.ReplaceAll(defaultConfigTemplate, "{{ASR_PATH}}", config.YAMLPathLiteral(defaultASRPath))
+		configContent = strings.ReplaceAll(configContent, "{{VAD_PATH}}", config.YAMLPathLiteral(vadDefaultPath))
+		configContent = strings.ReplaceAll(configContent, "{{LLM_PATH}}", config.YAMLPathLiteral(llmDefaultPath))
 
 		if err := os.WriteFile(configFile, []byte(configContent), 0644); err != nil {
 			return fmt.Errorf("failed to write config file: %w", err)
@@ -162,7 +233,12 @@ func EnsureSetup() error {
 			asrPath = filepath.Join(modelsDir, fileASRLarge)
 		}
 	}
-	llmPath := filepath.Join(modelsDir, "qwen3-sussurro-q4_k_m.gguf")
+	vadPath := configuredVADPath(configFile, filepath.Join(modelsDir, fileVAD))
+	llmPath := configuredLLMPath(configFile, filepath.Join(modelsDir, "qwen3-sussurro-q4_k_m.gguf"))
+	llmModel, managedLLM := FindModelByFilename(filepath.Base(llmPath))
+	if !managedLLM {
+		llmModel, _ = FindModel("qwen3-sussurro-q4-k-m")
+	}
 
 	// 3. Check for old model files from versions before v1.3
 	entries, err := os.ReadDir(modelsDir)
@@ -172,9 +248,11 @@ func EnsureSetup() error {
 				continue
 			}
 			filename := entry.Name()
-			// If it's a .gguf file but NOT the new sussurro model, it's an old model
-			if strings.HasSuffix(filename, ".gguf") && filename != "qwen3-sussurro-q4_k_m.gguf" {
+			if strings.HasSuffix(filename, ".gguf") {
 				oldModelPath := filepath.Join(modelsDir, filename)
+				if _, supported := FindModelByFilename(filename); supported || filepath.Clean(oldModelPath) == filepath.Clean(llmPath) {
+					continue
+				}
 				fmt.Println("\n========================================")
 				fmt.Println("  OLD MODEL DETECTED - UPDATE REQUIRED")
 				fmt.Println("========================================")
@@ -182,7 +260,7 @@ func EnsureSetup() error {
 				fmt.Println("\nSussurro v1.3+ uses a new fine-tuned model: Qwen 3 Sussurro")
 				fmt.Println("The new model provides better transcription cleanup and accuracy.")
 				fmt.Printf("\nOld model location: %s\n", oldModelPath)
-				fmt.Printf("New model size: %s\n", sizeLLM)
+				fmt.Printf("New model size: %s\n", defaultLLMSize)
 				fmt.Print("\nWould you like to remove the old model and download the new one? (Y/n): ")
 
 				reader := bufio.NewReader(os.Stdin)
@@ -196,22 +274,6 @@ func EnsureSetup() error {
 					} else {
 						fmt.Println("Old model removed successfully.")
 					}
-
-					// Update config file to point to new model
-					fmt.Println("Updating configuration file...")
-					configContent, err := os.ReadFile(configFile)
-					if err == nil {
-						// Replace old model path with new one
-						oldPathInConfig := filepath.Join(modelsDir, filename)
-						newPathInConfig := llmPath
-						updatedConfig := strings.ReplaceAll(string(configContent), oldPathInConfig, newPathInConfig)
-
-						if err := os.WriteFile(configFile, []byte(updatedConfig), 0644); err != nil {
-							fmt.Printf("Warning: Could not update config file: %v\n", err)
-						} else {
-							fmt.Println("Configuration updated successfully.")
-						}
-					}
 				}
 				break // Only prompt once even if multiple old models exist
 			}
@@ -220,16 +282,23 @@ func EnsureSetup() error {
 
 	// 4. Check for models and prompt to download
 	missingASR := false
+	missingVAD := false
 	missingLLM := false
 
 	if _, err := os.Stat(asrPath); os.IsNotExist(err) {
 		missingASR = true
 	}
+	if info, err := os.Stat(vadPath); os.IsNotExist(err) || (err == nil && info.Size() < config.MinimumVADModelSize) {
+		missingVAD = true
+	}
 	if _, err := os.Stat(llmPath); os.IsNotExist(err) {
+		if !managedLLM {
+			return fmt.Errorf("configured LLM model is missing and cannot be downloaded automatically: %s", llmPath)
+		}
 		missingLLM = true
 	}
 
-	if missingASR || missingLLM {
+	if missingASR || missingVAD || missingLLM {
 		// If ASR is missing, ask which Whisper model to use before the download prompt
 		chosenASRURL := urlASRSmall
 		chosenASRPath := filepath.Join(modelsDir, fileASRSmall)
@@ -255,7 +324,7 @@ func EnsureSetup() error {
 				// Update config to point to the large model path
 				if configBytes, err := os.ReadFile(configFile); err == nil {
 					oldSmallPath := filepath.Join(modelsDir, fileASRSmall)
-					updated := strings.ReplaceAll(string(configBytes), oldSmallPath, chosenASRPath)
+					updated := config.ReplacePathInYAML(string(configBytes), oldSmallPath, chosenASRPath)
 					if err := os.WriteFile(configFile, []byte(updated), 0644); err != nil {
 						fmt.Printf("Warning: Could not update config file: %v\n", err)
 					}
@@ -268,21 +337,22 @@ func EnsureSetup() error {
 		if missingASR {
 			fmt.Printf(" - %s (ASR): %s (%s)\n", chosenASRName, chosenASRPath, chosenASRSize)
 		}
+		if missingVAD {
+			fmt.Printf(" - Silero voice activity model: %s (%s)\n", vadPath, sizeVAD)
+		}
 		if missingLLM {
-			fmt.Printf(" - LLM Model (Qwen 3 Sussurro): %s (%s)\n", llmPath, sizeLLM)
+			fmt.Printf(" - %s (LLM): %s (%s)\n", llmModel.Name, llmPath, llmModel.Size)
 		}
 
 		totalSize := ""
 		if missingASR && missingLLM {
-			if chosenASRName == "Whisper Large v3 Turbo" {
-				totalSize = " (Total: ~2.90 GB)"
-			} else {
-				totalSize = " (Total: ~1.77 GB)"
-			}
+			totalSize = fmt.Sprintf(" (%s + %s)", chosenASRSize, llmModel.Size)
 		} else if missingASR {
 			totalSize = fmt.Sprintf(" (Total: %s)", chosenASRSize)
+		} else if missingLLM {
+			totalSize = fmt.Sprintf(" (Total: %s)", llmModel.Size)
 		} else {
-			totalSize = fmt.Sprintf(" (Total: %s)", sizeLLM)
+			totalSize = fmt.Sprintf(" (Total: %s)", sizeVAD)
 		}
 
 		fmt.Printf("\nWould you like to download them now?%s (Y/n): ", totalSize)
@@ -296,8 +366,13 @@ func EnsureSetup() error {
 					return fmt.Errorf("failed to download ASR model: %w", err)
 				}
 			}
+			if missingVAD {
+				if err := EnsureVADModel(vadPath); err != nil {
+					return fmt.Errorf("provision VAD model: %w", err)
+				}
+			}
 			if missingLLM {
-				if err := downloadFile(urlLLM, llmPath, "LLM Model"); err != nil {
+				if err := downloadFile(llmModel.DownloadURL, llmPath, llmModel.Name); err != nil {
 					return fmt.Errorf("failed to download LLM model: %w", err)
 				}
 			}
@@ -409,60 +484,96 @@ func SwitchWhisperModel() error {
 	return nil
 }
 
-// downloadFile downloads a file from url to filepath with a simple progress indicator
-func downloadFile(url, filepath, name string) error {
-	fmt.Printf("Downloading %s...\n", name)
+// downloadFile downloads a file from url to filepath with a simple progress
+// indicator. The final path appears only after a complete download, so a
+// network failure cannot leave a partial model that future setup runs trust.
+func downloadFile(url, destPath, name string) error {
+	return downloadFileWithProgress(url, destPath, name, nil)
+}
 
-	// Create the file
-	out, err := os.Create(filepath)
-	if err != nil {
-		return err
+func downloadFileWithProgress(url, destPath, name string, progress ProgressCallback) error {
+	if err := downloadFileToWriterWithProgress(url, destPath, name, os.Stdout, progress); err != nil {
+		return fmt.Errorf("download %s: %w", name, err)
 	}
-	defer out.Close()
+	return nil
+}
 
-	// Get the data
+func downloadFileToWriter(url, destPath, name string, output io.Writer) error {
+	return downloadFileToWriterWithProgress(url, destPath, name, output, nil)
+}
+
+func downloadFileToWriterWithProgress(url, destPath, name string, output io.Writer, progress ProgressCallback) error {
+	fmt.Fprintf(output, "Downloading %s...\n", name)
+
 	resp, err := http.Get(url)
 	if err != nil {
-		return err
+		return fmt.Errorf("request model: %w", err)
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("bad status: %s", resp.Status)
 	}
 
-	// Create a proxy reader to track progress
-	contentLength := resp.ContentLength
-	reader := &progressReader{
-		Reader: resp.Body,
-		Total:  contentLength,
-		Name:   name,
+	out, err := os.CreateTemp(filepath.Dir(destPath), "."+filepath.Base(destPath)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temporary model file: %w", err)
 	}
+	tmpPath := out.Name()
+	defer os.Remove(tmpPath)
 
-	_, err = io.Copy(out, reader)
-	fmt.Println() // Newline after progress
-	return err
+	reader := &progressReader{
+		Reader:   resp.Body,
+		Total:    resp.ContentLength,
+		Name:     name,
+		Output:   output,
+		Callback: progress,
+	}
+	if _, err := io.Copy(out, reader); err != nil {
+		if closeErr := out.Close(); closeErr != nil {
+			return fmt.Errorf("copy model data: %w (also failed to close temporary file: %v)", err, closeErr)
+		}
+		return fmt.Errorf("copy model data: %w", err)
+	}
+	fmt.Fprintln(output) // Newline after progress
+	if err := out.Close(); err != nil {
+		return fmt.Errorf("close temporary model file: %w", err)
+	}
+	if renameErr := os.Rename(tmpPath, destPath); renameErr != nil {
+		// Windows does not replace an existing destination. This path is used
+		// when setup is replacing an incomplete model, after the full new file
+		// has already reached the sibling temporary file.
+		if _, statErr := os.Stat(destPath); statErr != nil {
+			return fmt.Errorf("install model: %w", renameErr)
+		}
+		if removeErr := os.Remove(destPath); removeErr != nil {
+			return fmt.Errorf("replace incomplete model: %w", removeErr)
+		}
+		if err := os.Rename(tmpPath, destPath); err != nil {
+			return fmt.Errorf("install replacement model: %w", err)
+		}
+	}
+	return nil
 }
 
 func (pr *progressReader) invokeCallback() {
-	progressMu.Lock()
-	cb := progressCB
-	progressMu.Unlock()
-	if cb != nil {
-		pct := 0.0
-		if pr.Total > 0 {
-			pct = float64(pr.Current) / float64(pr.Total) * 100
-		}
-		cb(pr.Name, pct, pr.Current, pr.Total)
+	if pr.Callback == nil {
+		return
 	}
+	pct := 0.0
+	if pr.Total > 0 {
+		pct = float64(pr.Current) / float64(pr.Total) * 100
+	}
+	pr.Callback(pr.Name, pct, pr.Current, pr.Total)
 }
 
 type progressReader struct {
 	io.Reader
-	Total   int64
-	Current int64
-	Name    string
-	Last    int64
+	Total    int64
+	Current  int64
+	Name     string
+	Last     int64
+	Output   io.Writer
+	Callback ProgressCallback
 }
 
 func (pr *progressReader) Read(p []byte) (int, error) {
@@ -474,9 +585,9 @@ func (pr *progressReader) Read(p []byte) (int, error) {
 		pr.Last = pr.Current
 		if pr.Total > 0 {
 			percent := float64(pr.Current) / float64(pr.Total) * 100
-			fmt.Printf("\rDownloading %s: %.1f%% (%.1f/%.1f MB)", pr.Name, percent, float64(pr.Current)/1024/1024, float64(pr.Total)/1024/1024)
+			fmt.Fprintf(pr.Output, "\rDownloading %s: %.1f%% (%.1f/%.1f MB)", pr.Name, percent, float64(pr.Current)/1024/1024, float64(pr.Total)/1024/1024)
 		} else {
-			fmt.Printf("\rDownloading %s: %.1f MB", pr.Name, float64(pr.Current)/1024/1024)
+			fmt.Fprintf(pr.Output, "\rDownloading %s: %.1f MB", pr.Name, float64(pr.Current)/1024/1024)
 		}
 		pr.invokeCallback()
 	}

@@ -1,4 +1,6 @@
 #include "overlay_linux.h"
+#include "overlay_palette.h"
+#include <pango/pangocairo.h>
 
 /* ------------------------------------------------------------------ */
 /* Internal data structure                                             */
@@ -21,56 +23,99 @@ struct OverlayData {
     double       bar_heights[ITEM_COUNT]; /* smoothed current heights         */
     double       bar_targets[ITEM_COUNT]; /* targets from RMS                 */
 
+    /* Recording buffer fill, 0 to 1. Smoothed toward its target on the
+       animation tick like the bars, so the track glides rather than steps. */
+    double       fill;
+    double       fill_target;
+
     /* Shimmer phase for transcribing text */
     double       shimmer_phase;
 
-    /* X11 hotkey */
+    /* Live transcript shown in the expanded panel. Owned by this struct and
+       only touched on the GTK main thread. */
+    char        *transcript;
+    char        *status;
+    gboolean     provisional;   /* text is still being revised */
+    gboolean     copied;        /* text is ready to paste */
+    gboolean     finalizing;    /* final recognition pass is running */
+    int          panel_height;  /* current fixed-width panel height */
+
+    /* Animation timer source id, 0 when stopped. The timer only runs while
+       the overlay is mapped: a hidden capsule must cost nothing. */
+    guint        anim_source;
+
+    OverlayPalette dark_palette;
+    OverlayPalette light_palette;
+    OverlayPalette palette;
+    int            theme_mode;
+    gboolean       system_dark;
+    gboolean       portal_known;
+    GDBusConnection *portal_connection;
+    guint           portal_subscription;
+
+    /* X11 hotkeys. Every binding may be unset (keycode 0). */
     HotkeyDownCB down_cb;
     HotkeyUpCB   up_cb;
+    HotkeyDownCB toggle_cb;
+    HotkeyDownCB edit_down_cb;
+    HotkeyUpCB   edit_up_cb;
     int          hk_keycode;
     unsigned int hk_mods;
-    gboolean     hk_pressed;
+    int          tg_keycode;
+    unsigned int tg_mods;
+    int          ed_keycode;
+    unsigned int ed_mods;
+    int          pressed_owner;
+    int          pressed_keycode;
+    gboolean     hotkey_filter_installed;
 };
 
 /* ------------------------------------------------------------------ */
 /* Drawing helpers                                                     */
 /* ------------------------------------------------------------------ */
 
-static void pill_path(cairo_t *cr)
+static void set_source_color(cairo_t *cr, OverlayColor color, double alpha_scale)
 {
-    double w = OVERLAY_WIDTH;
-    double h = OVERLAY_HEIGHT;
-    double r = OVERLAY_RADIUS;
+    cairo_set_source_rgba(cr, color.r, color.g, color.b, color.a * alpha_scale);
+}
+
+static gboolean resolved_dark(const OverlayData *od)
+{
+    if (od->theme_mode == OVERLAY_THEME_DARK) return TRUE;
+    if (od->theme_mode == OVERLAY_THEME_LIGHT) return FALSE;
+    return od->system_dark;
+}
+
+static void apply_resolved_palette(OverlayData *od)
+{
+    od->palette = resolved_dark(od) ? od->dark_palette : od->light_palette;
+    gtk_widget_queue_draw(od->drawing_area);
+}
+
+/* Appends a rounded-rectangle sub-path. The corner radius is clamped so a
+ * shape shorter or narrower than its own corners still renders, degenerating
+ * to a stadium rather than to overlapping arcs. */
+static void rounded_rect(cairo_t *cr, double x, double y,
+                         double w, double h, double r)
+{
+    if (r > w / 2.0) r = w / 2.0;
+    if (r > h / 2.0) r = h / 2.0;
 
     cairo_new_sub_path(cr);
-    cairo_arc(cr, r,     r,     r,  M_PI,        3.0*M_PI/2.0);
-    cairo_arc(cr, w - r, r,     r,  3.0*M_PI/2.0, 0.0);
-    cairo_arc(cr, w - r, h - r, r,  0.0,          M_PI/2.0);
-    cairo_arc(cr, r,     h - r, r,  M_PI/2.0,    M_PI);
+    cairo_arc(cr, x + r,     y + r,     r, M_PI,         3.0*M_PI/2.0);
+    cairo_arc(cr, x + w - r, y + r,     r, 3.0*M_PI/2.0, 0.0);
+    cairo_arc(cr, x + w - r, y + h - r, r, 0.0,          M_PI/2.0);
+    cairo_arc(cr, x + r,     y + h - r, r, M_PI/2.0,     M_PI);
     cairo_close_path(cr);
 }
 
-static void draw_pill_background(cairo_t *cr)
+/* Draws the idle dots centred within the slot (x, w) at vertical centre_y. */
+static void draw_idle_dots(cairo_t *cr, OverlayData *od,
+                           double x, double w, double centre_y)
 {
-    pill_path(cr);
-    cairo_set_source_rgba(cr, BG_R, BG_G, BG_B, BG_A);
-    cairo_fill(cr);
-}
-
-static void draw_pill_border(cairo_t *cr)
-{
-    pill_path(cr);
-    cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.30); /* subtle white rim */
-    cairo_set_line_width(cr, 1.5);
-    cairo_stroke(cr);
-}
-
-static void draw_idle_dots(cairo_t *cr, OverlayData *od)
-{
-    /* 7 dots, centered in the pill */
     double total_w = (ITEM_COUNT - 1) * DOT_SPACING;
-    double start_x = (OVERLAY_WIDTH - total_w) / 2.0;
-    double center_y = OVERLAY_HEIGHT / 2.0;
+    double start_x = x + (w - total_w) / 2.0;
+    double center_y = centre_y;
 
     for (int i = 0; i < ITEM_COUNT; i++) {
         double t   = od->anim_time;
@@ -80,18 +125,58 @@ static void draw_idle_dots(cairo_t *cr, OverlayData *od)
 
         double cx = start_x + i * DOT_SPACING;
         cairo_arc(cr, cx, center_y, DOT_RADIUS, 0, 2.0 * M_PI);
-        cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, a);
+        set_source_color(cr, od->palette.primary, a);
         cairo_fill(cr);
     }
 }
 
-static void draw_recording_bars(cairo_t *cr, OverlayData *od)
+/* Draws the recording buffer fill into the given rect.
+ *
+ * The rect is passed in rather than derived from the pill, because this now
+ * lives in the overlay's permanent bottom row: it must stay visible while text
+ * is on screen, which is exactly when a long dictation risks reaching the cap.
+ *
+ * The track turns warning-coloured past FILL_WARN_FRACTION, so the approach to
+ * a truncating cap reads at a glance without needing a number. */
+static void draw_buffer_fill(cairo_t *cr, OverlayData *od,
+                             double x, double y, double w)
+{
+    double r = FILL_TRACK_HEIGHT / 2.0;
+
+    /* Unfilled track: dim enough to read as a groove rather than content. */
+    set_source_color(cr, od->palette.track, 1.0);
+    rounded_rect(cr, x, y, w, FILL_TRACK_HEIGHT, r);
+    cairo_fill(cr);
+
+    double fill_w = w * od->fill;
+    if (fill_w <= 0.0) return;
+    /* Never narrower than the cap it is drawn with, or the rounded ends
+       degenerate into a dot at very low fill. */
+    if (fill_w < FILL_TRACK_HEIGHT) fill_w = FILL_TRACK_HEIGHT;
+
+    if (od->fill >= FILL_WARN_FRACTION) {
+        set_source_color(cr, od->palette.warning, 1.0);
+    } else {
+        set_source_color(cr, od->palette.fill, 1.0);
+    }
+    rounded_rect(cr, x, y, fill_w, FILL_TRACK_HEIGHT, r);
+    cairo_fill(cr);
+}
+
+/* Draws the waveform centred within the slot (x, w) at vertical centre_y.
+ *
+ * The bars occupy a fixed width, so at the wide slot of the unified layout they
+ * are centred in the space rather than stretched across it: the waveform is a
+ * liveness indicator here, and thinner bars spread wider would read as less,
+ * not more. */
+static void draw_recording_bars(cairo_t *cr, OverlayData *od,
+                                double x, double w, double centre_y)
 {
     double total_w = (ITEM_COUNT - 1) * BAR_SPACING;
-    double start_x = (OVERLAY_WIDTH - total_w) / 2.0;
-    double center_y = OVERLAY_HEIGHT / 2.0;
+    double start_x = x + (w - total_w) / 2.0;
+    double center_y = centre_y;
 
-    cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 1.0);
+    set_source_color(cr, od->palette.primary, 1.0);
 
     for (int i = 0; i < ITEM_COUNT; i++) {
         double h  = od->bar_heights[i];
@@ -99,59 +184,237 @@ static void draw_recording_bars(cairo_t *cr, OverlayData *od)
         double x  = cx - BAR_WIDTH / 2.0;
         double y  = center_y - h / 2.0;
 
-        /* Rounded rectangle */
-        double r = BAR_RADIUS;
-        if (r > h / 2.0) r = h / 2.0;
-
-        cairo_new_sub_path(cr);
-        cairo_arc(cr, x + r,           y + r,     r, M_PI,       3.0*M_PI/2.0);
-        cairo_arc(cr, x + BAR_WIDTH-r, y + r,     r, 3.0*M_PI/2.0, 0.0);
-        cairo_arc(cr, x + BAR_WIDTH-r, y + h - r, r, 0.0,         M_PI/2.0);
-        cairo_arc(cr, x + r,           y + h - r, r, M_PI/2.0,   M_PI);
-        cairo_close_path(cr);
+        rounded_rect(cr, x, y, BAR_WIDTH, h, BAR_RADIUS);
         cairo_fill(cr);
     }
 }
 
-static void draw_transcribing_text(cairo_t *cr, OverlayData *od)
+/* Defined below, after the font scaling it depends on. */
+static void draw_row_status(cairo_t *cr, OverlayData *od,
+                            double x, double w, double centre_y);
+
+/* Draws the overlay's permanent bottom row: waveform on the left, buffer-fill
+ * gauge filling the rest.
+ *
+ * Anchored to the bottom edge, which is the only part of the overlay that
+ * holds still as text grows upwards (sussurro-xvj.48). Drawn in every state, so
+ * neither element disappears when text arrives — that disappearance was the
+ * reported defect.
+ *
+ * panel_h is the overlay's current height, so the row finds its own position
+ * whether the overlay is the bare control strip or a full transcript panel. */
+static void draw_control_row(cairo_t *cr, OverlayData *od,
+                             double width, double panel_h)
 {
-    /* Plain white text with animated shimmer gradient */
-    double cx = OVERLAY_WIDTH  / 2.0;
-    double cy = OVERLAY_HEIGHT / 2.0;
+    double content_w = width - 2.0 * PANEL_PAD_X;
+    double wave_w    = content_w * ROW_WAVEFORM_FRACTION;
+    double gauge_w   = content_w - wave_w - ROW_GAP;
+    double row_top   = panel_h - PANEL_PAD_Y - ROW_HEIGHT;
+    double centre_y  = row_top + ROW_HEIGHT / 2.0;
 
-    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-    cairo_set_font_size(cr, 14.0);
+    /* State decides first, and RECORDING always wins.
+     *
+     * The waveform is the only live confirmation that audio is being captured,
+     * so nothing may displace it while recording is running. Testing the status
+     * string ahead of the state let any label — including one a caller had not
+     * cleared — blank the waveform mid-dictation (sussurro-xvj.61).
+     *
+     * Once recording stops the waveform means nothing, and the slot carries a
+     * status word instead: it says the overlay is working rather than hung, and
+     * confirms the copy. */
+    if (od->state == OVERLAY_STATE_RECORDING) {
+        draw_recording_bars(cr, od, PANEL_PAD_X, wave_w, centre_y);
+    } else if (od->status && od->status[0]) {
+        draw_row_status(cr, od, PANEL_PAD_X, wave_w, centre_y);
+    } else if (od->state == OVERLAY_STATE_IDLE) {
+        draw_idle_dots(cr, od, PANEL_PAD_X, wave_w, centre_y);
+    } else {
+        draw_recording_bars(cr, od, PANEL_PAD_X, wave_w, centre_y);
+    }
 
-    cairo_text_extents_t ext;
-    cairo_text_extents(cr, "transcribing", &ext);
+    /* The gauge is vertically centred in the row rather than sitting on the
+       overlay's edge, so it stays aligned with the waveform beside it. */
+    draw_buffer_fill(cr, od, PANEL_PAD_X + wave_w + ROW_GAP,
+                     centre_y - FILL_TRACK_HEIGHT / 2.0, gauge_w);
+}
 
-    double tx = cx - ext.width / 2.0 - ext.x_bearing;
-    double ty = cy - ext.height / 2.0 - ext.y_bearing;
+/* Keeps the overlay bottom-centred on the primary monitor at the given size.
+   The window changes size as the transcript grows, so the position has to be
+   recomputed rather than set once at creation.
 
-    /* Base white text */
-    cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.7);
-    cairo_move_to(cr, tx, ty);
-    cairo_show_text(cr, "transcribing");
+   Under gtk-layer-shell the compositor owns placement and this is a no-op. */
+static void reposition_overlay(GtkWidget *win, int width, int height)
+{
+#ifdef HAVE_GTK_LAYER_SHELL
+    (void)win; (void)width; (void)height;
+#else
+    GdkDisplay *display = gdk_display_get_default();
+    GdkMonitor *monitor = gdk_display_get_primary_monitor(display);
+    if (!monitor) monitor = gdk_display_get_monitor(display, 0);
+    GdkRectangle geo = {0, 0, 1920, 1080}; /* safe fallback */
+    if (monitor) gdk_monitor_get_geometry(monitor, &geo);
 
-    /* Shimmer: a white highlight sweeping left→right over 1.5 s */
-    double phase   = fmod(od->shimmer_phase, 1.5) / 1.5; /* 0→1 */
-    double shimmer_x = tx - 40.0 + (ext.width + 80.0) * phase;
+    int x = geo.x + (geo.width - width) / 2;
+    int y = geo.y + geo.height - height - OVERLAY_BOTTOM_MARGIN;
+    gtk_window_move(GTK_WINDOW(win), x, y);
+#endif
+}
 
-    cairo_pattern_t *pat = cairo_pattern_create_linear(
-        shimmer_x - 20.0, 0, shimmer_x + 20.0, 0);
-    cairo_pattern_add_color_stop_rgba(pat, 0.0, 1,1,1, 0.0);
-    cairo_pattern_add_color_stop_rgba(pat, 0.5, 1,1,1, 0.5);
-    cairo_pattern_add_color_stop_rgba(pat, 1.0, 1,1,1, 0.0);
+/* ------------------------------------------------------------------ */
+/* Transcript panel                                                     */
+/* ------------------------------------------------------------------ */
 
-    /* Clip to pill shape before drawing shimmer */
-    pill_path(cr);
-    cairo_clip(cr);
+/* Builds the Pango layout for the transcript text.
+   cairo_show_text cannot wrap, so live dictation needs a real text layout. */
+/* Returns the display's font scale relative to the 96dpi baseline Pango
+   assumes. Xft.dpi is what the rest of the desktop is sized by, so ignoring
+   it makes the panel text visibly smaller than every other application. */
+static double panel_font_scale(void)
+{
+    GdkScreen *screen = gdk_screen_get_default();
+    if (!screen) return 1.0;
 
-    cairo_set_source(cr, pat);
-    cairo_move_to(cr, tx, ty);
-    cairo_show_text(cr, "transcribing");
-    cairo_pattern_destroy(pat);
-    cairo_reset_clip(cr);
+    double dpi = gdk_screen_get_resolution(screen);
+    if (dpi <= 0) return 1.0;   /* unset: Pango's own default applies */
+    return dpi / 96.0;
+}
+
+/* The tallest the panel may become before it scrolls instead of growing.
+   Derived from the monitor so a long transcript on a large screen uses the
+   space available, rather than stopping at a pixel count chosen for a smaller
+   one. */
+static int panel_max_height(void)
+{
+    GdkDisplay *display = gdk_display_get_default();
+    GdkMonitor *monitor = display ? gdk_display_get_primary_monitor(display) : NULL;
+    if (display && !monitor) monitor = gdk_display_get_monitor(display, 0);
+
+    GdkRectangle geo = {0, 0, 1920, 1080}; /* safe fallback */
+    if (monitor) gdk_monitor_get_geometry(monitor, &geo);
+
+    int cap = (int)(geo.height * PANEL_MAX_HEIGHT_FRACTION);
+    if (cap < PANEL_MIN_MAX_HEIGHT) cap = PANEL_MIN_MAX_HEIGHT;
+    return cap;
+}
+
+/* Draws the status word in the control row's left slot, vertically centred and
+ * left-aligned with the transcript text above it.
+ *
+ * The word is allowed to overrun its slot: "Finalizing" is wider than the
+ * waveform's 10%, and the gauge beside it is a bar with no content to collide
+ * with, so overlapping it slightly is preferable to truncating the word. */
+static void draw_row_status(cairo_t *cr, OverlayData *od,
+                            double x, double w, double centre_y)
+{
+    (void)w;
+
+    PangoLayout *layout = pango_cairo_create_layout(cr);
+    PangoFontDescription *font = pango_font_description_from_string("Sans");
+    pango_font_description_set_absolute_size(
+        font, PANEL_STATUS_SIZE * panel_font_scale() * PANGO_SCALE);
+    pango_layout_set_font_description(layout, font);
+    pango_font_description_free(font);
+    pango_layout_set_text(layout, od->status, -1);
+
+    int tw = 0, th = 0;
+    pango_layout_get_pixel_size(layout, &tw, &th);
+
+    set_source_color(cr, od->palette.secondary, 1.0);
+    cairo_move_to(cr, x, centre_y - th / 2.0);
+    pango_cairo_show_layout(cr, layout);
+    g_object_unref(layout);
+}
+
+static PangoLayout *panel_text_layout(cairo_t *cr, OverlayData *od)
+{
+    PangoLayout *layout = pango_cairo_create_layout(cr);
+    PangoFontDescription *font = pango_font_description_from_string("Sans");
+    pango_font_description_set_absolute_size(
+        font, PANEL_TEXT_SIZE * panel_font_scale() * PANGO_SCALE);
+    pango_layout_set_font_description(layout, font);
+    pango_font_description_free(font);
+
+    pango_layout_set_width(layout, (PANEL_WIDTH - 2 * PANEL_PAD_X) * PANGO_SCALE);
+    pango_layout_set_wrap(layout, PANGO_WRAP_WORD_CHAR);
+    pango_layout_set_text(layout, od->transcript ? od->transcript : "", -1);
+    return layout;
+}
+
+/* Rounded rectangle path for the expanded panel. */
+static void panel_path(cairo_t *cr, double w, double h)
+{
+    const double r = PANEL_RADIUS;
+    cairo_new_sub_path(cr);
+    cairo_arc(cr, w - r, r,     r, -G_PI / 2, 0);
+    cairo_arc(cr, w - r, h - r, r, 0,          G_PI / 2);
+    cairo_arc(cr, r,     h - r, r, G_PI / 2,   G_PI);
+    cairo_arc(cr, r,     r,     r, G_PI,       3 * G_PI / 2);
+    cairo_close_path(cr);
+}
+
+/* Draws the transcript panel. Returns the height it needs, so the caller can
+   size the window to the text. */
+static int draw_panel(cairo_t *cr, OverlayData *od, gboolean paint)
+{
+    PangoLayout *layout = panel_text_layout(cr, od);
+
+    int text_w = 0, text_h = 0;
+    pango_layout_get_pixel_size(layout, &text_w, &text_h);
+
+    /* The control row is permanent, so it is part of the panel's height at
+       every size, including when there is no text at all. The status word
+       lives inside that row rather than on a line of its own, so it adds no
+       height here. */
+    int height = PANEL_PAD_Y * 2 + text_h + TEXT_ROW_GAP + (int)ROW_HEIGHT;
+
+    /* Past the cap the panel stops growing. The text is then anchored to its
+       END rather than its start: during dictation the newest words matter, and
+       drawing from the top would leave them off the bottom edge, which is the
+       cropping reported in sussurro-xvj.48. */
+    int max_height = panel_max_height();
+    int text_offset = 0;
+    if (height > max_height) {
+        text_offset = height - max_height;
+        height = max_height;
+    }
+
+    if (paint) {
+        panel_path(cr, PANEL_WIDTH, height);
+        set_source_color(cr, od->palette.background, 1.0);
+        cairo_fill_preserve(cr);
+        set_source_color(cr, od->palette.border, 1.0);
+        cairo_set_line_width(cr, 1.0);
+        cairo_stroke(cr);
+
+        /* Provisional text is dimmed: it is still being revised, and the
+           user should be able to tell settled text from text that may
+           still change under them. */
+        if (od->finalizing) {
+            set_source_color(cr, od->palette.finalizing, 1.0);
+        } else if (od->provisional) {
+            set_source_color(cr, od->palette.provisional, 1.0);
+        } else if (od->copied) {
+            set_source_color(cr, od->palette.copied, 1.0);
+        } else {
+            set_source_color(cr, od->palette.primary, 0.95);
+        }
+        /* Clip the text to its own region, which stops above the status
+           line. A scrolled layout starts above the panel's top edge, so
+           without this it would paint over the window's surroundings, and
+           its last line would run underneath the status text. */
+        cairo_save(cr);
+        cairo_rectangle(cr, 0, 0, PANEL_WIDTH,
+                        height - PANEL_PAD_Y - ROW_HEIGHT - TEXT_ROW_GAP);
+        cairo_clip(cr);
+        cairo_move_to(cr, PANEL_PAD_X, PANEL_PAD_Y - text_offset);
+        pango_cairo_show_layout(cr, layout);
+        cairo_restore(cr);
+
+        draw_control_row(cr, od, PANEL_WIDTH, height);
+    }
+
+    g_object_unref(layout);
+    return height;
 }
 
 /* ------------------------------------------------------------------ */
@@ -168,21 +431,12 @@ static gboolean on_draw(GtkWidget *widget, cairo_t *cr, gpointer data)
     cairo_paint(cr);
     cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
 
-    draw_pill_background(cr);
-    draw_pill_border(cr);
-
-    switch (od->state) {
-    case OVERLAY_STATE_IDLE:
-        draw_idle_dots(cr, od);
-        break;
-    case OVERLAY_STATE_RECORDING:
-        draw_recording_bars(cr, od);
-        break;
-    case OVERLAY_STATE_TRANSCRIBING:
-        draw_transcribing_text(cr, od);
-        break;
-    }
-
+    /* One overlay in every state. There is no pill-to-panel switch: the panel
+       always carries the control row along its bottom edge, and the text area
+       above it grows from zero as text arrives. Swapping between two shapes is
+       what produced the jolt, and what made anything drawn on the pill vanish
+       the moment text appeared. */
+    draw_panel(cr, od, TRUE);
     return FALSE;
 }
 
@@ -202,8 +456,27 @@ static gboolean animation_tick(gpointer data)
         od->bar_heights[i] = od->bar_heights[i] * 0.7 + od->bar_targets[i] * 0.3;
     }
 
+    od->fill = od->fill * 0.9 + od->fill_target * 0.1;
+
     gtk_widget_queue_draw(od->drawing_area);
     return G_SOURCE_CONTINUE;
+}
+
+/* Starts the animation timer if it is not already running. */
+static void overlay_start_animation(OverlayData *od)
+{
+    if (od->anim_source == 0) {
+        od->anim_source = g_timeout_add(16, animation_tick, od);
+    }
+}
+
+/* Stops the animation timer. Idle redraws are pure waste while hidden. */
+static void overlay_stop_animation(OverlayData *od)
+{
+    if (od->anim_source != 0) {
+        g_source_remove(od->anim_source);
+        od->anim_source = 0;
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -212,6 +485,59 @@ static gboolean animation_tick(gpointer data)
 
 #ifndef WAYLAND_ONLY
 
+static unsigned int released_modifier(XKeyEvent *event)
+{
+    KeySym sym = XkbKeycodeToKeysym(event->display, event->keycode, 0, 0);
+    switch (sym) {
+        case XK_Super_L: case XK_Super_R: return Mod4Mask;
+        case XK_Control_L: case XK_Control_R: return ControlMask;
+        case XK_Shift_L: case XK_Shift_R: return ShiftMask;
+        case XK_Alt_L: case XK_Alt_R: return Mod1Mask;
+        default: return 0;
+    }
+}
+
+enum {
+    HOTKEY_OWNER_NONE,
+    HOTKEY_OWNER_PUSH_TO_TALK,
+    HOTKEY_OWNER_TOGGLE,
+    HOTKEY_OWNER_EDIT
+};
+
+static unsigned int effective_modifiers(unsigned int state)
+{
+    return state & (ControlMask | ShiftMask | Mod1Mask | Mod4Mask);
+}
+
+static unsigned int owner_modifiers(OverlayData *od)
+{
+    if (od->pressed_owner == HOTKEY_OWNER_PUSH_TO_TALK) return od->hk_mods;
+    if (od->pressed_owner == HOTKEY_OWNER_TOGGLE) return od->tg_mods;
+    if (od->pressed_owner == HOTKEY_OWNER_EDIT) return od->ed_mods;
+    return 0;
+}
+
+static void release_pressed_binding(OverlayData *od)
+{
+    int owner = od->pressed_owner;
+    od->pressed_owner = HOTKEY_OWNER_NONE;
+    od->pressed_keycode = 0;
+    if (owner == HOTKEY_OWNER_PUSH_TO_TALK && od->up_cb) od->up_cb();
+    if (owner == HOTKEY_OWNER_EDIT && od->edit_up_cb) od->edit_up_cb();
+}
+
+static int matching_binding(OverlayData *od, int keycode, unsigned int state)
+{
+    unsigned int mods = effective_modifiers(state);
+    if (od->hk_keycode == keycode && od->hk_mods == mods)
+        return HOTKEY_OWNER_PUSH_TO_TALK;
+    if (od->tg_keycode == keycode && od->tg_mods == mods)
+        return HOTKEY_OWNER_TOGGLE;
+    if (od->ed_keycode == keycode && od->ed_mods == mods)
+        return HOTKEY_OWNER_EDIT;
+    return HOTKEY_OWNER_NONE;
+}
+
 static GdkFilterReturn x11_event_filter(GdkXEvent *xevent, GdkEvent *event, gpointer data)
 {
     (void)event;
@@ -219,20 +545,31 @@ static GdkFilterReturn x11_event_filter(GdkXEvent *xevent, GdkEvent *event, gpoi
     XEvent *xe = (XEvent *)xevent;
 
     if (xe->type == KeyPress) {
-        if ((int)xe->xkey.keycode == od->hk_keycode &&
-            (xe->xkey.state & od->hk_mods) == od->hk_mods) {
-            if (!od->hk_pressed) {
-                od->hk_pressed = TRUE;
-                if (od->down_cb) od->down_cb();
-            }
+        int owner = matching_binding(od, (int)xe->xkey.keycode, xe->xkey.state);
+        if (owner == HOTKEY_OWNER_NONE) return GDK_FILTER_CONTINUE;
+        if (od->pressed_owner == HOTKEY_OWNER_NONE) {
+            od->pressed_owner = owner;
+            od->pressed_keycode = (int)xe->xkey.keycode;
+            if (owner == HOTKEY_OWNER_PUSH_TO_TALK && od->down_cb) od->down_cb();
+            if (owner == HOTKEY_OWNER_TOGGLE && od->toggle_cb) od->toggle_cb();
+            if (owner == HOTKEY_OWNER_EDIT && od->edit_down_cb) od->edit_down_cb();
+        }
+        return GDK_FILTER_REMOVE;
+    }
+
+    if (xe->type == KeyRelease) {
+        if (od->pressed_owner != HOTKEY_OWNER_NONE &&
+            od->pressed_keycode == (int)xe->xkey.keycode) {
+            release_pressed_binding(od);
             return GDK_FILTER_REMOVE;
         }
-    } else if (xe->type == KeyRelease) {
-        if ((int)xe->xkey.keycode == od->hk_keycode) {
-            if (od->hk_pressed) {
-                od->hk_pressed = FALSE;
-                if (od->up_cb) od->up_cb();
-            }
+
+        /* Releasing a modifier before the grabbed key can hide the key's own
+           release on some X11 setups. End only the binding that owns the
+           current press. */
+        unsigned int modifier = released_modifier(&xe->xkey);
+        if (modifier && (owner_modifiers(od) & modifier)) {
+            release_pressed_binding(od);
             return GDK_FILTER_REMOVE;
         }
     }
@@ -262,9 +599,13 @@ static KeySym parse_x11_keysym(const char *trigger)
     const char *p = strrchr(trigger, '+');
     const char *key_str = p ? p + 1 : trigger;
 
-    if (strcmp(key_str, "space") == 0) return XK_space;
-    if (strcmp(key_str, "enter") == 0) return XK_Return;
-    if (strcmp(key_str, "tab")   == 0) return XK_Tab;
+    if (strcmp(key_str, "space")  == 0) return XK_space;
+    if (strcmp(key_str, "enter")  == 0) return XK_Return;
+    if (strcmp(key_str, "tab")    == 0) return XK_Tab;
+    /* The config's spelling is "esc"; XStringToKeysym only knows "Escape",
+       so without these the binding silently grabbed nothing. */
+    if (strcmp(key_str, "esc")    == 0) return XK_Escape;
+    if (strcmp(key_str, "escape") == 0) return XK_Escape;
 
     /* Single character keys */
     if (strlen(key_str) == 1) {
@@ -284,15 +625,169 @@ static KeySym parse_x11_keysym(const char *trigger)
 #endif /* WAYLAND_ONLY */
 
 /* ------------------------------------------------------------------ */
+/* System appearance                                                   */
+/* ------------------------------------------------------------------ */
+
+/* Reads the portal's color-scheme value out of its variant wrapping.
+ *
+ * SettingChanged carries the value in one variant; the Read reply wraps it
+ * twice (a "(v)" whose variant holds another variant holding the "u"), so a
+ * single unwrap saw a variant where it expected the integer and the startup
+ * read was silently discarded (M10). Unwrapping until something other than a
+ * variant appears serves both. */
+static gboolean portal_color_scheme(GVariant *wrapped, gboolean *dark)
+{
+    if (!wrapped) return FALSE;
+    GVariant *value = g_variant_get_variant(wrapped);
+    while (g_variant_is_of_type(value, G_VARIANT_TYPE_VARIANT)) {
+        GVariant *inner = g_variant_get_variant(value);
+        g_variant_unref(value);
+        value = inner;
+    }
+    gboolean known = FALSE;
+    if (g_variant_is_of_type(value, G_VARIANT_TYPE_UINT32)) {
+        guint32 scheme = g_variant_get_uint32(value);
+        if (scheme == 1 || scheme == 2) {
+            *dark = scheme == 1;
+            known = TRUE;
+        }
+    }
+    g_variant_unref(value);
+    return known;
+}
+
+static gboolean gtk_style_is_dark(GtkWidget *widget)
+{
+    GdkRGBA background = {1, 1, 1, 1};
+    GtkStyleContext *context = gtk_widget_get_style_context(widget);
+    if (!gtk_style_context_lookup_color(context, "theme_bg_color", &background)) {
+        GdkRGBA *css_background = NULL;
+        gtk_style_context_get(context, GTK_STATE_FLAG_NORMAL,
+                              "background-color", &css_background, NULL);
+        if (css_background) {
+            background = *css_background;
+            gdk_rgba_free(css_background);
+        }
+    }
+    double luminance = 0.2126 * background.red +
+                       0.7152 * background.green +
+                       0.0722 * background.blue;
+    return luminance < 0.5;
+}
+
+static void update_system_dark(OverlayData *od, gboolean dark)
+{
+    if (od->system_dark == dark) return;
+    od->system_dark = dark;
+    if (od->theme_mode == OVERLAY_THEME_SYSTEM) apply_resolved_palette(od);
+}
+
+static void on_portal_setting_changed(GDBusConnection *connection,
+                                      const gchar *sender_name,
+                                      const gchar *object_path,
+                                      const gchar *interface_name,
+                                      const gchar *signal_name,
+                                      GVariant *parameters,
+                                      gpointer user_data)
+{
+    (void)connection; (void)sender_name; (void)object_path;
+    (void)interface_name; (void)signal_name;
+    OverlayData *od = (OverlayData *)user_data;
+    const gchar *namespace_name = NULL;
+    const gchar *key = NULL;
+    GVariant *wrapped = NULL;
+    g_variant_get(parameters, "(&s&s@v)", &namespace_name, &key, &wrapped);
+    if (g_strcmp0(namespace_name, "org.freedesktop.appearance") == 0 &&
+        g_strcmp0(key, "color-scheme") == 0) {
+        gboolean dark = FALSE;
+        od->portal_known = portal_color_scheme(wrapped, &dark);
+        update_system_dark(od, od->portal_known ? dark : gtk_style_is_dark(od->window));
+    }
+    g_variant_unref(wrapped);
+}
+
+static void on_style_updated(GtkWidget *widget, gpointer user_data)
+{
+    OverlayData *od = (OverlayData *)user_data;
+    if (!od->portal_known) update_system_dark(od, gtk_style_is_dark(widget));
+}
+
+static void on_portal_read_ready(GObject *source_object,
+                                 GAsyncResult *result,
+                                 gpointer user_data)
+{
+    OverlayData *od = (OverlayData *)user_data;
+    GError *error = NULL;
+    GVariant *reply = g_dbus_connection_call_finish(
+        G_DBUS_CONNECTION(source_object), result, &error);
+    if (!reply) {
+        g_clear_error(&error);
+        return;
+    }
+
+    GVariant *wrapped = NULL;
+    g_variant_get(reply, "(@v)", &wrapped);
+    gboolean dark = FALSE;
+    if (portal_color_scheme(wrapped, &dark)) {
+        od->portal_known = TRUE;
+        update_system_dark(od, dark);
+    }
+    g_variant_unref(wrapped);
+    g_variant_unref(reply);
+}
+
+static void watch_system_appearance(OverlayData *od)
+{
+    GError *error = NULL;
+    od->portal_connection = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, &error);
+    if (!od->portal_connection) {
+        g_clear_error(&error);
+        update_system_dark(od, gtk_style_is_dark(od->window));
+        return;
+    }
+
+    /* Subscribe before reading so a change cannot fall into the gap between
+       the initial value and the live watcher. The read is asynchronous: a
+       cold portal may take time to activate, but it must not delay startup. */
+    od->portal_subscription = g_dbus_connection_signal_subscribe(
+        od->portal_connection,
+        "org.freedesktop.portal.Desktop",
+        "org.freedesktop.portal.Settings",
+        "SettingChanged",
+        "/org/freedesktop/portal/desktop",
+        NULL,
+        G_DBUS_SIGNAL_FLAGS_NONE,
+        on_portal_setting_changed,
+        od,
+        NULL);
+
+    update_system_dark(od, gtk_style_is_dark(od->window));
+    g_dbus_connection_call(
+        od->portal_connection,
+        "org.freedesktop.portal.Desktop",
+        "/org/freedesktop/portal/desktop",
+        "org.freedesktop.portal.Settings",
+        "Read",
+        g_variant_new("(ss)", "org.freedesktop.appearance", "color-scheme"),
+        G_VARIANT_TYPE("(v)"),
+        G_DBUS_CALL_FLAGS_NONE,
+        -1,
+        NULL,
+        on_portal_read_ready,
+        od);
+}
+
+/* ------------------------------------------------------------------ */
 /* Public API                                                          */
 /* ------------------------------------------------------------------ */
 
-GtkWidget *overlay_create(void)
+GtkWidget *overlay_create(const OverlayPalette *dark_palette,
+                          const OverlayPalette *light_palette)
 {
     GtkWidget *win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
 
     gtk_window_set_title(GTK_WINDOW(win), "Sussurro Overlay");
-    gtk_window_set_default_size(GTK_WINDOW(win), OVERLAY_WIDTH, OVERLAY_HEIGHT);
+    gtk_window_set_default_size(GTK_WINDOW(win), PANEL_WIDTH, OVERLAY_REST_HEIGHT);
     gtk_window_set_resizable(GTK_WINDOW(win), FALSE);
     gtk_window_set_decorated(GTK_WINDOW(win), FALSE);
     /* EWMH window type — WMs don't decorate notification windows regardless
@@ -311,14 +806,19 @@ GtkWidget *overlay_create(void)
 
     /* Drawing area */
     GtkWidget *da = gtk_drawing_area_new();
-    gtk_widget_set_size_request(da, OVERLAY_WIDTH, OVERLAY_HEIGHT);
+    gtk_widget_set_size_request(da, PANEL_WIDTH, OVERLAY_REST_HEIGHT);
     gtk_container_add(GTK_CONTAINER(win), da);
 
     /* Allocate and attach overlay data */
     OverlayData *od = g_new0(OverlayData, 1);
-    od->window       = win;
-    od->drawing_area = da;
-    od->state        = OVERLAY_STATE_IDLE;
+    od->window        = win;
+    od->drawing_area  = da;
+    od->state         = OVERLAY_STATE_IDLE;
+    od->panel_height  = OVERLAY_REST_HEIGHT;
+    od->theme_mode    = OVERLAY_THEME_SYSTEM;
+    od->system_dark   = TRUE;
+    od->dark_palette  = *dark_palette;
+    od->light_palette = *light_palette;
     for (int i = 0; i < ITEM_COUNT; i++) {
         od->bar_heights[i] = BAR_MIN_HEIGHT;
         od->bar_targets[i] = BAR_MIN_HEIGHT;
@@ -326,8 +826,9 @@ GtkWidget *overlay_create(void)
 
     g_object_set_data(G_OBJECT(win), "overlay-data", od);
 
-    /* Connect draw callback */
+    /* Connect draw and system-appearance callbacks. */
     g_signal_connect(da, "draw", G_CALLBACK(on_draw), od);
+    g_signal_connect(win, "style-updated", G_CALLBACK(on_style_updated), od);
 
     /* Suppress delete-window */
     g_signal_connect(win, "delete-event", G_CALLBACK(gtk_true), NULL);
@@ -339,7 +840,8 @@ GtkWidget *overlay_create(void)
     gtk_layer_set_anchor(GTK_WINDOW(win), GTK_LAYER_SHELL_EDGE_BOTTOM, TRUE);
     gtk_layer_set_anchor(GTK_WINDOW(win), GTK_LAYER_SHELL_EDGE_LEFT,   FALSE);
     gtk_layer_set_anchor(GTK_WINDOW(win), GTK_LAYER_SHELL_EDGE_RIGHT,  FALSE);
-    gtk_layer_set_margin(GTK_WINDOW(win), GTK_LAYER_SHELL_EDGE_BOTTOM, 24);
+    gtk_layer_set_margin(GTK_WINDOW(win), GTK_LAYER_SHELL_EDGE_BOTTOM,
+                         OVERLAY_BOTTOM_MARGIN);
     gtk_layer_set_exclusive_zone(GTK_WINDOW(win), -1);
     gtk_layer_set_keyboard_mode(GTK_WINDOW(win), GTK_LAYER_SHELL_KEYBOARD_MODE_NONE);
     gtk_layer_set_namespace(GTK_WINDOW(win), "sussurro");
@@ -354,14 +856,7 @@ GtkWidget *overlay_create(void)
        re-positioning, no moving — the window sits exactly where we put it,
        regardless of how the process was started. */
     {
-        GdkDisplay  *display = gdk_display_get_default();
-        GdkMonitor  *monitor = gdk_display_get_primary_monitor(display);
-        if (!monitor) monitor = gdk_display_get_monitor(display, 0);
-        GdkRectangle geo = {0, 0, 1920, 1080}; /* safe fallback */
-        if (monitor) gdk_monitor_get_geometry(monitor, &geo);
-        int x = geo.x + (geo.width  - OVERLAY_WIDTH)  / 2;
-        int y = geo.y +  geo.height - OVERLAY_HEIGHT - 24;
-        gtk_window_move(GTK_WINDOW(win), x, y);
+        reposition_overlay(win, PANEL_WIDTH, OVERLAY_REST_HEIGHT);
 
         /* Realize creates the underlying GdkWindow without mapping (showing)
            it, so override-redirect can be set before the WM ever sees the
@@ -374,63 +869,162 @@ GtkWidget *overlay_create(void)
     }
 #endif
 
-    gtk_widget_show_all(win);
+    /* Deliberately not shown here. The capsule is mapped only while
+       something is happening (see overlay_show), so an idle Sussurro leaves
+       nothing on screen. gtk_widget_show_all on the child keeps the drawing
+       area realized so the first map paints immediately, without mapping the
+       toplevel itself.
 
-    /* Start animation timer */
-    g_timeout_add(16, animation_tick, od);
+       On X11 the realize/override-redirect ordering above still holds: the
+       window is realized but unmapped, which is exactly what
+       override-redirect needs. */
+    gtk_widget_show_all(da);
 
+    watch_system_appearance(od);
+    apply_resolved_palette(od);
     return win;
 }
 
-void overlay_install_hotkey(GtkWidget *win, const char *trigger,
-                            HotkeyDownCB down_cb, HotkeyUpCB up_cb)
+void overlay_install_hotkey(GtkWidget *win, const char *push_to_talk,
+                            const char *toggle, const char *edit,
+                            HotkeyDownCB down_cb, HotkeyUpCB up_cb,
+                            HotkeyDownCB toggle_cb, HotkeyDownCB edit_down_cb,
+                            HotkeyUpCB edit_up_cb)
 {
     OverlayData *od = (OverlayData *)g_object_get_data(G_OBJECT(win), "overlay-data");
     if (!od) return;
 
-    od->down_cb = down_cb;
-    od->up_cb   = up_cb;
+    od->down_cb      = down_cb;
+    od->up_cb        = up_cb;
+    od->toggle_cb    = toggle_cb;
+    od->edit_down_cb = edit_down_cb;
+    od->edit_up_cb   = edit_up_cb;
 
 #ifndef WAYLAND_ONLY
     GdkDisplay *display = gdk_display_get_default();
-
-    /* Only install on X11 displays */
     if (!GDK_IS_X11_DISPLAY(display)) return;
 
     Display *xdpy  = gdk_x11_display_get_xdisplay(display);
     Window   xroot = DefaultRootWindow(xdpy);
-
-    unsigned int mods    = parse_x11_mods(trigger);
-    KeySym       keysym  = parse_x11_keysym(trigger);
-    int          keycode = XKeysymToKeycode(xdpy, keysym);
-
-    od->hk_keycode = keycode;
-    od->hk_mods    = mods;
-
-    /* Grab with all lock-key combinations */
     unsigned int lock_combos[] = {0, LockMask, Mod2Mask, LockMask | Mod2Mask};
-    for (int i = 0; i < 4; i++) {
-        XGrabKey(xdpy, keycode, mods | lock_combos[i],
-                 xroot, True, GrabModeAsync, GrabModeAsync);
+
+    /* Settings can replace any subset of bindings. Release every old grab
+       before overwriting its keycode, or each save leaks another X11 grab. */
+    int old_keycodes[] = {od->hk_keycode, od->tg_keycode, od->ed_keycode};
+    unsigned int old_mods[] = {od->hk_mods, od->tg_mods, od->ed_mods};
+    for (int binding = 0; binding < 3; binding++) {
+        if (!old_keycodes[binding]) continue;
+        for (int i = 0; i < 4; i++) {
+            XUngrabKey(xdpy, old_keycodes[binding],
+                       old_mods[binding] | lock_combos[i], xroot);
+        }
     }
 
-    /* Install GDK event filter on root window */
-    GdkWindow *root_gdk = gdk_x11_window_foreign_new_for_display(display, xroot);
-    if (root_gdk) {
-        gdk_window_add_filter(root_gdk, x11_event_filter, od);
-        g_object_unref(root_gdk);
+    release_pressed_binding(od);
+    od->hk_keycode = od->tg_keycode = od->ed_keycode = 0;
+    od->hk_mods = od->tg_mods = od->ed_mods = 0;
+
+    Bool detectable = False;
+    XkbSetDetectableAutoRepeat(xdpy, True, &detectable);
+    if (!detectable) {
+        g_warning("sussurro: detectable auto-repeat unavailable; "
+                  "held-key release may be missed while a key repeats");
+    }
+
+    const char *triggers[] = {push_to_talk, toggle, edit};
+    int *keycodes[] = {&od->hk_keycode, &od->tg_keycode, &od->ed_keycode};
+    unsigned int *mods[] = {&od->hk_mods, &od->tg_mods, &od->ed_mods};
+    for (int binding = 0; binding < 3; binding++) {
+        if (!triggers[binding] || !triggers[binding][0]) continue;
+        *mods[binding] = parse_x11_mods(triggers[binding]);
+        *keycodes[binding] = XKeysymToKeycode(
+            xdpy, parse_x11_keysym(triggers[binding]));
+        if (!*keycodes[binding]) {
+            /* Say so: a key name the parser does not know used to be
+               dropped silently, leaving a binding that never fired. */
+            g_warning("sussurro: hotkey %s has no X11 keycode; not grabbed",
+                      triggers[binding]);
+            continue;
+        }
+        for (int i = 0; i < 4; i++) {
+            XGrabKey(xdpy, *keycodes[binding], *mods[binding] | lock_combos[i],
+                     xroot, True, GrabModeAsync, GrabModeAsync);
+        }
+    }
+    XSync(xdpy, False);
+
+    /* The same filter reads the current fields after every re-registration.
+       Install it once rather than stacking duplicate callbacks on each save. */
+    if (!od->hotkey_filter_installed) {
+        GdkWindow *root_gdk = gdk_x11_window_foreign_new_for_display(display, xroot);
+        if (root_gdk) {
+            gdk_window_add_filter(root_gdk, x11_event_filter, od);
+            od->hotkey_filter_installed = TRUE;
+            g_object_unref(root_gdk);
+        }
     }
 #endif
 }
 
+typedef struct {
+    GtkWidget *win;
+    char *push_to_talk;
+    char *toggle;
+    char *edit;
+} HotkeyReplaceArg;
+
+static gboolean idle_replace_hotkeys(gpointer data)
+{
+    HotkeyReplaceArg *arg = (HotkeyReplaceArg *)data;
+    OverlayData *od = (OverlayData *)g_object_get_data(G_OBJECT(arg->win), "overlay-data");
+    if (od) {
+        overlay_install_hotkey(arg->win, arg->push_to_talk, arg->toggle, arg->edit,
+                               od->down_cb, od->up_cb, od->toggle_cb,
+                               od->edit_down_cb, od->edit_up_cb);
+    }
+    g_free(arg->push_to_talk);
+    g_free(arg->toggle);
+    g_free(arg->edit);
+    g_free(arg);
+    return G_SOURCE_REMOVE;
+}
+
+void overlay_replace_hotkeys_async(GtkWidget *win, const char *push_to_talk,
+                                   const char *toggle, const char *edit)
+{
+    HotkeyReplaceArg *arg = g_new0(HotkeyReplaceArg, 1);
+    arg->win = win;
+    arg->push_to_talk = g_strdup(push_to_talk ? push_to_talk : "");
+    arg->toggle = g_strdup(toggle ? toggle : "");
+    arg->edit = g_strdup(edit ? edit : "");
+    g_main_context_invoke(NULL, idle_replace_hotkeys, arg);
+}
+
 /* ---- Async state/RMS update ---- */
+
+/* Applies a state change, clearing the buffer-fill gauge on entry to
+ * RECORDING: that starts a fresh buffer, so the fill is reset rather than
+ * letting the smoothing drag the previous recording's value down across the
+ * first second of the new one.
+ *
+ * Shared by both update paths. The Go side presents through
+ * overlay_present_async whenever transcript text can be drawn, which on Linux
+ * is always, so a reset living only in idle_set_state never ran. */
+static void apply_state(OverlayData *od, int state)
+{
+    if (state == OVERLAY_STATE_RECORDING && od->state != OVERLAY_STATE_RECORDING) {
+        od->fill        = 0.0;
+        od->fill_target = 0.0;
+    }
+    od->state = state;
+}
 
 gboolean idle_set_state(gpointer data)
 {
     IdleStateArg *arg = (IdleStateArg *)data;
     OverlayData  *od  = (OverlayData *)g_object_get_data(G_OBJECT(arg->win), "overlay-data");
     if (od) {
-        od->state = arg->state;
+        apply_state(od, arg->state);
         gtk_widget_queue_draw(od->drawing_area);
     }
     g_free(arg);
@@ -473,6 +1067,54 @@ void overlay_push_rms_async(GtkWidget *win, float rms)
     arg->win = win;
     arg->rms = rms;
     gdk_threads_add_idle(idle_push_rms, arg);
+}
+
+gboolean idle_push_fill(gpointer data)
+{
+    IdleFillArg *arg = (IdleFillArg *)data;
+    OverlayData *od  = (OverlayData *)g_object_get_data(G_OBJECT(arg->win), "overlay-data");
+    if (od) {
+        double fill = arg->fill;
+        if (fill < 0.0) fill = 0.0;
+        if (fill > 1.0) fill = 1.0;
+        od->fill_target = fill;
+    }
+    g_free(arg);
+    return G_SOURCE_REMOVE;
+}
+
+void overlay_push_fill_async(GtkWidget *win, double fill)
+{
+    IdleFillArg *arg = g_new(IdleFillArg, 1);
+    arg->win  = win;
+    arg->fill = fill;
+    gdk_threads_add_idle(idle_push_fill, arg);
+}
+
+static gboolean idle_set_theme(gpointer data)
+{
+    IdleThemeArg *arg = (IdleThemeArg *)data;
+    OverlayData *od = (OverlayData *)g_object_get_data(G_OBJECT(arg->win), "overlay-data");
+    if (od) {
+        od->theme_mode = arg->mode;
+        od->dark_palette = arg->dark_palette;
+        od->light_palette = arg->light_palette;
+        apply_resolved_palette(od);
+    }
+    g_free(arg);
+    return G_SOURCE_REMOVE;
+}
+
+void overlay_set_theme_async(GtkWidget *win, int mode,
+                             const OverlayPalette *dark_palette,
+                             const OverlayPalette *light_palette)
+{
+    IdleThemeArg *arg = g_new(IdleThemeArg, 1);
+    arg->win = win;
+    arg->mode = mode;
+    arg->dark_palette = *dark_palette;
+    arg->light_palette = *light_palette;
+    gdk_threads_add_idle(idle_set_theme, arg);
 }
 
 /* ------------------------------------------------------------------ */
@@ -531,12 +1173,119 @@ void overlay_install_context_menu(GtkWidget *win,
                      G_CALLBACK(on_button_press), NULL);
 }
 
+/* Show and hide are called from the pipeline goroutine and from the systray
+   goroutine, never the GTK main thread, so they marshal like the state and RMS
+   updates above. Touching GTK directly from another thread is undefined
+   behaviour that happens to work until it does not. */
+static gboolean idle_set_visible(gpointer data)
+{
+    IdleStateArg *arg = (IdleStateArg *)data;
+    OverlayData  *od  = (OverlayData *)g_object_get_data(G_OBJECT(arg->win), "overlay-data");
+
+    if (arg->state) {
+        if (od) {
+            reposition_overlay(arg->win, PANEL_WIDTH, od->panel_height);
+            overlay_start_animation(od);
+        }
+        gtk_widget_show_all(arg->win);
+    } else {
+        if (od) overlay_stop_animation(od);
+        gtk_widget_hide(arg->win);
+    }
+
+    g_free(arg);
+    return G_SOURCE_REMOVE;
+}
+
+/* Queues a visibility change on the GTK main thread. */
+static void overlay_set_visible_async(GtkWidget *win, gboolean visible)
+{
+    IdleStateArg *arg = g_new(IdleStateArg, 1);
+    arg->win   = win;
+    arg->state = visible ? 1 : 0;
+    gdk_threads_add_idle(idle_set_visible, arg);
+}
+
+/* Argument for a queued transcript update. */
+typedef struct {
+    GtkWidget *win;
+    int        state;
+    char      *text;
+    char      *status;
+    int        provisional;
+    int        copied;
+    int        finalizing;
+} IdleTranscriptArg;
+
+/* Applies a transcript update on the GTK main thread, resizing the window to
+   fit the text. */
+static gboolean idle_set_transcript(gpointer data)
+{
+    IdleTranscriptArg *arg = (IdleTranscriptArg *)data;
+    OverlayData *od = (OverlayData *)g_object_get_data(G_OBJECT(arg->win), "overlay-data");
+    if (!od) goto done;
+
+    /* State and text are applied together: updating them through separate
+       idle callbacks let a draw land between the two, briefly showing the
+       transcribing capsule in place of text that was already on screen. */
+    apply_state(od, arg->state);
+
+    g_free(od->transcript);
+    g_free(od->status);
+    od->transcript  = arg->text   ? g_strdup(arg->text)   : NULL;
+    od->status      = arg->status ? g_strdup(arg->status) : NULL;
+    od->provisional = arg->provisional ? TRUE : FALSE;
+    od->copied      = arg->copied ? TRUE : FALSE;
+    od->finalizing  = arg->finalizing ? TRUE : FALSE;
+
+    /* One size calculation for every state. Measured against a throwaway
+       surface because the height depends on how the text wraps, which only
+       Pango can tell us; with no text the panel collapses to the control row
+       and its padding, which is the resting size. Reverting to a separate
+       pill geometry here is what made the overlay change shape. */
+    cairo_surface_t *probe = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
+    cairo_t *cr = cairo_create(probe);
+    int height = draw_panel(cr, od, FALSE);
+    cairo_destroy(cr);
+    cairo_surface_destroy(probe);
+
+    if (height != od->panel_height) {
+        od->panel_height = height;
+        gtk_widget_set_size_request(od->drawing_area, PANEL_WIDTH, height);
+        gtk_window_resize(GTK_WINDOW(arg->win), PANEL_WIDTH, height);
+        reposition_overlay(arg->win, PANEL_WIDTH, height);
+    }
+
+    gtk_widget_queue_draw(od->drawing_area);
+
+done:
+    g_free(arg->text);
+    g_free(arg->status);
+    g_free(arg);
+    return G_SOURCE_REMOVE;
+}
+
+void overlay_present_async(GtkWidget *win, int state, const char *text,
+                           const char *status, int provisional, int copied,
+                           int finalizing)
+{
+    IdleTranscriptArg *arg = g_new0(IdleTranscriptArg, 1);
+    arg->win         = win;
+    arg->state       = state;
+    arg->text        = text   ? g_strdup(text)   : NULL;
+    arg->status      = status ? g_strdup(status) : NULL;
+    arg->provisional = provisional;
+    arg->copied      = copied;
+    arg->finalizing  = finalizing;
+    gdk_threads_add_idle(idle_set_transcript, arg);
+}
+
 void overlay_show(GtkWidget *win)
 {
-    gtk_widget_show_all(win);
+    overlay_set_visible_async(win, TRUE);
 }
 
 void overlay_hide(GtkWidget *win)
 {
-    gtk_widget_hide(win);
+    overlay_set_visible_async(win, FALSE);
 }
