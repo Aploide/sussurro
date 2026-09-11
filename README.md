@@ -1,6 +1,6 @@
 # Sussurro
 
-[![Version 2.3](https://img.shields.io/badge/Version-2.3-black?style=flat)](https://github.com/aploide/sussurro/releases)
+[![Version 2.6](https://img.shields.io/badge/Version-2.6-black?style=flat)](https://github.com/aploide/sussurro/releases)
 [![GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-black?style=flat)](LICENSE)
 [![Go 1.24+](https://img.shields.io/badge/Go-1.24+-black?style=flat&logo=go&logoColor=white)](https://golang.org)
 [![Linux](https://img.shields.io/badge/Linux-black?style=flat&logo=linux&logoColor=white)](https://github.com/aploide/sussurro)
