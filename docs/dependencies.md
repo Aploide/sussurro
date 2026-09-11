@@ -22,6 +22,13 @@ The overlay, settings window, and system tray require the following libraries at
 | WebKit2GTK | Settings window HTML renderer | `webkit2gtk-4.1` / `libwebkit2gtk-4.1-0` |
 | gtk-layer-shell | True Wayland overlay (optional, loaded at runtime with `dlopen`; floating-window fallback without it) | `gtk-layer-shell` / `libgtk-layer-shell0` |
 | wl-clipboard | Clipboard on Wayland | `wl-clipboard` |
+| Vulkan loader | GPU inference for whisper and the LLM helper (required to start; falls back to CPU when no Vulkan-capable GPU/driver is present) | `vulkan-icd-loader` / `libvulkan1` / `vulkan-loader` |
+
+GPU acceleration additionally needs a Vulkan driver for your GPU (Mesa
+`vulkan-radeon` / `vulkan-intel`, or the NVIDIA proprietary driver). Without
+one Sussurro still runs, on the CPU — expect several seconds per whisper pass
+with the large model, and prefer `ggml-small.bin` there. The startup log line
+`ASR engine ready` names the backend in use.
 
 The system tray needs **no library**: it is spoken over DBus
 (StatusNotifierItem) in pure Go, so neither `libappindicator-gtk3` nor
@@ -31,7 +38,7 @@ hosts SNI items — see [Tray icon missing](#tray-icon-missing) below.
 #### Arch Linux / Manjaro
 ```bash
 # Required
-sudo pacman -S gtk3 webkit2gtk-4.1
+sudo pacman -S gtk3 webkit2gtk-4.1 vulkan-icd-loader
 
 # Wayland clipboard (required on Wayland)
 sudo pacman -S wl-clipboard
@@ -46,7 +53,7 @@ sudo pacman -S xdotool xorg-xprop
 #### Ubuntu / Debian (22.04+)
 ```bash
 # Required
-sudo apt install libgtk-3-0 libwebkit2gtk-4.1-0
+sudo apt install libgtk-3-0 libwebkit2gtk-4.1-0 libvulkan1
 
 # Wayland clipboard
 sudo apt install wl-clipboard
@@ -60,12 +67,12 @@ sudo apt install xdotool x11-utils
 
 #### Fedora (38+)
 ```bash
-sudo dnf install gtk3 webkit2gtk4.1 wl-clipboard
+sudo dnf install gtk3 webkit2gtk4.1 wl-clipboard vulkan-loader
 ```
 
 #### openSUSE
 ```bash
-sudo zypper install libgtk-3-0 libwebkit2gtk-4.1 wl-clipboard
+sudo zypper install libgtk-3-0 libwebkit2gtk-4.1 wl-clipboard libvulkan1
 ```
 
 ---
@@ -208,7 +215,7 @@ Some desktop environments need an SNI proxy:
 The overlay uses `_NET_WM_STATE_ABOVE` on X11. On Wayland, install `gtk-layer-shell` and restart Sussurro — it is picked up at runtime, no rebuild needed.
 
 ### `error while loading shared libraries: libX.so: cannot open shared object file`
-A required runtime library (GTK 3 or WebKitGTK) is not installed; install the packages from the [Runtime Dependencies](#runtime-dependencies) table above. `libgtk-layer-shell.so.0` should never appear in this error: releases since the runtime-`dlopen` change do not link it. If you see it, you are running an older release — upgrade.
+A required runtime library (GTK 3, WebKitGTK or the Vulkan loader) is not installed; install the packages from the [Runtime Dependencies](#runtime-dependencies) table above. `libgtk-layer-shell.so.0` should never appear in this error: releases since the runtime-`dlopen` change do not link it. If you see it, you are running an older release — upgrade.
 
 ### "clipboard failed" on Wayland
 Install `wl-clipboard`:

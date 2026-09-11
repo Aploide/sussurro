@@ -57,6 +57,16 @@ type segmentingTranscriber interface {
 	SegmentsWithContext(samples []float32, preceding string) ([]asr.Segment, error)
 }
 
+// abortableTranscriber is the optional extension for engines whose
+// recognition can be cancelled mid-run. The streamer uses it so a partial pass
+// still running when the recording ends is abandoned at once instead of
+// holding the engine until it completes; on a CPU-only host that pass can
+// take longer than the dictation itself, and the final transcription queued
+// behind it (measured: 34s from key release to text).
+type abortableTranscriber interface {
+	SegmentsWithContextAbortable(samples []float32, preceding string, shouldAbort func() bool) ([]asr.Segment, error)
+}
+
 // cleaner post-processes raw transcriptions. Dictionary normalization is
 // separate from model cleanup so the configured spellings remain available on
 // the fast raw-output path.

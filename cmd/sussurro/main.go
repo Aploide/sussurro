@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"syscall"
 
@@ -142,6 +143,12 @@ func run() {
 		os.Exit(1)
 	}
 	defer asrEngine.Close()
+	// The backend is the first thing to check when dictation looks broken:
+	// CPU inference on the large model is tens of seconds per pass.
+	log.Info("ASR engine ready",
+		"model", filepath.Base(cfg.Models.ASR.Path),
+		"backend", asr.Backend(cfg.Models.ASR.Threads),
+		"streaming", cfg.Workflow.Streaming.Enabled)
 	if err := asrEngine.EnableVAD(cfg.Models.ASR.ResolvedVADPath(), cfg.Models.ASR.VADThreshold); err != nil {
 		log.Error("Failed to initialize voice activity detection", "error", err)
 		os.Exit(1)

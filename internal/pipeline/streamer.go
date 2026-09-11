@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"errors"
 	"log/slog"
 	"strings"
 	"sync"
@@ -91,6 +92,13 @@ type Streamer struct {
 	// beforeCommit is a test barrier for the narrow stop-versus-publish race.
 	// Production leaves it nil.
 	beforeCommit func()
+
+	// interval is the configured tick interval, kept for diagnostics.
+	interval time.Duration
+	// slowPasses counts consecutive passes over slowPassThreshold, and
+	// slowPassLogged makes the diagnostic fire once per process.
+	slowPasses     atomic.Int32
+	slowPassLogged atomic.Bool
 }
 
 // NewStreamer builds a partial transcription worker. The transcriber is called
@@ -111,6 +119,7 @@ func NewStreamer(
 		snapshot:          snapshot,
 		onPartial:         onPartial,
 		newTicker:         func() Ticker { return NewTicker(interval) },
+		interval:          interval,
 		sampleRate:        sampleRate,
 		log:               log,
 		revisionSentences: defaultRevisionSentences,
@@ -440,6 +449,34 @@ func settleSegments(
 	return strings.TrimSpace(strings.Join(parts, "")), until, true
 }
 
+// slowPassThreshold is the pass duration past which partial transcription is
+// plainly not keeping up with speech. With the large model on CPU a pass runs
+// 6-20s whatever the window size (whisper pads every pass to 30s), so the
+// first partial lands after the user has stopped talking. Logged once per
+// process at INFO: it is the single most useful fact when "no partial text"
+// is reported, and it names the remedies.
+const slowPassThreshold = 2 * time.Second
+
+// notePassDuration reports, once, that partial passes are too slow to be
+// useful on this machine. Two consecutive slow passes are required: the very
+// first pass on a GPU pays one-off shader and pipeline setup (2.3s measured on
+// Vulkan, then ~110ms), which is not what this warning is about.
+func (s *Streamer) notePassDuration(d time.Duration) {
+	if d < slowPassThreshold {
+		s.slowPasses.Store(0)
+		return
+	}
+	if s.slowPasses.Add(1) < 2 || s.slowPassLogged.Swap(true) {
+		return
+	}
+	s.log.Info("Partial transcription is slower than speech on this machine; "+
+		"live text will lag or arrive after the recording ends. "+
+		"Check the 'ASR engine ready' line: if it says CPU, install a Vulkan GPU driver, "+
+		"use a smaller model (e.g. ggml-small.bin), set models.asr.threads: 0, "+
+		"or set workflow.streaming.enabled: false.",
+		"pass_duration", d, "interval", s.interval)
+}
+
 // samplesDuration converts a sample count to the time it represents.
 func samplesDuration(samples, sampleRate int) time.Duration {
 	if sampleRate <= 0 {
@@ -474,7 +511,17 @@ func joinTranscript(prefix, text string) string {
 // recognise transcribes the window, using timestamps and decoder context when
 // the engine supports them and falling back to a plain transcription when it
 // does not.
-func (s *Streamer) recognise(audio []float32, preceding string) ([]asr.Segment, error) {
+//
+// generation is the session the pass belongs to. When the engine can be
+// interrupted, the pass is cancelled as soon as that session ends: Stop bumps
+// the generation, so the predicate turns true the moment the recording is
+// over and the engine is handed to the final pass within milliseconds.
+func (s *Streamer) recognise(generation uint64, audio []float32, preceding string) ([]asr.Segment, error) {
+	if seg, ok := s.transcribe.(abortableTranscriber); ok {
+		return seg.SegmentsWithContextAbortable(audio, preceding, func() bool {
+			return s.generation.Load() != generation
+		})
+	}
 	if seg, ok := s.transcribe.(segmentingTranscriber); ok {
 		return seg.SegmentsWithContext(audio, preceding)
 	}
@@ -677,12 +724,17 @@ func (s *Streamer) runPass(generation uint64) {
 	}
 
 	passStart := time.Now()
-	segments, err := s.recognise(audio, settledText)
+	segments, err := s.recognise(generation, audio, settledText)
 	passDuration := time.Since(passStart)
 	if err != nil {
-		s.log.Debug("Partial transcription failed", "error", err)
+		if errors.Is(err, asr.ErrAborted) {
+			s.log.Debug("Partial pass abandoned: session ended", "generation", generation, "after", passDuration)
+		} else {
+			s.log.Debug("Partial transcription failed", "error", err)
+		}
 		return
 	}
+	s.notePassDuration(passDuration)
 
 	windowText := StripNonSpeechMarkers(asr.JoinSegments(segments))
 	full := joinTranscript(settledText, windowText)

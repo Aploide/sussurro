@@ -1,11 +1,13 @@
 package asr
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aploide/sussurro/internal/config"
@@ -69,7 +71,16 @@ type Engine struct {
 	// that re-set an identical prompt leaked one allocation per pass; setting
 	// only on change bounds that to one per distinct prompt. Guarded by mutex.
 	prompt string
+
+	// abort is the cancellation predicate of the recognition currently
+	// running, or nil. whisper.cpp polls it between graph nodes from its own
+	// compute thread while the Go side holds e.mutex, hence the atomic.
+	abort atomic.Pointer[func() bool]
 }
+
+// ErrAborted is returned when a recognition was cancelled through the
+// predicate given to SegmentsWithContextAbortable.
+var ErrAborted = errors.New("transcription aborted")
 
 // NewEngine initializes the Whisper model from a file path
 func NewEngine(modelPath string, threads int, language string, debug bool) (*Engine, error) {
@@ -115,11 +126,20 @@ func NewEngine(modelPath string, threads int, language string, debug bool) (*Eng
 		}
 	}
 
-	return &Engine{
+	e := &Engine{
 		model:   model,
 		context: ctx,
 		debug:   debug,
-	}, nil
+	}
+	// One callback for the lifetime of the context; which recognition it
+	// cancels is decided per call through e.abort.
+	ctx.SetAbortCallback(func() bool {
+		if fn := e.abort.Load(); fn != nil {
+			return (*fn)()
+		}
+		return false
+	})
+	return e, nil
 }
 
 // EnableVAD configures whisper.cpp to recognise only audio that its Silero
@@ -233,6 +253,39 @@ func (e *Engine) SegmentsWithContext(samples []float32, preceding string) ([]Seg
 	}
 
 	return e.segmentsLocked(samples)
+}
+
+// SegmentsWithContextAbortable is SegmentsWithContext with a cancellation
+// predicate. whisper.cpp polls shouldAbort between graph nodes, so a pass
+// stops within milliseconds of it returning true and ErrAborted is returned.
+//
+// This exists for the streamer: a partial pass on a CPU-only host can run for
+// many seconds while holding the engine, and the final transcription that
+// the user is waiting on queues behind it. Cancelling the pass the moment the
+// recording ends is what keeps that wait to a single decode.
+func (e *Engine) SegmentsWithContextAbortable(samples []float32, preceding string, shouldAbort func() bool) ([]Segment, error) {
+	e.mutex.Lock()
+	defer e.mutex.Unlock()
+
+	if shouldAbort != nil {
+		// Checked before spending anything: the session may already be over.
+		if shouldAbort() {
+			return nil, ErrAborted
+		}
+		e.abort.Store(&shouldAbort)
+		defer e.abort.Store(nil)
+	}
+
+	if prompt := composePrompt(e.dictionary, preceding); prompt != "" {
+		e.setPromptLocked(prompt)
+		defer e.resetPromptLocked()
+	}
+
+	segments, err := e.segmentsLocked(samples)
+	if err != nil && shouldAbort != nil && shouldAbort() {
+		return nil, ErrAborted
+	}
+	return segments, err
 }
 
 // resetPromptLocked returns the context to its standing dictionary prompt.

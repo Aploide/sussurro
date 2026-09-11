@@ -34,6 +34,21 @@ GGML_VULKAN_PATH :=
 VULKAN_LDFLAGS :=
 LLAMA_VULKAN_LDFLAGS :=
 
+# CPU instruction-set target for the ggml kernels in both native libraries.
+#
+# A release binary runs on machines that are not the build host, so CI builds
+# use ggml's portable x86-64 baseline (SSE4.2/AVX/AVX2/FMA/F16C, i.e. Haswell
+# and every later CPU — the same baseline whisper.cpp's own releases ship)
+# instead of -march=native for whatever CPU the runner happened to have. That
+# would have been the intent of the old `-DGGML_NATIVE=OFF` flag, except
+# patch-whisper.sh renames every ggml option to WSP_GGML_*, so it was silently
+# ignored and every release was tuned to the runner. Local builds keep native
+# for the extra AVX-512 throughput. Override with GGML_NATIVE=ON|OFF.
+GGML_NATIVE ?= $(if $(CI),OFF,ON)
+# Backend and pin changes already invalidate the stamps; the target does too,
+# so switching GGML_NATIVE reconfigures rather than trusting the old archive.
+GGML_TARGET := $(if $(filter OFF,$(GGML_NATIVE)),portable,native)
+
 # Stamp files marking a completed native build, so `deps` is a no-op once the
 # libraries exist. Each stamp includes the commit and native backend, so a pin
 # or backend change invalidates it and forces the required reconfiguration.
@@ -42,8 +57,8 @@ LLAMA_VULKAN_LDFLAGS :=
 # ran `make clean` on go-llama.cpp before recompiling it from scratch, which
 # cost about four and a half minutes per invocation even when nothing had
 # changed at all.
-WHISPER_STAMP = $(WHISPER_DIR)/.stamp-$(WHISPER_COMMIT)-$(WHISPER_BACKEND)
-LLAMA_STAMP   = $(LLAMA_DIR)/.stamp-$(GO_LLAMA_COMMIT)-$(LLAMA_BACKEND)
+WHISPER_STAMP = $(WHISPER_DIR)/.stamp-$(WHISPER_COMMIT)-$(WHISPER_BACKEND)-$(GGML_TARGET)
+LLAMA_STAMP   = $(LLAMA_DIR)/.stamp-$(GO_LLAMA_COMMIT)-$(LLAMA_BACKEND)-$(GGML_TARGET)
 
 # Detect number of CPU cores for parallel builds
 # Build parallelism. Defaults to 50% of the cores so a rebuild leaves the
@@ -345,7 +360,7 @@ $(WHISPER_STAMP): scripts/patch-whisper.sh
 	@./scripts/patch-whisper.sh
 	@echo "Building whisper.cpp library..."
 	@cmake -S $(WHISPER_DIR) -B $(WHISPER_DIR)/build \
-		-DGGML_NATIVE=OFF \
+		-DWSP_GGML_NATIVE=$(GGML_NATIVE) \
 		-DBUILD_SHARED_LIBS=OFF \
 		-DWHISPER_BUILD_TESTS=OFF \
 		-DWHISPER_BUILD_EXAMPLES=OFF \
@@ -390,9 +405,9 @@ endif
 	@# above keeps the CMake object cache while forcing correct reconfiguration,
 	@# binding compilation, and archive assembly.
 ifeq ($(OS),Windows_NT)
-	@$(NICE) $(MAKE) -j $(NPROCS) -C $(LLAMA_DIR) libbinding.a BUILD_TYPE=$(BUILD_TYPE) CMAKE_ARGS="$(LLAMA_CMAKE_ARGS)"
+	@$(NICE) $(MAKE) -j $(NPROCS) -C $(LLAMA_DIR) libbinding.a BUILD_TYPE=$(BUILD_TYPE) CMAKE_ARGS="$(LLAMA_CMAKE_ARGS) -DGGML_NATIVE=$(GGML_NATIVE)"
 else
-	@$(NICE) $(MAKE) -j $(NPROCS) -C $(LLAMA_DIR) libbinding.a BUILD_TYPE=$(BUILD_TYPE) CMAKE_ARGS="$(LLAMA_CMAKE_ARGS)"
+	@$(NICE) $(MAKE) -j $(NPROCS) -C $(LLAMA_DIR) libbinding.a BUILD_TYPE=$(BUILD_TYPE) CMAKE_ARGS="$(LLAMA_CMAKE_ARGS) -DGGML_NATIVE=$(GGML_NATIVE)"
 endif
 	@rm -f $(LLAMA_DIR)/.stamp-*
 	@touch $@
@@ -421,6 +436,7 @@ else ifeq ($(UNAME_S),Darwin)
 	$(NICE) go build $(GO_LDFLAGS) -o $(BUILD_DIR)/$(APP_NAME) ./$(CMD_DIR)
 else
 	@echo "  Layer shell  : runtime dlopen (libgtk-layer-shell.so.0, optional)"
+	@echo "  CPU target   : $(GGML_TARGET) (GGML_NATIVE=$(GGML_NATIVE))"
 	@echo "  Vulkan       : whisper $(HAS_VULKAN), llm helper $(HAS_LLAMA_VULKAN)"
 	@echo "  Build jobs   : $(NPROCS) of $(NCORES) cores ($(NICE))"
 	@echo "  Build tags   : $(UI_TAGS)"

@@ -667,3 +667,94 @@ func TestStartClearsSettledStateFromThePreviousRecording(t *testing.T) {
 			texts, "fresh words")
 	}
 }
+
+// abortableTranscriberFake models an engine whose recognition polls the
+// cancellation predicate the way whisper.cpp does between graph nodes: the
+// pass "runs" until the predicate turns true or it is released by the test.
+type abortableTranscriberFake struct {
+	*blockingTranscriber
+	aborted chan struct{}
+}
+
+func newAbortableTranscriber() *abortableTranscriberFake {
+	return &abortableTranscriberFake{
+		blockingTranscriber: newBlockingTranscriber(),
+		aborted:             make(chan struct{}, 16),
+	}
+}
+
+func (a *abortableTranscriberFake) SegmentsWithContextAbortable(samples []float32, _ string, shouldAbort func() bool) ([]asr.Segment, error) {
+	a.entered <- samples
+	for {
+		select {
+		case text := <-a.release:
+			return []asr.Segment{{Text: text}}, nil
+		case <-time.After(time.Millisecond):
+			if shouldAbort() {
+				a.aborted <- struct{}{}
+				return nil, asr.ErrAborted
+			}
+		}
+	}
+}
+
+func TestStopAbortsTheInFlightPass(t *testing.T) {
+	fake := newAbortableTranscriber()
+	recorder := newPartialRecorder()
+	s, ticker := newTestStreamer(t, fake.blockingTranscriber, recorder.record)
+	s.transcribe = fake
+
+	s.Start()
+	ticker.tick(t)
+	fake.awaitEntry(t)
+
+	// Nothing has released the pass; ending the session alone must cancel
+	// it, so the engine is free for the final transcription at once instead
+	// of after a partial pass that can outlast the dictation on CPU.
+	s.Stop()
+	select {
+	case <-fake.aborted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("in-flight partial pass was not aborted by Stop()")
+	}
+	if texts, _ := recorder.snapshot(); len(texts) != 0 {
+		t.Fatalf("published %v from an aborted pass, want nothing", texts)
+	}
+}
+
+func TestPassIsNotAbortedWhileItsSessionIsCurrent(t *testing.T) {
+	fake := newAbortableTranscriber()
+	recorder := newPartialRecorder()
+	s, ticker := newTestStreamer(t, fake.blockingTranscriber, recorder.record)
+	s.transcribe = fake
+
+	s.Start()
+	ticker.tick(t)
+	fake.awaitEntry(t)
+	time.Sleep(20 * time.Millisecond) // several predicate polls
+	fake.release <- "still current"
+	recorder.awaitUpdate(t)
+
+	if texts, _ := recorder.snapshot(); len(texts) != 1 || texts[0] != "still current" {
+		t.Fatalf("partials = %v, want [still current]", texts)
+	}
+	select {
+	case <-fake.aborted:
+		t.Fatal("pass aborted while its session was still running")
+	default:
+	}
+}
+
+func TestSlowPassDiagnosticNeedsTwoConsecutiveSlowPasses(t *testing.T) {
+	s := &Streamer{log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	s.notePassDuration(3 * time.Second) // GPU warm-up looks like this
+	s.notePassDuration(100 * time.Millisecond)
+	s.notePassDuration(3 * time.Second)
+	if s.slowPassLogged.Load() {
+		t.Fatal("warned after isolated slow passes")
+	}
+	s.notePassDuration(3 * time.Second)
+	if !s.slowPassLogged.Load() {
+		t.Fatal("did not warn after two consecutive slow passes")
+	}
+}

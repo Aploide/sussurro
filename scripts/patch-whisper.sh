@@ -236,4 +236,183 @@ if [ -f "$PARAMS_GO" ] && ! grep -q "$PROMPT_FREE_MARKER" "$PARAMS_GO"; then
         mv "$tmp_file" "$PARAMS_GO"
 fi
 
+# 11. Expose whisper.cpp's abort_callback through the Go binding. ggml polls it
+# between graph nodes, so a transcription in flight can be cancelled within
+# milliseconds. The streamer needs this: on a CPU-only host a partial pass on
+# the large model runs 6-20s while holding the engine, and without abort the
+# final transcription queued behind it waited the whole time (measured: 34s
+# from key release to text with the v2.5 Linux release). The binding only
+# offered encoder_begin_callback, which runs once before the encoder and so
+# cannot interrupt the encoder itself. Guarded by a marker so it applies once,
+# and the exact-line checks refuse a bindings file that has moved on.
+ABORT_MARKER="Sussurro: abort callback"
+if [ -f "$BINDINGS_GO" ] && ! grep -q "$ABORT_MARKER" "$BINDINGS_GO"; then
+        tmp_file="$(mktemp)"
+        awk -v marker="$ABORT_MARKER" '
+        /^extern bool callEncoderBegin\(void\* user_data\);$/ && !extern_done {
+            print $0
+            print "extern bool callAbort(void* user_data);"
+            extern_done = 1
+            next
+        }
+        /^\/\/ Get default parameters and set callbacks$/ && !cb_done {
+            print "// " marker ": polled by ggml between graph nodes; true aborts the run."
+            print "static bool whisper_abort_cb(void* user_data) {"
+            print "    if(user_data != NULL) {"
+            print "        return callAbort(user_data);"
+            print "    }"
+            print "    return false;"
+            print "}"
+            print ""
+            print $0
+            cb_done = 1
+            next
+        }
+        /^\tparams\.encoder_begin_callback_user_data = \(void\*\)\(ctx\);$/ && !params_done {
+            print $0
+            print "\tparams.abort_callback = whisper_abort_cb;"
+            print "\tparams.abort_callback_user_data = (void*)(ctx);"
+            params_done = 1
+            next
+        }
+        /^\tcbEncoderBegin = make\(map\[unsafe\.Pointer\]func\(\) bool\)$/ && !map_done {
+            print $0
+            print "\tcbAbort        = make(map[unsafe.Pointer]func() bool)"
+            map_done = 1
+            next
+        }
+        /^\/\/export callEncoderBegin$/ && !go_done {
+            print "// Whisper_set_abort_callback installs fn as the abort callback for every"
+            print "// following Whisper_full on this context; nil removes it. Unlike the other"
+            print "// callbacks it is not scoped to a single call: the caller owns its lifetime."
+            print "// Call it only while no Whisper_full is running on ctx."
+            print "func (ctx *Context) Whisper_set_abort_callback(fn func() bool) {"
+            print "\tif fn == nil {"
+            print "\t\tdelete(cbAbort, unsafe.Pointer(ctx))"
+            print "\t} else {"
+            print "\t\tcbAbort[unsafe.Pointer(ctx)] = fn"
+            print "\t}"
+            print "}"
+            print ""
+            print "//export callAbort"
+            print "func callAbort(user_data unsafe.Pointer) C.bool {"
+            print "\tif fn, ok := cbAbort[user_data]; ok && fn() {"
+            print "\t\treturn C.bool(true)"
+            print "\t}"
+            print "\treturn C.bool(false)"
+            print "}"
+            print ""
+            print $0
+            go_done = 1
+            next
+        }
+        { print }
+        END {
+            if (!extern_done || !cb_done || !params_done || !map_done || !go_done) exit 1
+        }
+    ' "$BINDINGS_GO" >"$tmp_file" || {
+                rm -f "$tmp_file"
+                echo "ERROR: abort callback patch did not match bindings/go/whisper.go" >&2
+                exit 1
+        }
+        mv "$tmp_file" "$BINDINGS_GO"
+fi
+
+# The high-level pkg/whisper Context hides the low-level handle, so surface the
+# abort callback there too.
+CONTEXT_GO="$WHISPER_DIR/bindings/go/pkg/whisper/context.go"
+INTERFACE_GO="$WHISPER_DIR/bindings/go/pkg/whisper/interface.go"
+if [ -f "$CONTEXT_GO" ] && ! grep -q "$ABORT_MARKER" "$CONTEXT_GO"; then
+        tmp_file="$(mktemp)"
+        awk -v marker="$ABORT_MARKER" '
+        /^\/\/ Process new sample data and return any errors$/ && !done {
+            print "// SetAbortCallback installs fn, polled by ggml between graph nodes during"
+            print "// Process; returning true aborts the run and Process returns an error."
+            print "// nil removes it. " marker "."
+            print "func (context *context) SetAbortCallback(fn func() bool) {"
+            print "\tcontext.model.ctx.Whisper_set_abort_callback(fn)"
+            print "}"
+            print ""
+            print $0
+            done = 1
+            next
+        }
+        { print }
+        END { if (!done) exit 1 }
+    ' "$CONTEXT_GO" >"$tmp_file" || {
+                rm -f "$tmp_file"
+                echo "ERROR: abort callback patch did not match bindings/go/pkg/whisper/context.go" >&2
+                exit 1
+        }
+        mv "$tmp_file" "$CONTEXT_GO"
+fi
+if [ -f "$INTERFACE_GO" ] && ! grep -q "$ABORT_MARKER" "$INTERFACE_GO"; then
+        tmp_file="$(mktemp)"
+        awk -v marker="$ABORT_MARKER" '
+        /^\tProcess\(\[\]float32, EncoderBeginCallback, SegmentCallback, ProgressCallback\) error$/ && !done {
+            print $0
+            print "\t// " marker ": polled during Process; true aborts the run."
+            print "\tSetAbortCallback(func() bool)"
+            done = 1
+            next
+        }
+        { print }
+        END { if (!done) exit 1 }
+    ' "$INTERFACE_GO" >"$tmp_file" || {
+                rm -f "$tmp_file"
+                echo "ERROR: abort callback patch did not match bindings/go/pkg/whisper/interface.go" >&2
+                exit 1
+        }
+        mv "$tmp_file" "$INTERFACE_GO"
+fi
+
+# 12. Make abort_callback interrupt a running encoder/decoder graph. Upstream
+# only consults it *between* graphs (after the whole encoder has finished),
+# because the scheduler-based compute helper never installs it on the CPU
+# backend, where ggml would poll it per node. With the large model on CPU the
+# encoder alone runs 6-20s, so an "aborted" partial pass still held the engine
+# for its full duration (measured: 21.8s) and the final transcription waited.
+# The helper gains two defaulted parameters and the encoder/decoder call sites
+# pass the params' callback through. GPU backends expose no abort hook, and
+# need none: their passes take ~100ms. Guarded by a marker so it applies once.
+WHISPER_CPP="$WHISPER_DIR/src/whisper.cpp"
+SCHED_ABORT_MARKER="Sussurro: install abort_callback on the backends"
+if [ -f "$WHISPER_CPP" ] && ! grep -q "$SCHED_ABORT_MARKER" "$WHISPER_CPP"; then
+        tmp_file="$(mktemp)"
+        awk -v marker="$SCHED_ABORT_MARKER" '
+        # Signature: `bool sched_reset = true) {` is the last parameter line of
+        # the sched-based helper only (the plain helper takes abort params).
+        /^                      bool   sched_reset = true\) \{$/ && !sig_done {
+            print "                      bool   sched_reset = true,"
+            print "         wsp_ggml_abort_callback   abort_callback = nullptr,"
+            print "                        void * abort_callback_data = nullptr) {"
+            sig_done = 1
+            next
+        }
+        /^        if \(fn_set_n_threads\) \{$/ && sig_done && !body_done {
+            print "        // " marker " so ggml polls it per node."
+            print "        auto * fn_set_abort = (wsp_ggml_backend_set_abort_callback_t) wsp_ggml_backend_reg_get_proc_address(reg, \"wsp_ggml_backend_set_abort_callback\");"
+            print "        if (fn_set_abort) {"
+            print "            fn_set_abort(backend, abort_callback, abort_callback_data);"
+            print "        }"
+            print $0
+            body_done = 1
+            next
+        }
+        /if \(!wsp_ggml_graph_compute_helper\(sched, gf, n_threads\)\) \{$/ {
+            sub(/wsp_ggml_graph_compute_helper\(sched, gf, n_threads\)/, "wsp_ggml_graph_compute_helper(sched, gf, n_threads, true, abort_callback, abort_callback_data)")
+            calls++
+        }
+        { print }
+        END {
+            if (!sig_done || !body_done || calls != 4) exit 1
+        }
+    ' "$WHISPER_CPP" >"$tmp_file" || {
+                rm -f "$tmp_file"
+                echo "ERROR: sched abort patch did not match src/whisper.cpp" >&2
+                exit 1
+        }
+        mv "$tmp_file" "$WHISPER_CPP"
+fi
+
 echo "Patch applied successfully."

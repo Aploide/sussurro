@@ -174,13 +174,14 @@ verify_checksum() {
 }
 
 # ── Linux: check the shared libraries the binary needs at load time ─────────
-# The release binary is dynamically linked against GTK 3 and WebKitGTK. When
-# one of them is missing the dynamic loader aborts with an opaque
-# "error while loading shared libraries: libX.so: cannot open shared object
-# file" before the program can print anything, so surface it here with the
-# distro's package names instead. gtk-layer-shell is *not* on this list: it is
-# loaded with dlopen() at runtime and the overlay falls back to a floating
-# window without it.
+# The release binary is dynamically linked against GTK 3, WebKitGTK and the
+# Vulkan loader (GPU inference; a host with the loader but no usable GPU falls
+# back to the CPU). When one of them is missing the dynamic loader aborts with
+# an opaque "error while loading shared libraries: libX.so: cannot open shared
+# object file" before the program can print anything, so surface it here with
+# the distro's package names instead. gtk-layer-shell is *not* on this list:
+# it is loaded with dlopen() at runtime and the overlay falls back to a
+# floating window without it.
 check_linux_runtime_libs() {
     local binary="$1" missing
     command -v ldd &>/dev/null || return 0
@@ -194,10 +195,10 @@ check_linux_runtime_libs() {
         printf "      %s\n" "$lib"
     done
     printf "    Install the runtime packages for your distro:\n"
-    printf "      Arch/Manjaro:   sudo pacman -S gtk3 webkit2gtk-4.1\n"
-    printf "      Ubuntu/Debian:  sudo apt install libgtk-3-0 libwebkit2gtk-4.1-0\n"
-    printf "      Fedora:         sudo dnf install gtk3 webkit2gtk4.1\n"
-    printf "      openSUSE:       sudo zypper install libgtk-3-0 libwebkit2gtk-4_1-0\n"
+    printf "      Arch/Manjaro:   sudo pacman -S gtk3 webkit2gtk-4.1 vulkan-icd-loader\n"
+    printf "      Ubuntu/Debian:  sudo apt install libgtk-3-0 libwebkit2gtk-4.1-0 libvulkan1\n"
+    printf "      Fedora:         sudo dnf install gtk3 webkit2gtk4.1 vulkan-loader\n"
+    printf "      openSUSE:       sudo zypper install libgtk-3-0 libwebkit2gtk-4_1-0 libvulkan1\n"
     printf "    Full list: https://github.com/${REPO}/blob/master/docs/dependencies.md\n"
 }
 

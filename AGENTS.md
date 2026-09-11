@@ -65,34 +65,36 @@ and changes the user's audio setup.
 pactl unload-module "$MOD"
 ```
 
-### Known limitation: not yet demonstrated end to end
+### Demonstrated end to end (2026-09-12)
 
-The loopback itself is verified: a tone played into the sink is captured from
-its monitor. Getting **Sussurro** to record from it is the part that has not
-been made to work.
+The recipe above works, with two corrections learned the hard way:
 
-Both attempts failed at startup with:
+- **A null sink can be hijacked.** With JamesDSP (or any effects daemon that
+  moves playback streams) running, `paplay -d sussurro_test` and even
+  `pw-play --target` end up on the effects sink and the monitor stays silent
+  (`volumedetect` reports -91 dB). A **pipe source** has no playback stream
+  to hijack, so prefer it:
 
-```
-Failed to start recording  error="failed to init device: miniaudio: Failed to open backend device"
-```
+  ```bash
+  MOD=$(pactl load-module module-pipe-source source_name=sussurro_mic \
+        file=/tmp/mic.fifo format=s16le rate=16000 channels=1)
+  PREV=$(pactl get-default-source); pactl set-default-source sussurro_mic
+  # speech at real-time pace (whisper.cpp's jfk.wav is 16 kHz mono already):
+  ffmpeg -v error -re -i third_party/whisper.cpp/samples/jfk.wav \
+         -f s16le -ar 16000 -ac 1 - > /tmp/mic.fifo
+  ```
 
-Sussurro opens its capture device once, when the pipeline starts, so calling
-`pactl set-default-source` afterwards is too late — the default must already
-point at the monitor before the process launches. Setting it beforehand was
-not tried, and doing so changes the user's default input device, which must
-be restored afterwards:
+- **Drive it through the trigger, not the hotkey:** `sussurro-trigger press`,
+  feed the FIFO, `sussurro-trigger release`. The result lands on the clipboard
+  (`wl-paste`) and in the log as `Final Output`; `Recording stopped` reports
+  `samples=` (184400 for the 11.5 s clip). Set the default source *before*
+  launching Sussurro, and restore it plus `pactl unload-module "$MOD"` after.
 
-```bash
-PREV=$(pactl get-default-source)
-pactl set-default-source sussurro_test.monitor
-# ... run the test ...
-pactl set-default-source "$PREV"
-```
-
-Treat this section as a starting point rather than a working recipe, and
-verify audio actually reached the pipeline — `Recording stopped` logs a
-`samples=` count, and `samples=0` means it did not.
+Reference timings for the 11 s clip with `ggml-large-v3-turbo`, from key
+release to final text: GPU (Vulkan, RTX 5080) 0.5 s with ~13 live partials;
+CPU, all cores, ~7 s per pass; CPU, `threads: 4`, ~22 s per pass. A CPU-only
+build or a machine without a Vulkan driver therefore looks broken rather
+than slow — check the `ASR engine ready` log line first.
 
 ## Running builds and the test suite
 

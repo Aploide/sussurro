@@ -115,6 +115,21 @@ prebuilt releases run on machines that never installed it. The release
 workflow refuses a binary that has `libgtk-layer-shell.so` in its `NEEDED`
 list — never add it to `CGO_LDFLAGS`.
 
+### CPU instruction-set target
+
+`make build` compiles the ggml kernels in whisper.cpp and go-llama.cpp with
+`-march=native` for the build host (`GGML_NATIVE=ON`), which is right for a
+binary that stays on that machine. Release builds must run elsewhere, so when
+the `CI` environment variable is set the Makefile switches to ggml's portable
+x86-64 baseline (SSE4.2/AVX/AVX2/FMA/F16C — Haswell, 2013, and every later
+CPU; the same baseline whisper.cpp's own releases use). Override either way
+with `make build GGML_NATIVE=OFF|ON`; the build summary prints `CPU target`.
+
+The whisper.cpp option is `WSP_GGML_NATIVE` — `patch-whisper.sh` renames all
+`GGML_*` options — and go-llama.cpp's is the plain `GGML_NATIVE`. A
+`-DGGML_NATIVE=OFF` passed to whisper.cpp's CMake is silently ignored, which
+is how every release up to v2.5 shipped tuned to the CI runner's CPU.
+
 ### Vulkan detection (Linux)
 
 `make build` enables the ggml Vulkan backend for whisper when `pkg-config`

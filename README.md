@@ -46,7 +46,7 @@ On first run Sussurro will guide you through downloading the AI models.
 - **Flexible ASR**: Whisper Small (fast) or Large v3 Turbo (accurate), switchable from the UI
 - **Live Hotkey Config**: Change the global hotkey from Settings — takes effect instantly, no restart
 - **Hotkey Mode**: Switch between *Push to Talk* (hold to record, release to transcribe) and *Toggle* (press once to start, press again to transcribe) directly from Settings *(X11, macOS & Windows — not Wayland)*
-- **GPU Acceleration**: Metal on macOS; Vulkan Whisper on Windows. On Linux, Vulkan (Whisper, and the LLM helper too) is a build-time option when [building from source](#building-from-source) — the release binaries are CPU-only
+- **GPU Acceleration**: Metal on macOS; Vulkan on Windows and Linux (Whisper, and on Linux the LLM helper too). Any Vulkan-capable GPU works; without one, inference falls back to the CPU
 - **Transcription Language**: Choose the language Whisper listens for (or use Auto Detect) directly from Settings
 - **Headless Mode**: `--no-ui` flag for CLI/scripting use on any platform
 - **Review Mode** *(opt-in)*: Hold the transcription before it is delivered — read it, dictate a correction, or discard it, then insert it when you are ready. Off by default; see [Review workflow](#review-workflow)
