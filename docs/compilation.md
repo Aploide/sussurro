@@ -112,6 +112,18 @@ Wayland overlay, always above all windows). If not found, the overlay falls back
 to a regular floating window with `_NET_WM_STATE_ABOVE` on X11. `make build`
 prints `Layer shell : yes|no` so you can confirm which path was compiled in.
 
+### Vulkan detection (Linux)
+
+`make build` enables the ggml Vulkan backend for whisper when `pkg-config`
+finds the `vulkan` module and `glslc` is on `PATH`. The LLM helper
+(go-llama.cpp) is built with Vulkan under the same condition, plus one more:
+its ggml CMake does `find_package(SPIRV-Headers CONFIG REQUIRED)`, which the
+loader and `glslc` packages do not provide. Install `spirv-headers` (Arch,
+Debian/Ubuntu) or `spirv-headers-devel` (Fedora); without it the helper falls
+back to CPU and `make` prints a note. `make build` reports
+`Vulkan : whisper yes|no, llm helper yes|no`. `WHISPER_VULKAN=0` forces a CPU
+build of both, and `LLAMA_VULKAN=0`/`=1` overrides the helper alone.
+
 ---
 
 ## Building C/C++ Dependencies

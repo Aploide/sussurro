@@ -28,9 +28,15 @@ concurrency:
 
 jobs:
   test:
+    # Test the commit being released, not the default branch: a
+    # workflow_dispatch run checks out whatever the workflow was started
+    # from, which is not the requested tag.
+    needs: resolve-version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-version.outputs.tag }}
 
       - uses: actions/setup-go@v5
         with:

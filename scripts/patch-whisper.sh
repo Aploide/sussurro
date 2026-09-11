@@ -106,7 +106,7 @@ if [ "$ALREADY_PATCHED" = "0" ]; then
 
 fi # ALREADY_PATCHED
 
-# Steps 8 and 9 below are idempotent (each is guarded by its own grep), so
+# Steps 8 to 10 below are idempotent (each is guarded by its own grep), so
 # they run even on an already-patched tree — that is how a Vulkan rebuild
 # picks up the new link flags without redoing the rename.
 
@@ -182,6 +182,58 @@ if [ -f "$WHISPER_CPP" ] && ! grep -q "$TOKEN_MAPPING_MARKER" "$WHISPER_CPP"; th
                 exit 1
         }
         mv "$tmp_file" "$WHISPER_CPP"
+fi
+
+# 10. SetInitialPrompt allocates a C string and never releases the previous
+# one, so every streaming pass that sets the prompt leaks it. whisper_full
+# tokenises the prompt into its own buffer during the call, and the Params
+# value in the Go context is the only owner of the pointer, so freeing the
+# old string before replacing it is safe. Guarded by a marker so it applies
+# once, and the exact-line checks refuse a bindings file that has moved on.
+PARAMS_GO="$WHISPER_DIR/bindings/go/params.go"
+PROMPT_FREE_MARKER="Sussurro: release the previous initial prompt"
+if [ -f "$PARAMS_GO" ] && ! grep -q "$PROMPT_FREE_MARKER" "$PARAMS_GO"; then
+        tmp_file="$(mktemp)"
+        awk -v marker="$PROMPT_FREE_MARKER" '
+        /^import \($/ && !imports_done {
+            print $0
+            getline fmt_line
+            getline close_line
+            if (fmt_line != "\t\"fmt\"" || close_line != ")") exit 2
+            print fmt_line
+            print "\t\"unsafe\""
+            print close_line
+            imports_done = 1
+            next
+        }
+        /^#include <whisper.h>$/ && !include_done {
+            print "#include <stdlib.h>"
+            print $0
+            include_done = 1
+            next
+        }
+        /^func \(p \*Params\) SetInitialPrompt\(prompt string\) \{$/ {
+            print $0
+            getline old_assign
+            if (old_assign != "\tp.initial_prompt = C.CString(prompt)") exit 2
+            print "\t// " marker " so repeated calls do not leak it."
+            print "\tif p.initial_prompt != nil {"
+            print "\t\tC.free(unsafe.Pointer(p.initial_prompt))"
+            print "\t}"
+            print old_assign
+            patched_prompt = 1
+            next
+        }
+        { print }
+        END {
+            if (!imports_done || !include_done || !patched_prompt) exit 1
+        }
+    ' "$PARAMS_GO" >"$tmp_file" || {
+                rm -f "$tmp_file"
+                echo "ERROR: initial prompt free patch did not match bindings/go/params.go" >&2
+                exit 1
+        }
+        mv "$tmp_file" "$PARAMS_GO"
 fi
 
 echo "Patch applied successfully."

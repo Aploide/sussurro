@@ -49,9 +49,11 @@ LLAMA_STAMP   = $(LLAMA_DIR)/.stamp-$(GO_LLAMA_COMMIT)-$(LLAMA_BACKEND)
 # Build parallelism. Defaults to 50% of the cores so a rebuild leaves the
 # machine usable — these builds are long, and saturating every core makes the
 # desktop unresponsive for their duration. This is a default, not a cap:
-# override with e.g. BUILD_JOBS=24 to use everything.
+# override with e.g. BUILD_JOBS=24 to use everything. CI runners have no
+# desktop to keep responsive, and halving their few cores (macos-14 has 3)
+# doubled the release build time, so CI=<anything> uses every core.
 NCORES    := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)
-BUILD_JOBS ?= $(shell awk 'BEGIN { n = int($(NCORES) / 2); print n < 1 ? 1 : n }')
+BUILD_JOBS ?= $(if $(CI),$(NCORES),$(shell awk 'BEGIN { n = int($(NCORES) / 2); print n < 1 ? 1 : n }'))
 NPROCS    := $(BUILD_JOBS)
 
 # Run compilers at low CPU and IO priority, so an interactive desktop keeps
@@ -114,15 +116,34 @@ else ifeq ($(UNAME_S),Linux)
 	# overridden separately when diagnosing one backend.
 	WHISPER_VULKAN ?= auto
 	LLAMA_VULKAN ?= $(WHISPER_VULKAN)
+	HAS_VULKAN_SDK := $(shell pkg-config --exists vulkan 2>/dev/null && command -v glslc >/dev/null 2>&1 && echo yes || echo no)
+	# go-llama.cpp's ggml-vulkan additionally does find_package(SPIRV-Headers
+	# CONFIG REQUIRED), which the loader and glslc packages do not provide
+	# (Arch: spirv-headers, Debian/Ubuntu: spirv-headers, Fedora:
+	# spirv-headers-devel). Probe it the way its CMake does, honouring a
+	# VULKAN_SDK prefix, so a missing package falls back to CPU with a note
+	# instead of failing the configure step.
+	ifeq ($(HAS_VULKAN_SDK),yes)
+		# The probe runs in a scratch directory: cmake --find-package writes a
+		# CMakeFiles/ tree into its working directory, which would otherwise
+		# litter the repository root on every make invocation.
+		HAS_SPIRV_HEADERS := $(shell d=$$(mktemp -d) && cd "$$d" && cmake --find-package -DNAME=SPIRV-Headers -DCOMPILER_ID=GNU -DLANGUAGE=CXX -DMODE=EXIST $(if $(VULKAN_SDK),-DCMAKE_PREFIX_PATH=$(VULKAN_SDK)) >/dev/null 2>&1; r=$$?; rm -rf "$$d"; [ $$r -eq 0 ] && echo yes || echo no)
+	else
+		HAS_SPIRV_HEADERS := no
+	endif
 	ifeq ($(WHISPER_VULKAN),auto)
-		HAS_VULKAN := $(shell pkg-config --exists vulkan 2>/dev/null && command -v glslc >/dev/null 2>&1 && echo yes || echo no)
+		HAS_VULKAN := $(HAS_VULKAN_SDK)
 	else ifeq ($(WHISPER_VULKAN),0)
 		HAS_VULKAN := no
 	else
 		HAS_VULKAN := yes
 	endif
 	ifeq ($(LLAMA_VULKAN),auto)
-		HAS_LLAMA_VULKAN := $(shell pkg-config --exists vulkan 2>/dev/null && command -v glslc >/dev/null 2>&1 && echo yes || echo no)
+		ifeq ($(HAS_VULKAN_SDK)/$(HAS_SPIRV_HEADERS),yes/no)
+# Not indented: a tab here would make this line a recipe.
+$(info go-llama.cpp: Vulkan SDK found but the SPIRV-Headers CMake package is missing; building the LLM helper for CPU (install spirv-headers, or force with LLAMA_VULKAN=1))
+		endif
+		HAS_LLAMA_VULKAN := $(if $(filter yes/yes,$(HAS_VULKAN_SDK)/$(HAS_SPIRV_HEADERS)),yes,no)
 	else ifeq ($(LLAMA_VULKAN),0)
 		HAS_LLAMA_VULKAN := no
 	else
@@ -224,7 +245,7 @@ export LIBRARY_PATH
 
 # The stamp targets are deliberately absent: they are real files, and marking
 # them phony would defeat the guard entirely.
-.PHONY: all build build-helper build-transcribe compat-pc run clean clean-deps check-deps-artefacts deps whisper-deps llama-deps test test-settings-geometry
+.PHONY: all build build-helper build-transcribe compat-pc run clean clean-deps deps whisper-deps llama-deps test test-settings-geometry
 
 # Packages that link whisper need the same CGO_LDFLAGS as the binary: with
 # Vulkan enabled, a plain "go test ./..." cannot resolve the backend symbols.
@@ -266,28 +287,35 @@ all: build build-transcribe
 
 # Keep dependency edges split so the two production processes never need the
 # other process's native library. The combined deps target remains for tests.
-whisper-deps: check-deps-artefacts $(WHISPER_STAMP)
-llama-deps: check-deps-artefacts $(LLAMA_STAMP)
+whisper-deps: $(WHISPER_STAMP)
+llama-deps: $(LLAMA_STAMP)
 
 # deps is satisfied by the two stamps; when both exist and their pins are
 # unchanged, it does nothing at all.
 #
 # A stamp on its own would still be trusted if the library it vouches for had
 # been deleted, and the failure would surface as a confusing link error rather
-# than a rebuild. Checking for the artefacts here drops the stale stamps first,
-# so the rules below fire again.
-deps: check-deps-artefacts $(WHISPER_STAMP) $(LLAMA_STAMP)
+# than a rebuild. Checking for the artefacts drops the stale stamps first, so
+# the rules below fire again.
+deps: $(WHISPER_STAMP) $(LLAMA_STAMP)
 
-# Removes a stamp whose library has gone missing. Silent when all is well.
-check-deps-artefacts:
-	@if [ -f "$(WHISPER_STAMP)" ] && [ ! -f "$(WHISPER_DIR)/build/src/libwhisper.a" ]; then \
-		echo "whisper.cpp library missing; rebuilding"; \
-		rm -f $(WHISPER_STAMP); \
-	fi
-	@if [ -f "$(LLAMA_STAMP)" ] && [ ! -f "$(LLAMA_DIR)/libbinding.a" ]; then \
-		echo "go-llama.cpp library missing; rebuilding"; \
-		rm -f $(LLAMA_STAMP); \
-	fi
+# The check runs at parse time, via $(wildcard), rather than as a rule: make
+# stats a target (and caches its mtime) when it first considers it, before any
+# prerequisite — order-only or not — has run, so a rule that deleted the stale
+# stamp would go unnoticed until the next invocation, and under `make -j` a
+# sibling prerequisite of deps could run after the stamp was already trusted.
+ifneq ($(wildcard $(WHISPER_STAMP)),)
+ifeq ($(wildcard $(WHISPER_DIR)/build/src/libwhisper.a),)
+$(info whisper.cpp library missing; rebuilding)
+$(shell rm -f $(WHISPER_STAMP))
+endif
+endif
+ifneq ($(wildcard $(LLAMA_STAMP)),)
+ifeq ($(wildcard $(LLAMA_DIR)/libbinding.a),)
+$(info go-llama.cpp library missing; rebuilding)
+$(shell rm -f $(LLAMA_STAMP))
+endif
+endif
 
 $(WHISPER_STAMP): scripts/patch-whisper.sh
 	@mkdir -p third_party
@@ -376,7 +404,7 @@ else ifeq ($(UNAME_S),Darwin)
 	go build $(GO_LDFLAGS) -o $(BUILD_DIR)/$(APP_NAME) ./$(CMD_DIR)
 else
 	@echo "  Layer shell  : $(HAS_LAYER_SHELL)$(if $(LAYER_SHELL_PC), ($(LAYER_SHELL_PC)))"
-	@echo "  Vulkan       : $(HAS_VULKAN)"
+	@echo "  Vulkan       : whisper $(HAS_VULKAN), llm helper $(HAS_LLAMA_VULKAN)"
 	@echo "  Build jobs   : $(BUILD_JOBS) of $(NCORES) cores ($(NICE))"
 	@echo "  Build tags   : $(UI_TAGS)"
 	PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_UI)" \
