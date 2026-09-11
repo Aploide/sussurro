@@ -41,6 +41,10 @@ func removeFillers(text string) string {
 	out := make([]string, 0, len(fields))
 	capitalizeNext := false
 	capitalizeWords := make(map[int]bool)
+	// seams records the positions in out where a word was deleted, so the
+	// punctuation repair below touches only those junctions and never the
+	// user's own "..." or spaced punctuation elsewhere.
+	seams := make(map[int]bool)
 
 	for _, word := range fields {
 		if isFiller(word) {
@@ -49,6 +53,7 @@ func removeFillers(text string) string {
 			if len(out) == 0 || previousEndsStrongSentence(out) {
 				capitalizeNext = true
 			}
+			seams[len(out)] = true
 			continue
 		}
 		// Collapse an immediate repetition ("the the the" -> "the"), which is
@@ -57,14 +62,18 @@ func removeFillers(text string) string {
 		if !capitalizeNext && len(out) > 0 && !previousEndsSentencePunctuation(out) &&
 			sameWord(out[len(out)-1], word) {
 			// Keep whichever copy carries the punctuation, so "the the."
-			// ends up as "the." rather than "the".
+			// ends up as "the." rather than "the". The first copy's leading
+			// punctuation survives either way: "(the the)" is "(the)".
 			if len(bareWord(word)) < len(word) {
-				out[len(out)-1] = word
+				out[len(out)-1] = leadingPunctuation(out[len(out)-1]) + strings.TrimLeftFunc(word, isPunctuationRune)
 			}
+			seams[len(out)] = true
 			continue
 		}
 		out = append(out, word)
-		if capitalizeNext {
+		// A stranded mark ("um , the") carries no letter to raise; the case
+		// change waits for the word that follows it.
+		if capitalizeNext && bareWord(word) != "" {
 			capitalizeWords[len(out)-1] = true
 			capitalizeNext = false
 		}
@@ -73,7 +82,17 @@ func removeFillers(text string) string {
 	for i := range capitalizeWords {
 		out[i] = recapitalize(out[i])
 	}
-	return repairSpacing(strings.Join(out, " "))
+	return repairSpacing(out, seams)
+}
+
+// leadingPunctuation returns the opening quotes or brackets a word starts
+// with, so a collapsed stutter can keep them.
+func leadingPunctuation(word string) string {
+	return word[:len(word)-len(strings.TrimLeftFunc(word, isPunctuationRune))]
+}
+
+func isPunctuationRune(r rune) bool {
+	return !unicode.IsLetter(r) && !unicode.IsDigit(r)
 }
 
 // recapitalize raises only the first all-lowercase word in text. Callers use
@@ -153,24 +172,50 @@ func sameWord(a, b string) bool {
 	return ba != "" && ba == bb
 }
 
-// repairSpacing tidies punctuation left stranded by deletions, without
-// altering any word. Removing "um" from "Well, um, it failed" would otherwise
-// leave a doubled comma.
-func repairSpacing(text string) string {
-	text = strings.TrimSpace(text)
-
-	// Collapse punctuation runs produced by removing the word between them.
-	for _, pair := range []struct{ from, to string }{
-		{", ,", ","}, {",,", ","}, {". .", "."}, {"..", "."},
-		{" ,", ","}, {" .", "."}, {" ?", "?"}, {" !", "!"},
-	} {
-		for strings.Contains(text, pair.from) {
-			text = strings.ReplaceAll(text, pair.from, pair.to)
+// repairSpacing joins the surviving words and tidies punctuation left
+// stranded at a deletion seam, without altering any word. Removing "um" from
+// "Well, um , it failed" would otherwise leave a doubled comma.
+//
+// Only the seams are touched: a global ".." -> "." pass used to turn every
+// dictated "..." into a period, and " ," handling reached punctuation the
+// user had spaced deliberately. seams holds the indexes in words that follow
+// a deletion.
+func repairSpacing(words []string, seams map[int]bool) string {
+	kept := make([]string, 0, len(words))
+	for i, word := range words {
+		if seams[i] {
+			mark := word[:len(word)-len(strings.TrimLeftFunc(word, isSeamMark))]
+			switch {
+			case mark == "" || strings.Contains(mark, ".."):
+				// Nothing stranded, or a dictated "..." that stays as spoken.
+			case len(kept) == 0:
+				// A leading mark is left when the first word was a filler
+				// ("um , the").
+				word = word[len(mark):]
+			case endsWithSeamMark(kept[len(kept)-1]):
+				// "failed, um , it": the mark already ends the previous word,
+				// so the stranded copy is redundant.
+				word = word[len(mark):]
+			default:
+				// "failed um , it": reattach the mark to the word it followed.
+				kept[len(kept)-1] += mark
+				word = word[len(mark):]
+			}
+		}
+		if word != "" {
+			kept = append(kept, word)
 		}
 	}
+	return strings.Join(kept, " ")
+}
 
-	// A leading comma is left when the first word was a filler.
-	text = strings.TrimLeft(text, ", ")
+// isSeamMark reports whether r is punctuation a deletion can strand: the
+// marks whisper attaches to the word before a pause.
+func isSeamMark(r rune) bool {
+	return r == ',' || r == '.' || r == '?' || r == '!'
+}
 
-	return strings.TrimSpace(text)
+func endsWithSeamMark(word string) bool {
+	runes := []rune(word)
+	return len(runes) > 0 && isSeamMark(runes[len(runes)-1])
 }

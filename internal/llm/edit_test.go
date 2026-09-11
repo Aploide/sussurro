@@ -33,11 +33,28 @@ func TestEditTextUsesBoundedPredictionOptions(t *testing.T) {
 		t.Fatalf("EditText() error = %v", err)
 	}
 	// An unbounded generation can run until the context is exhausted.
-	if model.options.Tokens != editMaxTokens {
-		t.Errorf("Tokens = %d, want %d", model.options.Tokens, editMaxTokens)
+	if model.options.Tokens != editMinTokens {
+		t.Errorf("Tokens = %d, want %d", model.options.Tokens, editMinTokens)
 	}
 	if model.options.Threads != 4 {
 		t.Errorf("Threads = %d, want 4", model.options.Threads)
+	}
+}
+
+func TestEditTokenBudgetGrowsWithTheText(t *testing.T) {
+	// A review longer than the fixed budget was cut off at the token limit,
+	// and the truncated result read as a legitimate shortening.
+	long := strings.Repeat("word ", 600)
+	engine, model := newEditEngine("edited")
+
+	if _, err := engine.EditText(long, "fix the typo"); err != nil {
+		t.Fatalf("EditText() error = %v", err)
+	}
+	if want := 2 * 600; model.options.Tokens != want {
+		t.Errorf("Tokens = %d, want %d for a %d-word text", model.options.Tokens, want, 600)
+	}
+	if got := editTokenBudget("short note"); got != editMinTokens {
+		t.Errorf("editTokenBudget(short) = %d, want the %d floor", got, editMinTokens)
 	}
 }
 
@@ -136,6 +153,7 @@ func TestEditTextStripsModelArtifacts(t *testing.T) {
 		{name: "output label", output: "Output:\nThe edited text.", want: "The edited text."},
 		{name: "wrapping quotes", output: `"The edited text."`, want: "The edited text."},
 		{name: "continued turn", output: "The edited text.\nInstruction: do more", want: "The edited text."},
+		{name: "turn marker", output: "The edited text.<|user|>more", want: "The edited text."},
 	}
 
 	for _, tt := range tests {
@@ -148,6 +166,72 @@ func TestEditTextStripsModelArtifacts(t *testing.T) {
 			}
 			if got != tt.want {
 				t.Errorf("EditText() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEditTextKeepsLabelsInsideTheText(t *testing.T) {
+	// The reviewed text is the user's own words; "Original:" or "Input:"
+	// mid-sentence, or on its first line, must not be read as the model
+	// continuing past its answer and cut off there.
+	tests := []string{
+		"The report has two parts. Original: the draft; Example: the final one.",
+		"Instruction: open the valve, then Input: the code.",
+		"The first line.\nA second line that mentions Original: mid-way.",
+	}
+	for _, text := range tests {
+		t.Run(text[:20], func(t *testing.T) {
+			engine, _ := newEditEngine(text)
+
+			got, err := engine.EditText("The original text that is being edited here.", "edit it")
+			if err != nil {
+				t.Fatalf("EditText() error = %v", err)
+			}
+			if got != text {
+				t.Errorf("EditText() = %q, want %q kept whole", got, text)
+			}
+		})
+	}
+}
+
+func TestEditTextRejectsTruncatedOutput(t *testing.T) {
+	// A model that stops part-way through a long text returns a prefix; with
+	// no instruction to shorten, that is truncation rather than an edit.
+	const original = "The first sentence of the review is here. The second sentence follows it closely. The third sentence ends the paragraph."
+	engine, _ := newEditEngine("The first sentence.")
+
+	got, err := engine.EditText(original, "change closely to loosely")
+	if err != nil {
+		t.Fatalf("EditText() error = %v", err)
+	}
+	if got != original {
+		t.Errorf("EditText() = %q, want the original preserved", got)
+	}
+}
+
+func TestEditTextAllowsRequestedShortening(t *testing.T) {
+	const original = "The first sentence of the review is here. The second sentence follows it closely. The third sentence ends the paragraph."
+	const shortened = "The first sentence."
+
+	for _, instruction := range []string{
+		"remove the last two sentences",
+		"delete everything after the first sentence",
+		"shorten it to one sentence",
+		"cut it down",
+		"keep only the first sentence",
+		"just the first sentence",
+		"replace all of that with the first sentence",
+	} {
+		t.Run(instruction, func(t *testing.T) {
+			engine, _ := newEditEngine(shortened)
+
+			got, err := engine.EditText(original, instruction)
+			if err != nil {
+				t.Fatalf("EditText() error = %v", err)
+			}
+			if got != shortened {
+				t.Errorf("EditText() = %q, want the shortened text accepted", got)
 			}
 		})
 	}

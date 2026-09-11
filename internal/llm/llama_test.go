@@ -118,6 +118,41 @@ func TestCleanupCollapsesStutters(t *testing.T) {
 		{name: "doubled word", in: "I I think so.", want: "I think so."},
 		{name: "case differs", in: "The the deploy finished.", want: "The deploy finished."},
 		{name: "not adjacent", in: "The deploy and the tests.", want: "The deploy and the tests."},
+		{name: "keeps opening bracket", in: "See (the the) note.", want: "See (the) note."},
+		{name: "keeps opening quote", in: `She said "the the end."`, want: `She said "the end."`},
+	}
+
+	engine := &Engine{}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := engine.CleanupText(tt.in)
+			if err != nil {
+				t.Fatalf("CleanupText() error = %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("CleanupText() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCleanupRepairsPunctuationOnlyAtDeletionSeams(t *testing.T) {
+	// A global ".." -> "." pass turned every dictated ellipsis into a period,
+	// and " ," handling reached spaced punctuation the user never had a
+	// filler near. Only a junction a deletion created is tidied.
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "ellipsis untouched", in: "Wait... what happened?", want: "Wait... what happened?"},
+		{name: "ellipsis after filler", in: "So um ... it failed.", want: "So ... it failed."},
+		{name: "trailing ellipsis", in: "I think, um, maybe...", want: "I think, maybe..."},
+		{name: "spaced punctuation elsewhere", in: "Hello , world .", want: "Hello , world ."},
+		{name: "stranded comma reattached", in: "It failed um , then passed.", want: "It failed, then passed."},
+		{name: "doubled comma collapsed", in: "Well, um , it failed.", want: "Well, it failed."},
+		{name: "stranded period collapsed", in: "It failed. um . Then passed.", want: "It failed. Then passed."},
+		{name: "leading comma dropped", in: "um , the build passed.", want: "The build passed."},
 	}
 
 	engine := &Engine{}

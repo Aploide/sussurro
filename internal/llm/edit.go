@@ -3,14 +3,21 @@ package llm
 import (
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 
 	"github.com/aploide/sussurro/internal/llmipc"
 )
 
-// editMaxTokens bounds edit output. An edit rewrites the text it was given, so
-// it needs roughly the same headroom as cleanup.
-const editMaxTokens = 512
+// editMinTokens is the floor of the edit output budget. An edit rewrites the
+// text it was given, so it needs at least the headroom cleanup has, and for a
+// long review it needs room for the whole text: see editTokenBudget.
+const editMinTokens = 512
+
+// editTokensPerWord is the generous estimate of model tokens per dictated
+// word used to size that budget. Overestimating only costs an unused bound;
+// underestimating truncates the user's text at the token limit.
+const editTokensPerWord = 2
 
 // Prompt field delimiters. Quoting the fields, as James does, breaks as soon
 // as the dictated text contains a quote: the model then sees a field that ends
@@ -78,7 +85,7 @@ func (e *Engine) EditText(original, instruction string) (string, error) {
 		editOriginalOpen, original, editOriginalClose,
 		editInstructionOpen, instruction, editInstructionClose)
 
-	options := editPredictOptions(e.threads)
+	options := editPredictOptions(original, e.threads)
 	options.Debug = e.debug
 	edited, err := e.model.Predict(prompt, options)
 	if err != nil {
@@ -86,7 +93,7 @@ func (e *Engine) EditText(original, instruction string) (string, error) {
 		return original, fmt.Errorf("edit prediction failed: %w", err)
 	}
 
-	edited = stripModelArtifacts(edited)
+	edited = stripEditArtifacts(edited)
 	edited = stripEditDelimiters(edited)
 
 	slog.Debug("LLM edit output", "output", edited)
@@ -95,12 +102,41 @@ func (e *Engine) EditText(original, instruction string) (string, error) {
 		slog.Debug("LLM edit returned empty, keeping the original")
 		return original, nil
 	}
-	if !validateEdit(original, edited) {
+	if !validateEdit(original, edited, instruction) {
 		slog.Debug("LLM edit rejected by validation, keeping the original")
 		return original, nil
 	}
 
 	return edited, nil
+}
+
+// reEditContinuation matches a prompt label the model may emit when it keeps
+// going past its answer, restricted to the start of a line: the reviewed text
+// legitimately contains words such as "Original:" mid-sentence, and cutting
+// there would silently truncate it.
+var reEditContinuation = regexp.MustCompile(`(?m)^(?:Input|Example|Original|Instruction):`)
+
+// stripEditArtifacts removes reasoning blocks and any continuation the model
+// appended past its answer. Unlike cleanup's stripModelArtifacts, a label is
+// only treated as a continuation when it opens a line after the first, so the
+// answer itself is never cut short. Turn markers cannot be dictated, so those
+// still cut anywhere.
+func stripEditArtifacts(out string) string {
+	out = reThinkBlock.ReplaceAllString(out, "")
+	if idx := strings.Index(out, "<think>"); idx != -1 {
+		out = out[:idx]
+	}
+	if idx := strings.Index(out, "<|user|>"); idx != -1 {
+		out = out[:idx]
+	}
+	out = strings.TrimSpace(out)
+
+	if nl := strings.Index(out, "\n"); nl != -1 {
+		if loc := reEditContinuation.FindStringIndex(out[nl:]); loc != nil {
+			out = out[:nl+loc[0]]
+		}
+	}
+	return strings.TrimSpace(out)
 }
 
 // stripEditDelimiters removes prompt delimiters the model echoed back, and any
@@ -131,19 +167,61 @@ const editExpansionLimit = 8
 // Short notes expand by large ratios for entirely ordinary reasons.
 const editExpansionFloor = 80
 
+// editShrinkLimit is the divisor below which a result is treated as
+// truncation rather than an edit: output shorter than a third of the original
+// loses more than any instruction that does not ask for it can explain.
+const editShrinkLimit = 3
+
+// shorteningStems are the instruction words that make a much shorter result
+// expected. Matched as prefixes of the instruction's words, so "deleting" and
+// "removal" count and "execute" does not.
+var shorteningStems = []string{
+	"delet", "remov", "shorten", "shorter", "cut", "drop", "trim",
+	"condens", "summar", "brief", "concise",
+	// "keep only the first sentence", "just the title", "replace all of
+	// that with X" shrink the text as legitimately as an explicit delete.
+	"only", "just", "replac", "rewrit",
+}
+
 // validateEdit rejects output that cannot plausibly be an edit of the original.
 // An edit may legitimately shorten or lengthen the text, so the bounds are far
-// wider than cleanup's: only a runaway generation is refused.
-func validateEdit(original, edited string) bool {
+// wider than cleanup's: a runaway generation is refused, and so is a result
+// that lost most of the text when the instruction gave no reason to.
+func validateEdit(original, edited, instruction string) bool {
 	if len(original) <= editExpansionFloor {
 		return true
 	}
-	return len(edited) <= len(original)*editExpansionLimit
+	if len(edited) > len(original)*editExpansionLimit {
+		return false
+	}
+	if len(edited) < len(original)/editShrinkLimit && !asksToShorten(instruction) {
+		return false
+	}
+	return true
 }
 
-func editPredictOptions(threads int) llmipc.PredictOptions {
+func asksToShorten(instruction string) bool {
+	for _, word := range strings.Fields(instruction) {
+		bare := bareWord(word)
+		for _, stem := range shorteningStems {
+			if strings.HasPrefix(bare, stem) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// editTokenBudget sizes the output bound to the text being edited. A fixed
+// budget silently truncated any review longer than it, and the truncated
+// result passed validation as a legitimate shortening.
+func editTokenBudget(original string) int {
+	return max(editMinTokens, editTokensPerWord*len(strings.Fields(original)))
+}
+
+func editPredictOptions(original string, threads int) llmipc.PredictOptions {
 	return llmipc.PredictOptions{
-		Tokens:      editMaxTokens,
+		Tokens:      editTokenBudget(original),
 		Threads:     threads,
 		Temperature: 0.1,
 		TopP:        0.9,

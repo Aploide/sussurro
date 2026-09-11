@@ -106,9 +106,19 @@ func validClientOptions() llmipc.PredictOptions {
 	return llmipc.PredictOptions{Tokens: 10, Threads: 2, Temperature: 0.1, TopP: 0.9}
 }
 
-func TestHelperPredictionTimeoutIsThirtySeconds(t *testing.T) {
-	if helperPredictTimeout != 30*time.Second {
-		t.Fatalf("helperPredictTimeout = %s, want 30s", helperPredictTimeout)
+func TestHelperPredictionTimeoutScalesWithTokenBudget(t *testing.T) {
+	// A fixed deadline killed CPU-only helpers part-way through long edits.
+	if got := predictTimeout(llmipc.PredictOptions{Tokens: 0}); got != helperPredictTimeout {
+		t.Errorf("predictTimeout(0 tokens) = %s, want the %s floor", got, helperPredictTimeout)
+	}
+	if got, want := predictTimeout(llmipc.PredictOptions{Tokens: 512}), helperPredictTimeout+512*helperPredictPerToken; got != want {
+		t.Errorf("predictTimeout(512 tokens) = %s, want %s", got, want)
+	}
+	if got := predictTimeout(llmipc.PredictOptions{Tokens: 512}); got <= 30*time.Second {
+		t.Errorf("predictTimeout(512 tokens) = %s, want more than the old 30s", got)
+	}
+	if got := predictTimeout(llmipc.PredictOptions{Tokens: -5}); got != helperPredictTimeout {
+		t.Errorf("predictTimeout(negative tokens) = %s, want the floor", got)
 	}
 }
 
@@ -238,9 +248,9 @@ func TestCleanupPreservesRecognizedTextWhenHelperPredictionFails(t *testing.T) {
 
 func TestHelperTimeoutKillsAndReapsChild(t *testing.T) {
 	useFakeHelper(t, "timeout")
-	oldTimeout := helperPredictTimeout
-	helperPredictTimeout = 50 * time.Millisecond
-	t.Cleanup(func() { helperPredictTimeout = oldTimeout })
+	oldTimeout, oldPerToken := helperPredictTimeout, helperPredictPerToken
+	helperPredictTimeout, helperPredictPerToken = 50*time.Millisecond, 0
+	t.Cleanup(func() { helperPredictTimeout, helperPredictPerToken = oldTimeout, oldPerToken })
 
 	client, err := startHelper("fake-model.gguf", 1024, 0, true)
 	if err != nil {

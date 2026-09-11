@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,9 +21,22 @@ const helperOverrideEnv = "SUSSURRO_LLM_HELPER"
 
 var (
 	helperInitTimeout     = 2 * time.Minute
-	helperPredictTimeout  = 30 * time.Second
 	helperShutdownTimeout = 5 * time.Second
+
+	// A prediction is allowed helperPredictTimeout plus helperPredictPerToken
+	// for every token it may generate: a fixed 30 s killed CPU-only helpers
+	// part-way through a long edit, and the restart cost the next request
+	// the model load as well. See predictTimeout.
+	helperPredictTimeout  = 10 * time.Second
+	helperPredictPerToken = 100 * time.Millisecond
 )
+
+// predictTimeout scales the prediction deadline with the requested token
+// budget, so a long edit on a slow host is not mistaken for a hung helper.
+func predictTimeout(options llmipc.PredictOptions) time.Duration {
+	tokens := max(options.Tokens, 0)
+	return helperPredictTimeout + time.Duration(tokens)*helperPredictPerToken
+}
 
 type helperConfig struct {
 	path        string
@@ -203,7 +217,7 @@ func (c *helperClient) Predict(prompt string, options llmipc.PredictOptions) (st
 			Prompt:  prompt,
 			Options: options,
 		},
-	}, helperPredictTimeout)
+	}, predictTimeout(options))
 	if fatal {
 		c.retire(process)
 	}
@@ -263,6 +277,9 @@ func (c *helperClient) callProcessLocked(process *helperProcess, request llmipc.
 	case result := <-done:
 		return result.response, result.err, result.fatal
 	case <-timer.C:
+		// The caller retires the child, so the next request pays for a fresh
+		// model load; worth a warning rather than a debug line.
+		slog.Warn("LLM helper timed out; terminating it", "command", request.Command, "timeout", timeout)
 		return llmipc.Response{}, fmt.Errorf("llm helper %s timed out after %s", request.Command, timeout), true
 	}
 }
