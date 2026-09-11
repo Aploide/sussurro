@@ -4,7 +4,7 @@ package ui
 
 /*
 #cgo pkg-config: gtk+-3.0
-#cgo LDFLAGS: -lm
+#cgo LDFLAGS: -lm -ldl
 #include <stdlib.h>
 #include "overlay_linux.h"
 

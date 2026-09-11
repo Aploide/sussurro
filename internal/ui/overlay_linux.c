@@ -245,9 +245,8 @@ static void draw_control_row(cairo_t *cr, OverlayData *od,
    Under gtk-layer-shell the compositor owns placement and this is a no-op. */
 static void reposition_overlay(GtkWidget *win, int width, int height)
 {
-#ifdef HAVE_GTK_LAYER_SHELL
-    (void)win; (void)width; (void)height;
-#else
+    if (layer_shell_available()) return;
+
     GdkDisplay *display = gdk_display_get_default();
     GdkMonitor *monitor = gdk_display_get_primary_monitor(display);
     if (!monitor) monitor = gdk_display_get_monitor(display, 0);
@@ -257,7 +256,6 @@ static void reposition_overlay(GtkWidget *win, int width, int height)
     int x = geo.x + (geo.width - width) / 2;
     int y = geo.y + geo.height - height - OVERLAY_BOTTOM_MARGIN;
     gtk_window_move(GTK_WINDOW(win), x, y);
-#endif
 }
 
 /* ------------------------------------------------------------------ */
@@ -833,29 +831,20 @@ GtkWidget *overlay_create(const OverlayPalette *dark_palette,
     /* Suppress delete-window */
     g_signal_connect(win, "delete-event", G_CALLBACK(gtk_true), NULL);
 
-#ifdef HAVE_GTK_LAYER_SHELL
-    /* wlr-layer-shell overlay */
-    gtk_layer_init_for_window(GTK_WINDOW(win));
-    gtk_layer_set_layer(GTK_WINDOW(win), GTK_LAYER_SHELL_LAYER_OVERLAY);
-    gtk_layer_set_anchor(GTK_WINDOW(win), GTK_LAYER_SHELL_EDGE_BOTTOM, TRUE);
-    gtk_layer_set_anchor(GTK_WINDOW(win), GTK_LAYER_SHELL_EDGE_LEFT,   FALSE);
-    gtk_layer_set_anchor(GTK_WINDOW(win), GTK_LAYER_SHELL_EDGE_RIGHT,  FALSE);
-    gtk_layer_set_margin(GTK_WINDOW(win), GTK_LAYER_SHELL_EDGE_BOTTOM,
-                         OVERLAY_BOTTOM_MARGIN);
-    gtk_layer_set_exclusive_zone(GTK_WINDOW(win), -1);
-    gtk_layer_set_keyboard_mode(GTK_WINDOW(win), GTK_LAYER_SHELL_KEYBOARD_MODE_NONE);
-    gtk_layer_set_namespace(GTK_WINDOW(win), "sussurro");
-#else
-    /* X11 / non-layer-shell fallback: position bottom-center of the primary
-       monitor and bypass the WM entirely with override-redirect.
+    if (layer_shell_available()) {
+        /* wlr-layer-shell overlay: the compositor anchors the surface
+           bottom-centre and keeps it above everything else. */
+        layer_shell_setup_overlay(GTK_WINDOW(win), OVERLAY_BOTTOM_MARGIN);
+    } else {
+        /* X11 / no-layer-shell fallback: position bottom-center of the primary
+           monitor and bypass the WM entirely with override-redirect.
 
-       gtk_window_move() is only a WM hint and can be ignored (especially
-       when the process is launched from a file manager instead of a
-       terminal).  Setting override-redirect before the window is mapped
-       tells X11 to skip the WM for this window: no decorations, no
-       re-positioning, no moving — the window sits exactly where we put it,
-       regardless of how the process was started. */
-    {
+           gtk_window_move() is only a WM hint and can be ignored (especially
+           when the process is launched from a file manager instead of a
+           terminal).  Setting override-redirect before the window is mapped
+           tells X11 to skip the WM for this window: no decorations, no
+           re-positioning, no moving — the window sits exactly where we put it,
+           regardless of how the process was started. */
         reposition_overlay(win, PANEL_WIDTH, OVERLAY_REST_HEIGHT);
 
         /* Realize creates the underlying GdkWindow without mapping (showing)
@@ -867,7 +856,6 @@ GtkWidget *overlay_create(const OverlayPalette *dark_palette,
             gdk_window_set_override_redirect(gdk_win, TRUE);
         }
     }
-#endif
 
     /* Deliberately not shown here. The capsule is mapped only while
        something is happening (see overlay_show), so an idle Sussurro leaves

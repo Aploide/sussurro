@@ -17,8 +17,8 @@ echo $XDG_SESSION_TYPE   # prints "wayland" or "x11"
 sudo pacman -S gtk3 webkit2gtk-4.1 wl-clipboard gtk-layer-shell
 
 # Ubuntu/Debian (22.04+)
-sudo apt install libgtk-3-dev libwebkit2gtk-4.1-dev \
-                 wl-clipboard libgtk-layer-shell-dev
+sudo apt install libgtk-3-0 libwebkit2gtk-4.1-0 \
+                 wl-clipboard libgtk-layer-shell0
 
 # Fedora
 sudo dnf install gtk3 webkit2gtk4.1 wl-clipboard

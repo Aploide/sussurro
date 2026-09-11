@@ -8,10 +8,8 @@
 #include "overlay_palette.h"
 #include "overlay_panel.h"
 
-/* Conditionally include gtk-layer-shell */
-#ifdef HAVE_GTK_LAYER_SHELL
-#include <gtk-layer-shell/gtk-layer-shell.h>
-#endif
+/* gtk-layer-shell is dlopen()'d at runtime, never linked; see the header. */
+#include "layer_shell_linux.h"
 
 /* Conditionally include X11 for global hotkeys */
 #ifndef WAYLAND_ONLY

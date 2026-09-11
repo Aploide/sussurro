@@ -47,7 +47,7 @@ Requires GTK3 and WebKit2GTK development headers.
 ```bash
 sudo pacman -S gtk3 webkit2gtk-4.1 base-devel cmake git go
 
-# Optional: adds wlr-layer-shell overlay on Wayland
+# Optional, runtime only (not needed to build): wlr-layer-shell overlay on Wayland
 sudo pacman -S gtk-layer-shell
 ```
 
@@ -56,8 +56,8 @@ sudo pacman -S gtk-layer-shell
 sudo apt install libgtk-3-dev libwebkit2gtk-4.1-dev \
                  build-essential cmake git golang-go
 
-# Optional: Wayland layer-shell overlay
-sudo apt install libgtk-layer-shell-dev
+# Optional, runtime only (not needed to build): Wayland layer-shell overlay
+sudo apt install libgtk-layer-shell0
 ```
 
 #### Fedora (38+)
@@ -103,14 +103,17 @@ select and no AppIndicator development package to install — one binary runs on
 every distro. Only the desktop-side SNI host matters at runtime (see
 [dependencies.md](dependencies.md)).
 
-### Layer-shell detection
+### Layer-shell (runtime, not build-time)
 
-`make build` checks for `gtk-layer-shell-0` via `pkg-config` (the module name is
-suffixed; the *package* is called `gtk-layer-shell` / `libgtk-layer-shell-dev`).
-If found, it compiles the overlay with true wlr-layer-shell support (proper
-Wayland overlay, always above all windows). If not found, the overlay falls back
-to a regular floating window with `_NET_WM_STATE_ABOVE` on X11. `make build`
-prints `Layer shell : yes|no` so you can confirm which path was compiled in.
+gtk-layer-shell is **not** a build dependency. The overlay `dlopen()`s
+`libgtk-layer-shell.so.0` when it starts (`internal/ui/layer_shell_linux.c`):
+if the library is installed and the compositor speaks wlr-layer-shell, the
+overlay is a true layer surface (always above all windows); otherwise it falls
+back to a regular floating window with `_NET_WM_STATE_ABOVE` on X11. One
+binary therefore works with or without the package, which is what lets the
+prebuilt releases run on machines that never installed it. The release
+workflow refuses a binary that has `libgtk-layer-shell.so` in its `NEEDED`
+list — never add it to `CGO_LDFLAGS`.
 
 ### Vulkan detection (Linux)
 
@@ -201,8 +204,8 @@ Releases up to and including v2.4 linked one of the two AppIndicator variants
 and only start where that exact SONAME is installed. Later builds link neither.
 Upgrade to a newer release, or rebuild from source.
 
-### `gtk-layer-shell: not found` (warning, not error)
-The overlay will use a regular floating window. Install `gtk-layer-shell` (Arch: `sudo pacman -S gtk-layer-shell`, Ubuntu: `sudo apt install libgtk-layer-shell-dev`) and rebuild for true Wayland overlay.
+### `gtk-layer-shell not installed; overlay uses a floating window` (message, not error)
+Install the runtime package (Arch: `sudo pacman -S gtk-layer-shell`, Ubuntu: `sudo apt install libgtk-layer-shell0`) and restart Sussurro — no rebuild needed, the library is loaded at runtime.
 
 ### macOS: `xcode-select: error`
 Run `xcode-select --install` and accept the license agreement.

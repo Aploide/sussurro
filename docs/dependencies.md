@@ -20,7 +20,7 @@ The overlay, settings window, and system tray require the following libraries at
 |---------|---------|-------------|
 | GTK 3 | Overlay window, UI toolkit | `gtk3` / `libgtk-3-0` |
 | WebKit2GTK | Settings window HTML renderer | `webkit2gtk-4.1` / `libwebkit2gtk-4.1-0` |
-| gtk-layer-shell | True Wayland overlay (optional) | `gtk-layer-shell` / `libgtk-layer-shell0` |
+| gtk-layer-shell | True Wayland overlay (optional, loaded at runtime with `dlopen`; floating-window fallback without it) | `gtk-layer-shell` / `libgtk-layer-shell0` |
 | wl-clipboard | Clipboard on Wayland | `wl-clipboard` |
 
 The system tray needs **no library**: it is spoken over DBus
@@ -135,7 +135,8 @@ All runtime libraries plus their `-dev` / header packages:
 ```bash
 sudo pacman -S gtk3 webkit2gtk-4.1 base-devel cmake git go
 
-# Optional (adds wlr-layer-shell support to the overlay)
+# Optional, runtime only: gtk-layer-shell is dlopen()'d, never linked, so it
+# is not needed to build. Install it to get a true Wayland overlay.
 sudo pacman -S gtk-layer-shell
 ```
 
@@ -144,8 +145,8 @@ sudo pacman -S gtk-layer-shell
 sudo apt install libgtk-3-dev libwebkit2gtk-4.1-dev \
                  build-essential cmake git golang-go
 
-# Optional
-sudo apt install libgtk-layer-shell-dev
+# Optional, runtime only (see above)
+sudo apt install libgtk-layer-shell0
 ```
 
 #### Fedora (38+)
@@ -176,8 +177,8 @@ pkg-config --exists gtk+-3.0 && echo "GTK3: OK" || echo "GTK3: MISSING"
 pkg-config --exists webkit2gtk-4.1 && echo "WebKit 4.1: OK" || \
   pkg-config --exists webkit2gtk-4.0 && echo "WebKit 4.0: OK" || echo "WebKit: MISSING"
 
-# Check layer-shell (optional)
-pkg-config --exists gtk-layer-shell-0 && echo "Layer shell: OK" || echo "Layer shell: not installed (overlay will use fallback)"
+# Check layer-shell (optional, runtime only)
+ldconfig -p | grep -q libgtk-layer-shell.so.0 && echo "Layer shell: OK" || echo "Layer shell: not installed (overlay will use fallback)"
 
 # Check Wayland clipboard
 which wl-copy && echo "wl-clipboard: OK" || echo "wl-clipboard: MISSING"
@@ -204,7 +205,10 @@ Some desktop environments need an SNI proxy:
 - If no tray is available, **right-click the overlay capsule** to access Settings and Quit
 
 ### Overlay appears below other windows (X11 without layer-shell)
-The overlay uses `_NET_WM_STATE_ABOVE` on X11. If a compositor ignores this, try installing `gtk-layer-shell` and rebuilding with `make build` (layer-shell takes priority on Wayland).
+The overlay uses `_NET_WM_STATE_ABOVE` on X11. On Wayland, install `gtk-layer-shell` and restart Sussurro — it is picked up at runtime, no rebuild needed.
+
+### `error while loading shared libraries: libX.so: cannot open shared object file`
+A required runtime library (GTK 3 or WebKitGTK) is not installed; install the packages from the [Runtime Dependencies](#runtime-dependencies) table above. `libgtk-layer-shell.so.0` should never appear in this error: releases since the runtime-`dlopen` change do not link it. If you see it, you are running an older release — upgrade.
 
 ### "clipboard failed" on Wayland
 Install `wl-clipboard`:

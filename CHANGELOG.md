@@ -4,6 +4,25 @@ All notable changes to Sussurro will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **Linux release binary failed to start without gtk-layer-shell** with
+  `error while loading shared libraries: libgtk-layer-shell.so.0: cannot open
+  shared object file`. The layer-shell fix below turned the library into a
+  hard link-time dependency (and the release guard enforced it), while the
+  package is optional on every distro and nothing installed it. The overlay
+  now `dlopen()`s `libgtk-layer-shell.so.0` at runtime
+  (`internal/ui/layer_shell_linux.c`): with the library and a wlr-layer-shell
+  compositor it is a true layer surface, otherwise it falls back to the
+  floating window. gtk-layer-shell is no longer a build dependency, the
+  release guard now refuses a binary that *does* link it, and `install.sh`
+  runs `ldd` on the installed binary to report any missing runtime library
+  with the distro package names instead of leaving the loader error to the
+  first run.
+- **Overlay on X11 with gtk-layer-shell compiled in** skipped the
+  `override-redirect` fallback because `gtk_layer_init_for_window()` was
+  called unconditionally. The runtime probe checks `gtk_layer_is_supported()`
+  first, so X11 always takes the fallback path.
+
 ### Upgrading
 Behaviour that changes for an existing installation, even with an untouched
 config:
