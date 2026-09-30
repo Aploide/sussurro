@@ -90,6 +90,21 @@ The recipe above works, with two corrections learned the hard way:
   `samples=` (184400 for the 11.5 s clip). Set the default source *before*
   launching Sussurro, and restore it plus `pactl unload-module "$MOD"` after.
 
+- **Punctuation needs more than one sentence.** `jfk.wav` is a single
+  sentence, so it cannot show a dropped sentence boundary: it passed while
+  real dictation was losing every full stop (sussurro-916). Loop it with
+  short gaps to get boundaries:
+
+  ```bash
+  sox -n -r 16000 -c 1 /tmp/gap.wav trim 0 0.6
+  J=third_party/whisper.cpp/samples/jfk.wav
+  sox $J /tmp/gap.wav $J /tmp/gap.wav $J /tmp/jfk3.wav
+  ```
+
+  `bin/sussurro-transcribe -config <file> -i /tmp/jfk3.wav` decodes the way
+  the final pass does, so prompt or dictionary variants can be compared
+  offline without driving the live application.
+
 Reference timings for the 11 s clip with `ggml-large-v3-turbo`, from key
 release to final text: GPU (Vulkan, RTX 5080) 0.5 s with ~13 live partials;
 CPU, all cores, ~7 s per pass; CPU, `threads: 4`, ~22 s per pass. A CPU-only
