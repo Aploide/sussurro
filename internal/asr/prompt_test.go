@@ -66,7 +66,7 @@ func TestPromptFallsBackToTheDictionary(t *testing.T) {
 	e.resetPromptLocked()
 	e.mutex.Unlock()
 
-	if got, want := ctx.last(), "Sussurro, whisper.cpp"; got != want {
+	if got, want := ctx.last(), "Sussurro, whisper.cpp."; got != want {
 		t.Errorf("prompt reset to %q, want %q", got, want)
 	}
 }
@@ -78,7 +78,7 @@ func TestSetDictionaryCanReplaceAndClearTheLivePrompt(t *testing.T) {
 
 	e.SetDictionary(terms)
 	terms[0] = "mutated by caller"
-	if got := composePrompt(e.dictionary, ""); got != "Sussurro" {
+	if got := composePrompt(e.dictionary, ""); got != "Sussurro." {
 		t.Errorf("dictionary aliases caller's slice: %q", got)
 	}
 
@@ -96,10 +96,10 @@ func TestSetDictionaryCanReplaceAndClearTheLivePrompt(t *testing.T) {
 // the settled text outgrows the prompt budget.
 func TestComposePromptPutsDictionaryLast(t *testing.T) {
 	got := composePrompt([]string{"Sussurro"}, "some preceding text")
-	if want := "some preceding text Sussurro"; got != want {
+	if want := "some preceding text Sussurro."; got != want {
 		t.Errorf("composePrompt = %q, want %q", got, want)
 	}
-	if got := composePrompt([]string{"Sussurro"}, "  "); got != "Sussurro" {
+	if got := composePrompt([]string{"Sussurro"}, "  "); got != "Sussurro." {
 		t.Errorf("composePrompt with no preceding text = %q, want the dictionary alone", got)
 	}
 	if got := composePrompt(nil, "some preceding text"); got != "some preceding text" {
@@ -121,7 +121,7 @@ func TestUnchangedPromptIsNotReset(t *testing.T) {
 	e.resetPromptLocked()
 	e.mutex.Unlock()
 
-	want := []string{"the same window Sussurro", "Sussurro"}
+	want := []string{"the same window Sussurro.", "Sussurro."}
 	if len(ctx.prompts) != len(want) {
 		t.Fatalf("SetInitialPrompt called with %q, want exactly %q", ctx.prompts, want)
 	}
@@ -137,5 +137,23 @@ func TestUnchangedPromptIsNotReset(t *testing.T) {
 	(&Engine{context: fresh}).SetDictionary(nil)
 	if len(fresh.prompts) != 0 {
 		t.Errorf("SetInitialPrompt called with %q on a fresh context, want no call", fresh.prompts)
+	}
+}
+
+// whisper treats the prompt as prior transcript, and an unterminated term list
+// made it drop every full stop in multi-sentence dictation (sussurro-916).
+func TestDictionaryPromptEndsASentence(t *testing.T) {
+	cases := map[string]struct {
+		terms []string
+		want  string
+	}{
+		"list gains a full stop": {[]string{"dolt", "tailscale"}, "dolt, tailscale."},
+		"existing mark is kept":  {[]string{"dolt", "Yahoo!"}, "dolt, Yahoo!"},
+		"empty stays empty":      {nil, ""},
+	}
+	for name, tc := range cases {
+		if got := dictionaryPrompt(tc.terms); got != tc.want {
+			t.Errorf("%s: dictionaryPrompt(%q) = %q, want %q", name, tc.terms, got, tc.want)
+		}
 	}
 }
