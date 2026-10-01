@@ -196,7 +196,7 @@ func (e *Engine) SetDictionary(terms []string) {
 	defer e.mutex.Unlock()
 
 	e.dictionary = append([]string(nil), terms...)
-	e.setPromptLocked(strings.Join(e.dictionary, ", "))
+	e.setPromptLocked(dictionaryPrompt(e.dictionary))
 }
 
 // setPromptLocked sets the context's initial prompt if it differs from the
@@ -293,7 +293,20 @@ func (e *Engine) SegmentsWithContextAbortable(samples []float32, preceding strin
 // leaks it into the final pass and can duplicate the streaming transcript
 // (sussurro-fkd).
 func (e *Engine) resetPromptLocked() {
-	e.setPromptLocked(strings.Join(e.dictionary, ", "))
+	e.setPromptLocked(dictionaryPrompt(e.dictionary))
+}
+
+// dictionaryPrompt renders the vocabulary as a finished sentence. whisper
+// continues in the style of its prompt as if it were earlier transcript, and a
+// bare comma list reads as unpunctuated speech: with it, multi-sentence
+// dictations lost every full stop, while the same terms ending in one kept
+// them (sussurro-916).
+func dictionaryPrompt(dictionary []string) string {
+	terms := strings.Join(dictionary, ", ")
+	if terms == "" || strings.ContainsAny(terms[len(terms)-1:], ".!?") {
+		return terms
+	}
+	return terms + "."
 }
 
 // composePrompt combines the transcript preceding a streaming window with the
@@ -302,7 +315,7 @@ func (e *Engine) resetPromptLocked() {
 // n_text_ctx/2 tokens survive), and putting the terms first meant they were
 // the first thing dropped once the settled transcript grew past ~220 tokens.
 func composePrompt(dictionary []string, preceding string) string {
-	terms := strings.Join(dictionary, ", ")
+	terms := dictionaryPrompt(dictionary)
 	preceding = strings.TrimSpace(preceding)
 
 	switch {
