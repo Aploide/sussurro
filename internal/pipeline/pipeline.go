@@ -795,7 +795,8 @@ func sentenceBoundaryCount(text string) int {
 // preservePartialSentenceBoundaries transfers sentence punctuation only
 // through the final decode's unchanged word prefix. Stopping at the first
 // lexical or punctuation difference avoids moving a boundary across an ASR
-// correction.
+// correction. The partial's last word has no following speech to confirm its
+// punctuation, so that provisional ending is left to the final decode.
 func preservePartialSentenceBoundaries(final, partial string) string {
 	finalWords := strings.Fields(final)
 	partialWords := strings.Fields(partial)
@@ -812,7 +813,7 @@ func preservePartialSentenceBoundaries(final, partial string) string {
 
 		wordStart := cursor + strings.Index(final[cursor:], finalWords[i])
 		cursor = wordStart + len(finalWords[i])
-		if partialEndsSentence && !finalEndsSentence {
+		if i+1 < len(partialWords) && partialEndsSentence && !finalEndsSentence {
 			at := wordStart + len(strings.TrimRight(finalWords[i], `"'”’)]`))
 			result.WriteString(final[copied:at])
 			result.WriteByte(mark)
