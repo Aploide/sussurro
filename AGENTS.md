@@ -76,9 +76,13 @@ The recipe above works, with two corrections learned the hard way:
   to hijack, so prefer it:
 
   ```bash
+  # Save the user's default first: loading the pipe source can make it the
+  # default immediately, and PREV read afterwards restores nothing.
+  PREV=$(pactl get-default-source)
+  mkfifo /tmp/mic.fifo
   MOD=$(pactl load-module module-pipe-source source_name=sussurro_mic \
         file=/tmp/mic.fifo format=s16le rate=16000 channels=1)
-  PREV=$(pactl get-default-source); pactl set-default-source sussurro_mic
+  pactl set-default-source sussurro_mic
   # speech at real-time pace (whisper.cpp's jfk.wav is 16 kHz mono already):
   ffmpeg -v error -re -i third_party/whisper.cpp/samples/jfk.wav \
          -f s16le -ar 16000 -ac 1 - > /tmp/mic.fifo
@@ -87,8 +91,10 @@ The recipe above works, with two corrections learned the hard way:
 - **Drive it through the trigger, not the hotkey:** `sussurro-trigger press`,
   feed the FIFO, `sussurro-trigger release`. The result lands on the clipboard
   (`wl-paste`) and in the log as `Final Output`; `Recording stopped` reports
-  `samples=` (184400 for the 11.5 s clip). Set the default source *before*
-  launching Sussurro, and restore it plus `pactl unload-module "$MOD"` after.
+  `samples=` (184400 for the 11.5 s clip). Switching the default source while
+  Sussurro runs takes effect on the next recording (2026-10-01), so no
+  relaunch is needed. Afterwards run `pactl unload-module "$MOD"`, then
+  `pactl set-default-source "$PREV"`, and confirm the default is back.
 
 Reference timings for the 11 s clip with `ggml-large-v3-turbo`, from key
 release to final text: GPU (Vulkan, RTX 5080) 0.5 s with ~13 live partials;
