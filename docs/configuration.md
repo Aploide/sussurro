@@ -262,6 +262,12 @@ periodically, so turn it off on hosts without GPU acceleration. Partial passes n
 transcription: if inference is slower than the interval, updates simply arrive
 less often.
 
+When a final pass extends a matching partial, Sussurro can restore sentence
+punctuation from inside that partial. Punctuation on the partial's last word
+is provisional: it may only mark where the preview stopped, so it is not
+copied into the final result. A genuine sentence boundary seen only at that
+cutoff is left to the final decoder rather than guessed.
+
 **`interval`** is the minimum gap between partial passes, as a Go duration
 string (`750ms`, `1s`). Values outside 100ms–10s are rejected.
 

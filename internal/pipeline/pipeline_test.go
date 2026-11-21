@@ -637,10 +637,11 @@ func TestFinalPassKeepsBetterSentenceBoundaryWithoutCleanup(t *testing.T) {
 
 // TestFinalPassKeepsSentenceBoundaryFromShorterPartial reproduces the
 // sussurro-xvj.69 regression reported after the original fix. The live
-// partial had already closed the first sentence, but the longer final decode
-// included the second sentence while losing that boundary.
+// partial had already started the second sentence, but the longer final decode
+// lost the first sentence's boundary. A boundary at the partial's very end is
+// provisional and must instead defer to the final decode.
 func TestFinalPassKeepsSentenceBoundaryFromShorterPartial(t *testing.T) {
-	const partial = "Also the help modal is a single column and looks horrible because it is way too narrow."
+	const partial = "Also the help modal is a single column and looks horrible because it is way too narrow. The key bindings"
 	const final = "Also the help modal is a single column and looks horrible because it is way too narrow The key bindings should be split into at least two columns and grouped logically by theme"
 	const want = "Also the help modal is a single column and looks horrible because it is way too narrow. The key bindings should be split into at least two columns and grouped logically by theme"
 
@@ -668,6 +669,69 @@ func TestFinalPassKeepsSentenceBoundaryFromShorterPartial(t *testing.T) {
 	}
 	if got := consumer.results[0]; got.Raw != want || got.Text != want {
 		t.Errorf("delivered Raw=%q Text=%q, want reconciled transcript %q", got.Raw, got.Text, want)
+	}
+}
+
+// The live pass closes an unfinished sentence, then the final pass recognises
+// its remaining words. Restoring the preview's trailing punctuation corrupts it.
+func TestFinalPassDoesNotRestoreProvisionalTrailingPunctuation(t *testing.T) {
+	cases := []struct {
+		name    string
+		partial string
+		final   string
+	}{
+		{
+			name:    "period",
+			partial: "What are the rules? Please phrase the question clearly enough for me to answer.",
+			final:   "What are the rules? Please phrase the question clearly enough for me to answer it.",
+		},
+		{
+			name:    "question mark",
+			partial: "Can you see exactly what was visible?",
+			final:   "Can you see exactly what was visible to me?",
+		},
+	}
+	for _, tc := range cases {
+		for _, skipCleanup := range []bool{true, false} {
+			name := "with cleanup"
+			if skipCleanup {
+				name = "without cleanup"
+			}
+			t.Run(tc.name+"/"+name, func(t *testing.T) {
+				asr := &sequenceTranscriber{texts: []string{tc.partial, tc.final}}
+				cleaner := &passthroughCleaner{}
+				consumer := &recordingConsumer{}
+				p := newTestPipeline(t, asr, cleaner, stubContext{info: &ctxProvider.ContextInfo{}})
+				p.SetSkipLLMCleanup(skipCleanup)
+				p.SetResultConsumer(consumer)
+				streamer := primePartial(t, p, asr)
+
+				p.isRecording.Store(true)
+				p.audioBuffer = make([]float32, 64000)
+				if !p.StopRecording() {
+					t.Fatal("StopRecording() = false, want the recording stopped")
+				}
+				p.wg.Wait()
+				streamer.Wait()
+
+				if asr.calls != 2 {
+					t.Fatalf("Transcribe called %d times, want partial plus final", asr.calls)
+				}
+				wantCleanupCalls := 1
+				if skipCleanup {
+					wantCleanupCalls = 0
+				}
+				if cleaner.calls != wantCleanupCalls {
+					t.Fatalf("CleanupText called %d times, want %d", cleaner.calls, wantCleanupCalls)
+				}
+				if len(consumer.results) != 1 {
+					t.Fatalf("got %d results, want 1", len(consumer.results))
+				}
+				if got := consumer.results[0]; got.Raw != tc.final || got.Text != tc.final {
+					t.Errorf("delivered Raw=%q Text=%q, want final decode %q", got.Raw, got.Text, tc.final)
+				}
+			})
+		}
 	}
 }
 
@@ -776,14 +840,68 @@ func TestPreservePartialSentenceBoundaries(t *testing.T) {
 		{
 			name:    "matching prefix keeps its boundary and spacing",
 			final:   "First thought  Second thought continues",
-			partial: "First thought.",
+			partial: "First thought.  Second",
 			want:    "First thought.  Second thought continues",
 		},
 		{
 			name:    "boundary stays inside closing quote",
 			final:   `She said "stop" Then continued`,
-			partial: `She said "stop."`,
+			partial: `She said "stop." Then`,
 			want:    `She said "stop." Then continued`,
+		},
+		{
+			name:    "last word continues in final",
+			final:   "Please answer it.",
+			partial: "Please answer.",
+			want:    "Please answer it.",
+		},
+		{
+			name:    "trailing question mark is provisional",
+			final:   "Can you answer it?",
+			partial: "Can you answer?",
+			want:    "Can you answer it?",
+		},
+		{
+			name:    "trailing exclamation mark is provisional",
+			final:   "Please answer it!",
+			partial: "Please answer!",
+			want:    "Please answer it!",
+		},
+		{
+			name:    "trailing punctuation inside quote is provisional",
+			final:   `She said "answer" it.`,
+			partial: `She said "answer."`,
+			want:    `She said "answer" it.`,
+		},
+		{
+			name:    "internal boundary restored but trailing boundary ignored",
+			final:   "First thought Second thought continues.",
+			partial: "First thought. Second thought.",
+			want:    "First thought. Second thought continues.",
+		},
+		{
+			name:    "helper leaves final ending unchanged",
+			final:   "Please answer",
+			partial: "Please answer.",
+			want:    "Please answer",
+		},
+		{
+			name:    "single word partial has no confirmed boundary",
+			final:   "Answer it.",
+			partial: "Answer.",
+			want:    "Answer it.",
+		},
+		{
+			name:    "empty partial leaves final unchanged",
+			final:   "Please answer it.",
+			partial: "",
+			want:    "Please answer it.",
+		},
+		{
+			name:    "empty final stays empty",
+			final:   "",
+			partial: "Please answer.",
+			want:    "",
 		},
 		{
 			name:    "lexical correction stops transfer",
